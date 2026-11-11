@@ -91,7 +91,7 @@ impl ModuleId {
 /// A top-level function as its declaration identifies it: the module that
 /// declares it and the name it is declared under there. Two modules may each
 /// declare a function of one name; they are two functions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeclaredFunction {
     /// The module the function is declared in.
     pub module: ModuleId,

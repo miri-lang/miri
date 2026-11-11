@@ -64,16 +64,37 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use crate::ast::expression::{Expression, ExpressionKind, LeftHandSideExpression};
+use crate::ast::pattern::Pattern;
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::Parameter;
 use crate::runtime_effects::RuntimeEffects;
 
-use super::context::TypeDefinition;
+use super::context::{class_implements_trait, resolve_method_source, MethodSource, TypeDefinition};
+use super::function_analysis::{DeclaredFunction, ModuleId};
+use super::statements::returns::collect_tail_statements;
 use super::utils::{is_auto_copy, is_resource};
+use super::TypeChecker;
 
 /// Zero-based index of a parameter in a function's parameter list.
 pub type ParamIndex = usize;
+
+/// The locals a body has bound so far, each with the parameters it may name.
+type Locals = HashMap<String, BTreeSet<ParamIndex>>;
+
+/// The summary key of the free function `callee`, named `name`: the function
+/// the type checker resolved it to where it is written, or, for a runtime
+/// entry point, which the type checker identifies by name alone, its name.
+pub(crate) fn free_callee(
+    callee: &Expression,
+    name: &str,
+    callees: &HashMap<usize, DeclaredFunction>,
+) -> FunctionId {
+    callees.get(&callee.id).map_or_else(
+        || FunctionId::free(name),
+        |declared| FunctionId::Declared(declared.clone()),
+    )
+}
 
 /// The function an escape summary describes: the key of
 /// [`super::context::Context::escape_summaries`].
@@ -82,6 +103,9 @@ pub enum FunctionId {
     /// A free function — or a runtime function, whose summary its declaration
     /// states — by its declared name.
     Free(String),
+    /// A function a module declares, by its declaration: two modules may each
+    /// declare a function of one name, and they are two functions.
+    Declared(DeclaredFunction),
     /// A method, by the type that declares it and its own name.
     Method { owner: String, method: String },
 }
@@ -107,6 +131,7 @@ impl fmt::Display for FunctionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FunctionId::Free(name) => f.write_str(name),
+            FunctionId::Declared(declared) => f.write_str(&declared.name),
             FunctionId::Method { owner, method } => write!(f, "{owner}.{method}"),
         }
     }
@@ -285,6 +310,8 @@ pub fn analyze_return_value(
 ) -> ReturnFlow {
     let analyzer = ReturnFlowAnalyzer {
         params,
+        locals: &HashMap::new(),
+        callees: &HashMap::new(),
         types,
         type_definitions,
         escape_summaries,
@@ -296,6 +323,10 @@ pub fn analyze_return_value(
 
 struct ReturnFlowAnalyzer<'a> {
     params: &'a [Parameter],
+    /// The locals in scope, each with the parameters it may name.
+    locals: &'a Locals,
+    /// The function each free-function callee resolved to.
+    callees: &'a HashMap<usize, DeclaredFunction>,
     types: &'a HashMap<usize, Type>,
     type_definitions: &'a HashMap<String, TypeDefinition>,
     escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
@@ -357,7 +388,7 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 self.classify(e, false, flow);
             }
             ExpressionKind::Range(start, end, _) => {
-                self.classify_range(start, end, flow);
+                self.classify_range(start, end, aliases_return, flow);
             }
             ExpressionKind::FormattedString(parts, _) => {
                 self.classify_formatted_string(parts, flow);
@@ -390,8 +421,8 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         expr: &Expression,
         flow: &mut ReturnFlow,
     ) {
-        if let Some(idx) = self.param_index(name) {
-            if aliases_return && self.is_managed_expr(expr) {
+        if aliases_return && self.is_managed_expr(expr) {
+            for idx in self.param_indices(name) {
                 flow.direct_escapes.insert(idx);
                 flow.return_aliases.insert(idx);
             }
@@ -453,13 +484,11 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         let ExpressionKind::Identifier(name, _) = &obj.node else {
             return false;
         };
-        let Some(idx) = self.param_index(name) else {
-            return false;
-        };
-        if !self.is_managed_expr(obj) {
+        let mut named = self.param_indices(name).peekable();
+        if named.peek().is_none() || !self.is_managed_expr(obj) {
             return false;
         }
-        flow.return_aliases.insert(idx);
+        flow.return_aliases.extend(named);
         true
     }
 
@@ -530,18 +559,20 @@ impl<'a> ReturnFlowAnalyzer<'a> {
     }
 
     /// A range's bounds are the fields of the `Range` struct it builds, so a
-    /// range follows the rule a struct constructor's arguments do: building
-    /// it neither consumes a bound nor makes the bound part of the returned
-    /// value, and `xs..xs` agrees with `Range(start: xs, end: xs, ...)`.
+    /// range follows the rule a struct constructor's arguments do: each bound
+    /// is part of the value built, and `xs..xs` agrees with
+    /// `Range(start: xs, end: xs, ...)`. A call only ever consumes a
+    /// resource, so a collection bound stays the caller's.
     fn classify_range(
         &self,
         start: &Expression,
         end: &Option<Box<Expression>>,
+        aliases_return: bool,
         flow: &mut ReturnFlow,
     ) {
-        self.classify(start, false, flow);
+        self.classify(start, aliases_return, flow);
         if let Some(e) = end {
-            self.classify(e, false, flow);
+            self.classify(e, aliases_return, flow);
         }
     }
 
@@ -600,14 +631,7 @@ impl<'a> ReturnFlowAnalyzer<'a> {
     /// Walks an expression inside a lambda body looking for managed param references.
     fn scan_lambda_expr(&self, expr: &Expression, flow: &mut ReturnFlow) {
         match &expr.node {
-            ExpressionKind::Identifier(name, _) => {
-                if let Some(idx) = self.param_index(name) {
-                    if self.is_managed_expr(expr) {
-                        flow.direct_escapes.insert(idx);
-                        flow.return_aliases.insert(idx);
-                    }
-                }
-            }
+            ExpressionKind::Identifier(name, _) => self.classify_identifier(name, true, expr, flow),
             ExpressionKind::Call(callee, args) => {
                 self.scan_lambda_expr(callee, flow);
                 for a in args {
@@ -669,6 +693,12 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 self.consume_leaf_identifier(arg, flow);
                 self.classify(arg, aliases_return, flow);
             }
+        } else if call_builds_a_value(callee, self.type_definitions) {
+            // The value a constructor builds holds every argument it is
+            // handed, as a returned tuple holds its elements.
+            for arg in args {
+                self.classify(arg, aliases_return, flow);
+            }
         } else {
             // No summary available — this analyzer alone cannot decide whether
             // the call propagates flow.  For value-flow purposes, we
@@ -718,26 +748,37 @@ impl<'a> ReturnFlowAnalyzer<'a> {
             _ => arg,
         };
         if let ExpressionKind::Identifier(name, _) = &inner.node {
-            if let Some(idx) = self.param_index(name) {
-                if self.is_managed_expr(inner) {
-                    flow.direct_escapes.insert(idx);
-                }
+            if self.is_managed_expr(inner) {
+                flow.direct_escapes.extend(self.param_indices(name));
             }
         }
     }
 
-    /// Maps a parameter name back to its zero-based index, if it is one of the
-    /// function's parameters.  `self` is index 0 for methods (mirroring the
-    /// mangling convention used elsewhere); free functions use the explicit
-    /// parameter list.
-    fn param_index(&self, name: &str) -> Option<ParamIndex> {
-        self.params.iter().position(|p| p.name == name)
+    /// The zero-based indices of the parameters `name` may denote: a local in
+    /// scope denotes the parameters it may have been bound from, none for a
+    /// local shadowing a parameter; any other name denotes the parameter it
+    /// spells, if any.  `self` is index 0 for methods (mirroring the mangling
+    /// convention used elsewhere); free functions use the explicit parameter
+    /// list.
+    fn param_indices<'s>(&'s self, name: &str) -> impl Iterator<Item = ParamIndex> + 's {
+        let local = self.locals.get(name);
+        let param = local
+            .is_none()
+            .then(|| self.params.iter().position(|p| p.name == name))
+            .flatten();
+        local.into_iter().flatten().copied().chain(param)
+    }
+
+    /// The summary key of the free function `callee`, named `name`, resolved
+    /// to ([`free_callee`]).
+    fn free_callee(&self, callee: &Expression, name: &str) -> FunctionId {
+        free_callee(callee, name, self.callees)
     }
 
     /// Returns `true` if `callee` names one of this function's parameters,
     /// i.e. the call goes through a function value the caller supplied.
     fn is_parameter_call(&self, callee: &Expression) -> bool {
-        matches!(&callee.node, ExpressionKind::Identifier(name, _) if self.param_index(name).is_some())
+        matches!(&callee.node, ExpressionKind::Identifier(name, _) if self.param_indices(name).next().is_some())
     }
 
     /// Returns `true` if a caller can tell whether `expr` is kept: its type is
@@ -745,41 +786,47 @@ impl<'a> ReturnFlowAnalyzer<'a> {
     /// (primitives, small all-scalar structs) are copied bytes that cannot alias
     /// another heap; a resource is tracked whatever its layout, because its hook
     /// runs once and the caller must know whether the callee now owns it.
+    /// Whether the value of `expr` is held by reference: a counted value, a
+    /// resource, or a closure, whose environment is counted though the
+    /// language copies the closure itself.
     fn is_managed_expr(&self, expr: &Expression) -> bool {
         match self.types.get(&expr.id) {
             Some(ty) => {
-                !is_auto_copy(&ty.kind, self.type_definitions)
+                matches!(ty.kind, TypeKind::Function(_))
+                    || !is_auto_copy(&ty.kind, self.type_definitions)
                     || is_resource(&ty.kind, self.type_definitions)
             }
             None => false,
         }
     }
 
-    /// Looks up the escape summary for `callee` if it is a free-function
-    /// identifier or a direct (non-virtual) method call on a concrete class.
-    ///
-    /// Inheritance walks for inherited methods and trait/abstract joins live
-    /// elsewhere and need the type definitions.  This analyzer
-    /// focuses on the literal-callee cases (`return f(p)`); virtual joining
-    /// is folded in by the broader escape analysis when it consults this analyzer.
+    /// Looks up the escape summary for `callee`: a free function's, or the
+    /// one a method call reaches through the receiver's type
+    /// ([`method_summary`]).
     fn resolve_callee_summary(&self, callee: &Expression) -> Option<EscapeSummary> {
         match &callee.node {
             ExpressionKind::Identifier(name, _) => {
-                self.escape_summaries.get(&FunctionId::free(name)).cloned()
-            }
-            ExpressionKind::Member(obj, method_expr) => {
-                let ExpressionKind::Identifier(method_name, _) = &method_expr.node else {
-                    return None;
-                };
-                let receiver_ty = self.types.get(&obj.id)?;
-                let TypeKind::Custom(type_name, _) = &receiver_ty.kind else {
-                    return None;
-                };
-                let key = FunctionId::method(type_name, method_name);
+                let key = self.free_callee(callee, name);
                 self.escape_summaries.get(&key).cloned()
             }
+            ExpressionKind::Member(obj, method_expr) => self.method_call_summary(obj, method_expr),
             _ => None,
         }
+    }
+
+    /// The summary a call of `method` on `receiver` reaches ([`method_summary`]).
+    fn method_call_summary(
+        &self,
+        receiver: &Expression,
+        method: &Expression,
+    ) -> Option<EscapeSummary> {
+        let (type_name, method_name) = method_call_target(receiver, method, self.types)?;
+        method_summary(
+            type_name,
+            method_name,
+            self.escape_summaries,
+            self.type_definitions,
+        )
     }
 }
 
@@ -799,11 +846,184 @@ pub fn runtime_escape_summaries(effects: &RuntimeEffects) -> HashMap<FunctionId,
         .collect()
 }
 
+/// Whether a call to `callee` builds a value out of its arguments: a struct or
+/// class constructor, an enum variant, or a builtin variant constructor. The
+/// value built holds every argument, so building one keeps each argument,
+/// wherever the value goes. Escape analysis and the use-after-move check both
+/// ask this.
+pub(crate) fn call_builds_a_value(
+    callee: &Expression,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> bool {
+    if let ExpressionKind::Identifier(name, _) = &callee.node {
+        return TypeChecker::is_builtin_variant_constructor(name)
+            || matches!(
+                type_defs.get(name),
+                Some(TypeDefinition::Struct(_) | TypeDefinition::Class(_))
+            );
+    }
+    if let ExpressionKind::Member(owner, _) = &callee.node {
+        return matches!(&owner.node, ExpressionKind::Identifier(name, _)
+            if matches!(type_defs.get(name), Some(TypeDefinition::Enum(_))));
+    }
+    false
+}
+
+/// The receiver's declared type and the method's name of a method call, when
+/// the receiver is of a named type.
+fn method_call_target<'e>(
+    receiver: &Expression,
+    method: &'e Expression,
+    types: &'e HashMap<usize, Type>,
+) -> Option<(&'e str, &'e str)> {
+    let ExpressionKind::Identifier(method_name, _) = &method.node else {
+        return None;
+    };
+    let TypeKind::Custom(type_name, _) = &types.get(&receiver.id)?.kind else {
+        return None;
+    };
+    Some((type_name, method_name))
+}
+
+/// The escape summary a call of `method` on a receiver of type `type_name`
+/// reaches: the summary of the type that defines it, or, for a call through
+/// a trait or an abstract class, the union over every concrete class the call
+/// may dispatch to. `None` when the call reaches no analysed method, which a
+/// call site reads as a callee that keeps every resource it is handed.
+pub(crate) fn method_summary(
+    type_name: &str,
+    method: &str,
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> Option<EscapeSummary> {
+    let has_summary = |id: &FunctionId| summaries.contains_key(id);
+    let targets = method_targets(type_name, method, &has_summary, type_defs);
+    if let [only] = targets.as_slice() {
+        return summaries.get(only).cloned();
+    }
+    let mut joined: Option<EscapeSummary> = None;
+    for summary in targets.iter().filter_map(|target| summaries.get(target)) {
+        let into = joined.get_or_insert_with(EscapeSummary::default);
+        into.direct_escapes.extend(&summary.direct_escapes);
+        into.return_aliases.extend(&summary.return_aliases);
+        let conditional = summary.conditional_escapes.iter().cloned();
+        into.conditional_escapes.extend(conditional);
+    }
+    joined
+}
+
+/// The methods a call of `method` on a receiver of type `type_name` may run:
+/// a struct's or an enum's own; for a class, the body it runs and the body
+/// every concrete class extending it runs, since the receiver may be any of
+/// them; for a trait, the body each concrete implementor runs. `has_body` says
+/// which methods exist to be run.
+fn method_targets(
+    type_name: &str,
+    method: &str,
+    has_body: &dyn Fn(&FunctionId) -> bool,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> Vec<FunctionId> {
+    match type_defs.get(type_name) {
+        Some(TypeDefinition::Trait(_)) | Some(TypeDefinition::Class(_)) => {
+            implementor_methods(type_name, method, has_body, type_defs)
+        }
+        Some(TypeDefinition::Struct(_)) | Some(TypeDefinition::Enum(_)) | None => {
+            method_owner(type_name, method, has_body, type_defs)
+                .into_iter()
+                .collect()
+        }
+        Some(TypeDefinition::Generic(_)) | Some(TypeDefinition::Alias(_)) => Vec::new(),
+    }
+}
+
+/// The method each concrete class implementing the trait, or extending the
+/// class, `parent` runs for `method`.
+///
+/// Membership is the shared answer, which walks a class's whole ancestry and
+/// every trait each step of it extends: leaving out one implementor while
+/// finding another would report as absent an escape the class the call
+/// dispatches to has.
+fn implementor_methods(
+    parent: &str,
+    method: &str,
+    has_body: &dyn Fn(&FunctionId) -> bool,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> Vec<FunctionId> {
+    let mut targets: Vec<FunctionId> = (type_defs.iter())
+        .filter(|(class_name, td)| {
+            matches!(td, TypeDefinition::Class(cd) if !cd.is_abstract)
+                && (class_implements_trait(class_name, parent, type_defs)
+                    || class_extends(class_name, parent, type_defs))
+        })
+        .filter_map(|(class_name, _)| method_owner(class_name, method, has_body, type_defs))
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+    targets
+}
+
+/// The method a receiver of type `type_name` runs for `method`: for a class,
+/// the body [`resolve_method_source`] resolves it to — the nearest class's
+/// own, or the trait default it inherits — and a struct's or an enum's own
+/// otherwise. `None` when that body is not one `has_body` knows.
+pub(crate) fn method_owner(
+    type_name: &str,
+    method: &str,
+    has_body: &dyn Fn(&FunctionId) -> bool,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> Option<FunctionId> {
+    let owner = match type_defs.get(type_name) {
+        Some(TypeDefinition::Class(_)) => {
+            match resolve_method_source(type_defs, type_name, method)? {
+                MethodSource::Declared { class, .. } => FunctionId::method(class, method),
+                MethodSource::Default(default) => FunctionId::method(default.trait_name, method),
+                MethodSource::AbstractOnly { .. } => return None,
+            }
+        }
+        Some(TypeDefinition::Struct(_))
+        | Some(TypeDefinition::Enum(_))
+        | Some(TypeDefinition::Trait(_))
+        | Some(TypeDefinition::Generic(_))
+        | Some(TypeDefinition::Alias(_))
+        | None => FunctionId::method(type_name, method),
+    };
+    has_body(&owner).then_some(owner)
+}
+
+/// Whether `ancestor` is `class_name` or on its base-class chain.
+fn class_extends(
+    class_name: &str,
+    ancestor: &str,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> bool {
+    let mut current = class_name;
+    loop {
+        if current == ancestor {
+            return true;
+        }
+        match type_defs.get(current) {
+            Some(TypeDefinition::Class(cd)) => match &cd.base_class {
+                Some(base) => current = base.as_str(),
+                None => return false,
+            },
+            Some(TypeDefinition::Struct(_))
+            | Some(TypeDefinition::Enum(_))
+            | Some(TypeDefinition::Generic(_))
+            | Some(TypeDefinition::Alias(_))
+            | Some(TypeDefinition::Trait(_))
+            | None => return false,
+        }
+    }
+}
+
 /// Captures a function's parameter list (with `self` at index 0 for methods)
 /// and a reference to its body.
 struct FunctionDef<'a> {
     params: Vec<Parameter>,
     body: &'a Statement,
+    /// The tail expressions the body ends on that it returns
+    /// ([`returned_tails`]).
+    tails: Vec<&'a Expression>,
 }
 
 /// Computes escape summaries for every user-defined function in `stmts`,
@@ -813,24 +1033,23 @@ struct FunctionDef<'a> {
 ///
 /// Only user functions whose bodies are visible in `stmts` are analysed.
 /// A runtime declaration is represented by its summary in `runtime_summaries`.
-pub fn compute_escape_summaries(
-    stmts: &[Statement],
-    types: &HashMap<usize, Type>,
-    type_definitions: &HashMap<String, super::context::TypeDefinition>,
+pub(crate) fn compute_escape_summaries<'a>(
+    stmts: impl IntoIterator<Item = &'a Statement>,
+    facts: &ProgramFacts<'_>,
     runtime_summaries: HashMap<FunctionId, EscapeSummary>,
 ) -> HashMap<FunctionId, EscapeSummary> {
     let mut summaries = runtime_summaries;
 
     // Step 1: collect all user function definitions.
     let mut fn_defs: HashMap<FunctionId, FunctionDef<'_>> = HashMap::new();
-    collect_function_defs(stmts, &mut fn_defs, None);
+    collect_function_defs(stmts, &mut fn_defs, None, facts.modules);
 
     if fn_defs.is_empty() {
         return summaries;
     }
 
     // Step 2: build a call graph over known user functions.
-    let call_graph = build_call_graph(&fn_defs, types);
+    let call_graph = build_call_graph(&fn_defs, facts);
 
     // Step 3: Tarjan SCC — returns SCCs with leaf SCCs first (bottom-up order).
     let fn_ids: Vec<FunctionId> = fn_defs.keys().cloned().collect();
@@ -844,8 +1063,7 @@ pub fn compute_escape_summaries(
                 let Some(def) = fn_defs.get(fn_id) else {
                     continue;
                 };
-                let new_summary =
-                    compute_one_summary(&def.params, def.body, types, type_definitions, &summaries);
+                let new_summary = compute_one_summary(def, facts, &summaries);
                 // An empty summary is stored too: "keeps nothing" is a fact a
                 // caller reads, and only a function with no summary at all is
                 // one the caller cannot see into.
@@ -871,13 +1089,7 @@ pub fn compute_escape_summaries(
             if summary.direct_escapes.is_empty() {
                 return None;
             }
-            let hops = resolve_next_hops(
-                &def.params,
-                &summary.direct_escapes,
-                def.body,
-                &summaries,
-                types,
-            );
+            let hops = resolve_next_hops(def, &summary.direct_escapes, &summaries, facts);
             Some((fn_id.clone(), hops))
         })
         .collect();
@@ -891,10 +1103,14 @@ pub fn compute_escape_summaries(
     summaries
 }
 
+/// Collects every function body in `stmts`: a free function under the
+/// declaration it is ([`FunctionId::Declared`]), and a method — a trait's
+/// default included — under the type that declares it.
 fn collect_function_defs<'a>(
-    stmts: &'a [Statement],
+    stmts: impl IntoIterator<Item = &'a Statement>,
     fn_defs: &mut HashMap<FunctionId, FunctionDef<'a>>,
     class_name: Option<&str>,
+    modules: &HashMap<usize, ModuleId>,
 ) {
     for stmt in stmts {
         match &stmt.node {
@@ -902,9 +1118,13 @@ fn collect_function_defs<'a>(
                 let Some(body) = decl.body.as_deref() else {
                     continue;
                 };
-                let fn_id = match class_name {
-                    Some(cls) => FunctionId::method(cls, &decl.name),
-                    None => FunctionId::free(&decl.name),
+                let fn_id = match (class_name, modules.get(&stmt.id)) {
+                    (Some(cls), _) => FunctionId::method(cls, &decl.name),
+                    (None, Some(module)) => FunctionId::Declared(DeclaredFunction {
+                        module: module.clone(),
+                        name: decl.name.clone(),
+                    }),
+                    (None, None) => FunctionId::free(&decl.name),
                 };
                 let params = match class_name {
                     Some(_) => {
@@ -914,20 +1134,29 @@ fn collect_function_defs<'a>(
                     }
                     None => decl.params.clone(),
                 };
-                fn_defs.insert(fn_id, FunctionDef { params, body });
+                let tails = returned_tails(decl.return_type.as_deref(), body);
+                fn_defs.insert(
+                    fn_id,
+                    FunctionDef {
+                        params,
+                        body,
+                        tails,
+                    },
+                );
             }
             StatementKind::Class(cd) => {
                 if let Some(cls) = extract_name_from_expr(&cd.name) {
-                    collect_function_defs(&cd.body, fn_defs, Some(&cls));
+                    collect_function_defs(&cd.body, fn_defs, Some(&cls), modules);
                 }
             }
-            StatementKind::Struct(name_expr, _, _, methods, _, _) => {
+            StatementKind::Struct(name_expr, _, _, methods, _, _)
+            | StatementKind::Trait(name_expr, _, _, methods, _) => {
                 if let Some(s) = extract_name_from_expr(name_expr) {
-                    collect_function_defs(methods, fn_defs, Some(&s));
+                    collect_function_defs(methods, fn_defs, Some(&s), modules);
                 }
             }
             StatementKind::Block(stmts) => {
-                collect_function_defs(stmts, fn_defs, class_name);
+                collect_function_defs(stmts, fn_defs, class_name, modules);
             }
             _ => {}
         }
@@ -967,6 +1196,16 @@ fn extract_name_from_expr(expr: &Expression) -> Option<String> {
     }
 }
 
+/// What the call-graph walk reads: the type of each receiver, the type
+/// definitions a method call is resolved through, and the functions whose
+/// bodies are analysed.
+struct CallGraphScope<'a> {
+    types: &'a HashMap<usize, Type>,
+    type_defs: &'a HashMap<String, TypeDefinition>,
+    callees: &'a HashMap<usize, DeclaredFunction>,
+    known: HashSet<&'a FunctionId>,
+}
+
 /// Builds a call graph over the known user function IDs.  An edge `f → g`
 /// exists when function `f`'s body contains a call that resolves to `g`.
 /// Only edges to other user functions (present in `fn_defs`) are recorded;
@@ -975,14 +1214,19 @@ fn extract_name_from_expr(expr: &Expression) -> Option<String> {
 /// computation).
 fn build_call_graph<'a>(
     fn_defs: &HashMap<FunctionId, FunctionDef<'a>>,
-    types: &HashMap<usize, Type>,
+    facts: &ProgramFacts<'_>,
 ) -> HashMap<FunctionId, Vec<FunctionId>> {
-    let known: HashSet<&FunctionId> = fn_defs.keys().collect();
+    let scope = CallGraphScope {
+        types: facts.types,
+        type_defs: facts.type_defs,
+        callees: facts.callees,
+        known: fn_defs.keys().collect(),
+    };
     let mut graph: HashMap<FunctionId, Vec<FunctionId>> = HashMap::new();
 
     for (fn_id, def) in fn_defs {
         let mut callees: Vec<FunctionId> = Vec::new();
-        collect_callees_from_stmt(def.body, types, &known, &mut callees);
+        collect_callees_from_stmt(def.body, &scope, &mut callees);
         // Deduplicate (a callee may appear multiple times).
         callees.sort_unstable();
         callees.dedup();
@@ -994,54 +1238,53 @@ fn build_call_graph<'a>(
 
 fn collect_callees_from_stmt(
     stmt: &Statement,
-    types: &HashMap<usize, Type>,
-    known: &HashSet<&FunctionId>,
+    scope: &CallGraphScope<'_>,
     out: &mut Vec<FunctionId>,
 ) {
     match &stmt.node {
         StatementKind::Block(stmts) => {
             for s in stmts {
-                collect_callees_from_stmt(s, types, known, out);
+                collect_callees_from_stmt(s, scope, out);
             }
         }
         StatementKind::Expression(e) => {
-            collect_callees_from_expr(e, types, known, out);
+            collect_callees_from_expr(e, scope, out);
         }
         StatementKind::Return(Some(e)) => {
-            collect_callees_from_expr(e, types, known, out);
+            collect_callees_from_expr(e, scope, out);
         }
         StatementKind::Variable(decls, _) => {
             for d in decls {
                 if let Some(init) = &d.initializer {
-                    collect_callees_from_expr(init, types, known, out);
+                    collect_callees_from_expr(init, scope, out);
                 }
             }
         }
         StatementKind::If(cond, then, else_, _) => {
-            collect_callees_from_expr(cond, types, known, out);
-            collect_callees_from_stmt(then, types, known, out);
+            collect_callees_from_expr(cond, scope, out);
+            collect_callees_from_stmt(then, scope, out);
             if let Some(e) = else_ {
-                collect_callees_from_stmt(e, types, known, out);
+                collect_callees_from_stmt(e, scope, out);
             }
         }
         StatementKind::While(cond, body, _) => {
-            collect_callees_from_expr(cond, types, known, out);
-            collect_callees_from_stmt(body, types, known, out);
+            collect_callees_from_expr(cond, scope, out);
+            collect_callees_from_stmt(body, scope, out);
         }
         StatementKind::For(_, iter, body) | StatementKind::GpuFrame(_, iter, body) => {
-            collect_callees_from_expr(iter, types, known, out);
-            collect_callees_from_stmt(body, types, known, out);
+            collect_callees_from_expr(iter, scope, out);
+            collect_callees_from_stmt(body, scope, out);
         }
         StatementKind::Forall {
             iterable: iter,
             body,
             ..
         } => {
-            collect_callees_from_expr(iter, types, known, out);
-            collect_callees_from_stmt(body, types, known, out);
+            collect_callees_from_expr(iter, scope, out);
+            collect_callees_from_stmt(body, scope, out);
         }
         StatementKind::GpuFrameBlock(body) => {
-            collect_callees_from_stmt(body, types, known, out);
+            collect_callees_from_stmt(body, scope, out);
         }
         StatementKind::FunctionDeclaration(_)
         | StatementKind::Empty
@@ -1061,73 +1304,72 @@ fn collect_callees_from_stmt(
 
 fn collect_callees_from_expr(
     expr: &Expression,
-    types: &HashMap<usize, Type>,
-    known: &HashSet<&FunctionId>,
+    scope: &CallGraphScope<'_>,
     out: &mut Vec<FunctionId>,
 ) {
     match &expr.node {
         ExpressionKind::Call(callee, args) => {
-            collect_callees_call(callee, args, types, known, out);
+            collect_callees_call(callee, args, scope, out);
         }
         ExpressionKind::Binary(l, _, r) | ExpressionKind::Logical(l, _, r) => {
-            collect_callees_from_expr(l, types, known, out);
-            collect_callees_from_expr(r, types, known, out);
+            collect_callees_from_expr(l, scope, out);
+            collect_callees_from_expr(r, scope, out);
         }
         ExpressionKind::Unary(_, e) | ExpressionKind::Guard(_, e) => {
-            collect_callees_from_expr(e, types, known, out);
+            collect_callees_from_expr(e, scope, out);
         }
         ExpressionKind::Index(obj, idx) => {
-            collect_callees_from_expr(obj, types, known, out);
-            collect_callees_from_expr(idx, types, known, out);
+            collect_callees_from_expr(obj, scope, out);
+            collect_callees_from_expr(idx, scope, out);
         }
-        ExpressionKind::Member(obj, _) => collect_callees_from_expr(obj, types, known, out),
+        ExpressionKind::Member(obj, _) => collect_callees_from_expr(obj, scope, out),
         ExpressionKind::Conditional(then, cond, else_, _) => {
-            collect_callees_from_expr(cond, types, known, out);
-            collect_callees_from_expr(then, types, known, out);
+            collect_callees_from_expr(cond, scope, out);
+            collect_callees_from_expr(then, scope, out);
             if let Some(e) = else_ {
-                collect_callees_from_expr(e, types, known, out);
+                collect_callees_from_expr(e, scope, out);
             }
         }
         ExpressionKind::Block(stmts, e) => {
             for s in stmts {
-                collect_callees_from_stmt(s, types, known, out);
+                collect_callees_from_stmt(s, scope, out);
             }
-            collect_callees_from_expr(e, types, known, out);
+            collect_callees_from_expr(e, scope, out);
         }
         ExpressionKind::Match(sc, branches) => {
-            collect_callees_from_expr(sc, types, known, out);
+            collect_callees_from_expr(sc, scope, out);
             for b in branches {
                 if let Some(g) = &b.guard {
-                    collect_callees_from_expr(g, types, known, out);
+                    collect_callees_from_expr(g, scope, out);
                 }
-                collect_callees_from_stmt(&b.body, types, known, out);
+                collect_callees_from_stmt(&b.body, scope, out);
             }
         }
         ExpressionKind::List(elems) | ExpressionKind::Set(elems) | ExpressionKind::Tuple(elems) => {
-            collect_callees_from_elems(elems, types, known, out);
+            collect_callees_from_elems(elems, scope, out);
         }
         ExpressionKind::Array(elems, _) => {
-            collect_callees_from_elems(elems, types, known, out);
+            collect_callees_from_elems(elems, scope, out);
         }
         ExpressionKind::Map(pairs) => {
-            collect_callees_from_pairs(pairs, types, known, out);
+            collect_callees_from_pairs(pairs, scope, out);
         }
         ExpressionKind::EnumValue(_, vals) => {
-            collect_callees_from_elems(vals, types, known, out);
+            collect_callees_from_elems(vals, scope, out);
         }
-        ExpressionKind::Assignment(_, _, rhs) => collect_callees_from_expr(rhs, types, known, out),
-        ExpressionKind::NamedArgument(_, val) => collect_callees_from_expr(val, types, known, out),
+        ExpressionKind::Assignment(_, _, rhs) => collect_callees_from_expr(rhs, scope, out),
+        ExpressionKind::NamedArgument(_, val) => collect_callees_from_expr(val, scope, out),
         ExpressionKind::FormattedString(parts, _) => {
-            collect_callees_from_elems(parts, types, known, out);
+            collect_callees_from_elems(parts, scope, out);
         }
         ExpressionKind::Range(start, end_, _) => {
-            collect_callees_from_expr(start, types, known, out);
+            collect_callees_from_expr(start, scope, out);
             if let Some(e) = end_ {
-                collect_callees_from_expr(e, types, known, out);
+                collect_callees_from_expr(e, scope, out);
             }
         }
         ExpressionKind::Cast(value_expr, _target_type_expr) => {
-            collect_callees_from_expr(value_expr, types, known, out);
+            collect_callees_from_expr(value_expr, scope, out);
         }
         ExpressionKind::Lambda(_)
         | ExpressionKind::Identifier(_, _)
@@ -1143,60 +1385,56 @@ fn collect_callees_from_expr(
 
 fn collect_callees_from_elems(
     elems: &[Expression],
-    types: &HashMap<usize, Type>,
-    known: &HashSet<&FunctionId>,
+    scope: &CallGraphScope<'_>,
     out: &mut Vec<FunctionId>,
 ) {
     for e in elems {
-        collect_callees_from_expr(e, types, known, out);
+        collect_callees_from_expr(e, scope, out);
     }
 }
 
 fn collect_callees_from_pairs(
     pairs: &[(Expression, Expression)],
-    types: &HashMap<usize, Type>,
-    known: &HashSet<&FunctionId>,
+    scope: &CallGraphScope<'_>,
     out: &mut Vec<FunctionId>,
 ) {
     for (k, v) in pairs {
-        collect_callees_from_expr(k, types, known, out);
-        collect_callees_from_expr(v, types, known, out);
+        collect_callees_from_expr(k, scope, out);
+        collect_callees_from_expr(v, scope, out);
     }
 }
 
 fn collect_callees_call(
     callee: &Expression,
     args: &[Expression],
-    types: &HashMap<usize, Type>,
-    known: &HashSet<&FunctionId>,
+    scope: &CallGraphScope<'_>,
     out: &mut Vec<FunctionId>,
 ) {
     match &callee.node {
         ExpressionKind::Identifier(name, _) => {
-            let id = FunctionId::free(name);
-            if known.contains(&id) {
+            let id = free_callee(callee, name, scope.callees);
+            if scope.known.contains(&id) {
                 out.push(id);
             }
         }
         ExpressionKind::Member(obj, method_expr) => {
-            if let ExpressionKind::Identifier(method, _) = &method_expr.node {
-                if let Some(ty) = types.get(&obj.id) {
-                    if let TypeKind::Custom(class, _) = &ty.kind {
-                        let key = FunctionId::method(class, method);
-                        if known.contains(&key) {
-                            out.push(key);
-                        }
-                    }
-                }
+            if let Some((type_name, method)) = method_call_target(obj, method_expr, scope.types) {
+                let has_body = |id: &FunctionId| scope.known.contains(id);
+                out.extend(method_targets(
+                    type_name,
+                    method,
+                    &has_body,
+                    scope.type_defs,
+                ));
             }
-            collect_callees_from_expr(obj, types, known, out);
+            collect_callees_from_expr(obj, scope, out);
         }
         _ => {
-            collect_callees_from_expr(callee, types, known, out);
+            collect_callees_from_expr(callee, scope, out);
         }
     }
     for a in args {
-        collect_callees_from_expr(a, types, known, out);
+        collect_callees_from_expr(a, scope, out);
     }
 }
 
@@ -1280,534 +1518,464 @@ fn tarjan_visit(
 
 /// Computes the escape summary for a single function given the current state of
 /// the summaries map (which may contain partial results for the same SCC).
+///
+/// A parameter escapes when the function keeps it, whichever way that is
+/// spelled: it reaches the value the function returns (after `return`, or as
+/// the tail expression a body declared to return a value ends on), it is
+/// stored into a field or an element, or it is passed to a parameter the next
+/// callee keeps.
 fn compute_one_summary(
-    params: &[Parameter],
-    body: &Statement,
-    types: &HashMap<usize, Type>,
-    type_defs: &HashMap<String, super::context::TypeDefinition>,
+    def: &FunctionDef<'_>,
+    facts: &ProgramFacts<'_>,
     summaries: &HashMap<FunctionId, EscapeSummary>,
 ) -> EscapeSummary {
-    let mut direct_escapes = BTreeSet::new();
-    let mut return_aliases = BTreeSet::new();
-
-    walk_stmt_for_escapes(
-        body,
-        params,
-        types,
-        type_defs,
+    let mut walk = EscapeWalk {
+        params: &def.params,
+        facts,
         summaries,
-        &mut direct_escapes,
-        &mut return_aliases,
-    );
-
+        tails: def.tails.iter().map(|tail| tail.id).collect(),
+        scopes: LocalScopes::default(),
+    };
+    let mut flow = ReturnFlow::default();
+    walk.statement(def.body, &mut flow);
     EscapeSummary {
-        direct_escapes,
+        direct_escapes: flow.direct_escapes,
         conditional_escapes: vec![],
-        return_aliases,
+        return_aliases: flow.return_aliases,
         escape_next_hops: HashMap::new(),
     }
 }
 
-/// Walks a statement recursively, accumulating escape evidence.
-///
-/// - `Return(Some(e))` → delegates to `analyze_return_value` (rules 1–7).
-/// - Other statements → recurses and calls `walk_expr_for_rule4` on
-///   expressions that appear in non-return position (rule 4: free-function
-///   call sites whose callee summary marks an argument as escaping).
-fn walk_stmt_for_escapes(
-    stmt: &Statement,
-    params: &[Parameter],
-    types: &HashMap<usize, Type>,
-    type_defs: &HashMap<String, super::context::TypeDefinition>,
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-    return_aliases: &mut BTreeSet<ParamIndex>,
-) {
-    match &stmt.node {
-        StatementKind::Return(Some(e)) => {
-            let flow = analyze_return_value(e, params, types, type_defs, summaries);
-            direct_escapes.extend(flow.direct_escapes);
-            return_aliases.extend(flow.return_aliases);
-        }
-        StatementKind::Return(None)
-        | StatementKind::Break
-        | StatementKind::Continue
-        | StatementKind::Empty => {}
-        StatementKind::Block(stmts) => {
-            walk_block_for_escapes(
-                stmts,
-                params,
-                types,
-                type_defs,
-                summaries,
-                direct_escapes,
-                return_aliases,
-            );
-        }
-        StatementKind::Expression(e) => {
-            walk_expr_for_rule4(e, params, summaries, direct_escapes);
-        }
-        StatementKind::Variable(decls, _) => {
-            walk_var_decls_for_rule4(decls, params, summaries, direct_escapes);
-        }
-        StatementKind::If(cond, then, else_, _) => {
-            walk_if_for_escapes(
-                cond,
-                then,
-                else_,
-                params,
-                types,
-                type_defs,
-                summaries,
-                direct_escapes,
-                return_aliases,
-            );
-        }
-        StatementKind::While(cond, body, _) => {
-            walk_while_for_escapes(
-                cond,
-                body,
-                params,
-                types,
-                type_defs,
-                summaries,
-                direct_escapes,
-                return_aliases,
-            );
-        }
-        StatementKind::For(_, iter, body) | StatementKind::GpuFrame(_, iter, body) => {
-            walk_for_for_escapes(
-                iter,
-                body,
-                params,
-                types,
-                type_defs,
-                summaries,
-                direct_escapes,
-                return_aliases,
-            );
-        }
-        StatementKind::Forall {
-            iterable: iter,
-            body,
-            ..
-        } => {
-            walk_for_for_escapes(
-                iter,
-                body,
-                params,
-                types,
-                type_defs,
-                summaries,
-                direct_escapes,
-                return_aliases,
-            );
-        }
-        StatementKind::GpuFrameBlock(block) => {
-            walk_stmt_for_escapes(
-                block,
-                params,
-                types,
-                type_defs,
-                summaries,
-                direct_escapes,
-                return_aliases,
-            );
-        }
-        StatementKind::FunctionDeclaration(_) => {}
-        StatementKind::Use(_, _)
-        | StatementKind::Type(_, _)
-        | StatementKind::Enum(_, _, _, _, _, _)
-        | StatementKind::Struct(_, _, _, _, _, _)
-        | StatementKind::Class(_)
-        | StatementKind::Trait(_, _, _, _, _)
-        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _)
-        | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
+/// The values a function returns without `return`: the tail expressions its
+/// body ends on, when its declaration names a return type
+/// (`collect_tail_statements` decides tail position for the type checker
+/// too). Escape analysis and the use-after-move check both read a function's
+/// returned values here.
+pub(crate) fn returned_tails<'b>(
+    return_type: Option<&Expression>,
+    body: &'b Statement,
+) -> Vec<&'b Expression> {
+    if !declares_a_value(return_type) {
+        return Vec::new();
     }
+    let mut tails = Vec::new();
+    collect_tail_statements(body, &mut tails);
+    (tails.into_iter())
+        .filter_map(|tail| {
+            if let StatementKind::Expression(value) = &tail.node {
+                Some(value)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
-fn walk_block_for_escapes(
-    stmts: &[Statement],
-    params: &[Parameter],
-    types: &HashMap<usize, Type>,
-    type_defs: &HashMap<String, super::context::TypeDefinition>,
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-    return_aliases: &mut BTreeSet<ParamIndex>,
-) {
-    for s in stmts {
-        walk_stmt_for_escapes(
-            s,
-            params,
-            types,
-            type_defs,
-            summaries,
-            direct_escapes,
-            return_aliases,
-        );
+/// Whether a declaration's written return type names a value: a function
+/// declared without one, or as returning `void`, ends on nothing it returns.
+fn declares_a_value(return_type: Option<&Expression>) -> bool {
+    return_type.is_some_and(|written| {
+        !matches!(&written.node, ExpressionKind::Type(ty, _) if matches!(ty.kind, TypeKind::Void))
+    })
+}
+
+/// What every summary of one program is computed against.
+pub(crate) struct ProgramFacts<'a> {
+    /// The type of every expression, by id.
+    pub(crate) types: &'a HashMap<usize, Type>,
+    /// Every type the program and its modules declare.
+    pub(crate) type_defs: &'a HashMap<String, TypeDefinition>,
+    /// The function each free-function callee resolved to, by callee id.
+    pub(crate) callees: &'a HashMap<usize, DeclaredFunction>,
+    /// The module each top-level function declaration is made in, by
+    /// statement id.
+    pub(crate) modules: &'a HashMap<usize, ModuleId>,
+}
+
+/// The locals of a body, by scope: a name declared in a scope is dropped when
+/// the scope ends, and a local of an enclosing scope rebound inside it may
+/// name, after it, what it named before or what it was rebound to.
+#[derive(Default)]
+struct LocalScopes {
+    locals: Locals,
+    /// For each open scope, the locals in force where it opened and the
+    /// names it declares.
+    open: Vec<(Locals, HashSet<String>)>,
+}
+
+impl LocalScopes {
+    fn enter(&mut self) {
+        self.open.push((self.locals.clone(), HashSet::new()));
     }
-}
 
-fn walk_var_decls_for_rule4(
-    decls: &[crate::ast::VariableDeclaration],
-    params: &[Parameter],
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-) {
-    for d in decls {
-        if let Some(init) = &d.initializer {
-            walk_expr_for_rule4(init, params, summaries, direct_escapes);
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn walk_if_for_escapes(
-    cond: &Expression,
-    then: &Statement,
-    else_: &Option<Box<Statement>>,
-    params: &[Parameter],
-    types: &HashMap<usize, Type>,
-    type_defs: &HashMap<String, super::context::TypeDefinition>,
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-    return_aliases: &mut BTreeSet<ParamIndex>,
-) {
-    walk_expr_for_rule4(cond, params, summaries, direct_escapes);
-    walk_stmt_for_escapes(
-        then,
-        params,
-        types,
-        type_defs,
-        summaries,
-        direct_escapes,
-        return_aliases,
-    );
-    if let Some(e) = else_ {
-        walk_stmt_for_escapes(
-            e,
-            params,
-            types,
-            type_defs,
-            summaries,
-            direct_escapes,
-            return_aliases,
-        );
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn walk_while_for_escapes(
-    cond: &Expression,
-    body: &Statement,
-    params: &[Parameter],
-    types: &HashMap<usize, Type>,
-    type_defs: &HashMap<String, super::context::TypeDefinition>,
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-    return_aliases: &mut BTreeSet<ParamIndex>,
-) {
-    walk_expr_for_rule4(cond, params, summaries, direct_escapes);
-    walk_stmt_for_escapes(
-        body,
-        params,
-        types,
-        type_defs,
-        summaries,
-        direct_escapes,
-        return_aliases,
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn walk_for_for_escapes(
-    iter: &Expression,
-    body: &Statement,
-    params: &[Parameter],
-    types: &HashMap<usize, Type>,
-    type_defs: &HashMap<String, super::context::TypeDefinition>,
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-    return_aliases: &mut BTreeSet<ParamIndex>,
-) {
-    walk_expr_for_rule4(iter, params, summaries, direct_escapes);
-    walk_stmt_for_escapes(
-        body,
-        params,
-        types,
-        type_defs,
-        summaries,
-        direct_escapes,
-        return_aliases,
-    );
-}
-
-/// Statement-level companion to [`walk_expr_for_rule4`]: visits every
-/// expression sub-statement that could contain a rule-4 call site.  Used to
-/// walk match-branch bodies and block-expression statement lists, which are
-/// statements rather than expressions.
-fn walk_stmt_for_rule4(
-    stmt: &Statement,
-    params: &[Parameter],
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-) {
-    match &stmt.node {
-        StatementKind::Block(stmts) => {
-            for s in stmts {
-                walk_stmt_for_rule4(s, params, summaries, direct_escapes);
+    fn exit(&mut self) {
+        let Some((mut outer, declared)) = self.open.pop() else {
+            return;
+        };
+        for (name, named) in std::mem::take(&mut self.locals) {
+            if declared.contains(&name) {
+                continue;
+            }
+            if let Some(before) = outer.get_mut(&name) {
+                before.extend(named);
             }
         }
-        StatementKind::Expression(e) => {
-            walk_expr_for_rule4(e, params, summaries, direct_escapes);
+        self.locals = outer;
+    }
+
+    /// Declares `name` in the innermost scope, naming `named`.
+    fn declare(&mut self, name: &str, named: BTreeSet<ParamIndex>) {
+        if let Some((_, declared)) = self.open.last_mut() {
+            declared.insert(name.to_string());
         }
-        StatementKind::Return(Some(e)) => {
-            walk_expr_for_rule4(e, params, summaries, direct_escapes);
+        self.locals.insert(name.to_string(), named);
+    }
+
+    /// Rebinds the local `name`, which names `named` from here on.
+    fn rebind(&mut self, name: &str, named: BTreeSet<ParamIndex>) {
+        if let Some(current) = self.locals.get_mut(name) {
+            *current = named;
         }
-        StatementKind::Variable(decls, _) => {
-            for d in decls {
-                if let Some(init) = &d.initializer {
-                    walk_expr_for_rule4(init, params, summaries, direct_escapes);
+    }
+}
+
+/// One function body's walk for the places its parameters escape to.
+struct EscapeWalk<'a> {
+    params: &'a [Parameter],
+    facts: &'a ProgramFacts<'a>,
+    summaries: &'a HashMap<FunctionId, EscapeSummary>,
+    /// The ids of the tail expressions the function returns.
+    tails: HashSet<usize>,
+    scopes: LocalScopes,
+}
+
+impl<'a> EscapeWalk<'a> {
+    /// The value-flow rule for an expression the function hands back.
+    fn analyzer(&self) -> ReturnFlowAnalyzer<'_> {
+        ReturnFlowAnalyzer {
+            params: self.params,
+            locals: &self.scopes.locals,
+            callees: self.facts.callees,
+            types: self.facts.types,
+            type_definitions: self.facts.type_defs,
+            escape_summaries: self.summaries,
+        }
+    }
+
+    /// The parameters a local bound to `value` names: those the value may
+    /// be, by the value-flow rule a returned value follows — through a
+    /// conditional, a match, a block, a cast or a call handing an argument
+    /// back.
+    fn named_by(&self, value: &Expression) -> BTreeSet<ParamIndex> {
+        let mut flow = ReturnFlow::default();
+        self.analyzer().classify(value, true, &mut flow);
+        flow.return_aliases
+    }
+
+    /// Records every parameter the returned `value` holds.
+    fn returned(&self, value: &Expression, flow: &mut ReturnFlow) {
+        self.analyzer().classify(value, true, flow);
+    }
+
+    /// Records every parameter the stored `value` holds: the place it is
+    /// stored in keeps it. A store is not the return value, so it aliases
+    /// nothing the caller receives.
+    fn stored(&self, value: &Expression, flow: &mut ReturnFlow) {
+        let mut held = ReturnFlow::default();
+        self.analyzer().classify(value, true, &mut held);
+        flow.direct_escapes.extend(held.direct_escapes);
+    }
+
+    fn statement(&mut self, stmt: &Statement, flow: &mut ReturnFlow) {
+        match &stmt.node {
+            StatementKind::Return(Some(e)) => self.returned(e, flow),
+            StatementKind::Block(stmts) => self.scoped(|walk| walk.statements(stmts, flow)),
+            StatementKind::Expression(e) => {
+                if self.tails.contains(&e.id) {
+                    self.returned(e, flow);
+                }
+                self.expression(e, flow);
+            }
+            StatementKind::Variable(decls, _) => {
+                for decl in decls {
+                    let named = decl.initializer.as_ref().map(|init| {
+                        self.expression(init, flow);
+                        self.named_by(init)
+                    });
+                    self.scopes.declare(&decl.name, named.unwrap_or_default());
                 }
             }
-        }
-        StatementKind::If(cond, then, else_, _) => {
-            walk_expr_for_rule4(cond, params, summaries, direct_escapes);
-            walk_stmt_for_rule4(then, params, summaries, direct_escapes);
-            if let Some(e) = else_ {
-                walk_stmt_for_rule4(e, params, summaries, direct_escapes);
+            StatementKind::If(cond, then, else_, _) => {
+                self.expression(cond, flow);
+                self.statement(then, flow);
+                if let Some(e) = else_ {
+                    self.statement(e, flow);
+                }
             }
-        }
-        StatementKind::While(cond, body, _) => {
-            walk_expr_for_rule4(cond, params, summaries, direct_escapes);
-            walk_stmt_for_rule4(body, params, summaries, direct_escapes);
-        }
-        StatementKind::For(_, iter, body) | StatementKind::GpuFrame(_, iter, body) => {
-            walk_expr_for_rule4(iter, params, summaries, direct_escapes);
-            walk_stmt_for_rule4(body, params, summaries, direct_escapes);
-        }
-        StatementKind::Forall {
-            iterable: iter,
-            body,
-            ..
-        } => {
-            walk_expr_for_rule4(iter, params, summaries, direct_escapes);
-            walk_stmt_for_rule4(body, params, summaries, direct_escapes);
-        }
-        _ => {}
-    }
-}
-
-/// Walks an expression for rule-4 escape evidence: when the expression
-/// contains a call to a **free function** (not a method call) whose escape
-/// summary marks argument slot `i` as `directly_escapes`, and the argument at
-/// slot `i` is an identifier naming one of our parameters, we add that
-/// parameter's index to `direct_escapes`.
-///
-/// Method calls are intentionally excluded to avoid false positives in cases
-/// where the receiver is a local variable that does not itself escape the
-/// function (e.g. `trash.push(items)` where `trash` is a local list).
-fn walk_expr_for_rule4(
-    expr: &Expression,
-    params: &[Parameter],
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-) {
-    match &expr.node {
-        ExpressionKind::Call(callee, args) => {
-            walk_call_for_rule4(callee, args, params, summaries, direct_escapes);
-        }
-        ExpressionKind::Binary(l, _, r) | ExpressionKind::Logical(l, _, r) => {
-            walk_expr_for_rule4(l, params, summaries, direct_escapes);
-            walk_expr_for_rule4(r, params, summaries, direct_escapes);
-        }
-        ExpressionKind::Unary(_, e) | ExpressionKind::Guard(_, e) => {
-            walk_expr_for_rule4(e, params, summaries, direct_escapes);
-        }
-        ExpressionKind::Index(obj, idx) => {
-            walk_expr_for_rule4(obj, params, summaries, direct_escapes);
-            walk_expr_for_rule4(idx, params, summaries, direct_escapes);
-        }
-        ExpressionKind::Member(obj, _) => {
-            walk_expr_for_rule4(obj, params, summaries, direct_escapes);
-        }
-        ExpressionKind::Conditional(then, cond, else_, _) => {
-            walk_conditional_for_rule4(cond, then, else_, params, summaries, direct_escapes);
-        }
-        ExpressionKind::Block(stmts, e) => {
-            walk_block_for_rule4(stmts, e, params, summaries, direct_escapes);
-        }
-        ExpressionKind::Match(sc, branches) => {
-            walk_match_for_rule4(sc, branches, params, summaries, direct_escapes);
-        }
-        ExpressionKind::List(elems) | ExpressionKind::Set(elems) | ExpressionKind::Tuple(elems) => {
-            walk_elems_for_rule4(elems, params, summaries, direct_escapes);
-        }
-        ExpressionKind::Array(elems, _) => {
-            walk_elems_for_rule4(elems, params, summaries, direct_escapes);
-        }
-        ExpressionKind::Map(pairs) => {
-            walk_pairs_for_rule4(pairs, params, summaries, direct_escapes);
-        }
-        ExpressionKind::EnumValue(_, vals) => {
-            walk_elems_for_rule4(vals, params, summaries, direct_escapes);
-        }
-        ExpressionKind::Assignment(lhs, _, rhs) => {
-            walk_assignment_for_rule4(lhs, rhs, params, summaries, direct_escapes);
-        }
-        ExpressionKind::NamedArgument(_, val) => {
-            walk_expr_for_rule4(val, params, summaries, direct_escapes);
-        }
-        ExpressionKind::FormattedString(parts, _) => {
-            walk_elems_for_rule4(parts, params, summaries, direct_escapes);
-        }
-        ExpressionKind::Range(start, end_, _) => {
-            walk_expr_for_rule4(start, params, summaries, direct_escapes);
-            if let Some(e) = end_ {
-                walk_expr_for_rule4(e, params, summaries, direct_escapes);
+            StatementKind::While(cond, body, _) => {
+                self.looped(HashSet::new(), flow, |walk, flow| {
+                    walk.expression(cond, flow);
+                    walk.statement(body, flow);
+                })
             }
+            StatementKind::For(decls, iter, body)
+            | StatementKind::GpuFrame(decls, iter, body)
+            | StatementKind::Forall {
+                vars: decls,
+                iterable: iter,
+                body,
+                ..
+            } => {
+                self.expression(iter, flow);
+                let names = decls.iter().map(|decl| decl.name.clone()).collect();
+                self.looped(names, flow, |walk, flow| walk.statement(body, flow));
+            }
+            StatementKind::GpuFrameBlock(block) => self.statement(block, flow),
+            StatementKind::Return(None)
+            | StatementKind::Break
+            | StatementKind::Continue
+            | StatementKind::Empty
+            | StatementKind::FunctionDeclaration(_)
+            | StatementKind::Use(_, _)
+            | StatementKind::Type(_, _)
+            | StatementKind::Enum(..)
+            | StatementKind::Struct(..)
+            | StatementKind::Class(_)
+            | StatementKind::Trait(..)
+            | StatementKind::RuntimeFunctionDeclaration(..)
+            | StatementKind::IntrinsicFunctionDeclaration(..) => {}
         }
-        ExpressionKind::Cast(value_expr, _target_type_expr) => {
-            walk_expr_for_rule4(value_expr, params, summaries, direct_escapes);
-        }
-        ExpressionKind::Lambda(_)
-        | ExpressionKind::Identifier(_, _)
-        | ExpressionKind::Literal(_)
-        | ExpressionKind::Type(_, _)
-        | ExpressionKind::GenericType(_, _, _)
-        | ExpressionKind::TypeDeclaration(_, _, _, _)
-        | ExpressionKind::StructMember(_, _)
-        | ExpressionKind::ImportPath(_, _)
-        | ExpressionKind::Super => {}
     }
-}
 
-fn walk_call_for_rule4(
-    callee: &Expression,
-    args: &[Expression],
-    params: &[Parameter],
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-) {
-    if let ExpressionKind::Identifier(name, _) = &callee.node {
-        // A call through a function-typed parameter reaches a function this
-        // body cannot see, so it may keep every argument it is given.
-        let through_parameter = params.iter().any(|p| p.name == *name);
-        let summary = summaries.get(&FunctionId::free(name));
-        for (i, arg) in args.iter().enumerate() {
-            if through_parameter || summary.is_some_and(|s| s.directly_escapes(i)) {
-                apply_rule4_to_arg(arg, i, params, direct_escapes);
+    fn statements(&mut self, stmts: &[Statement], flow: &mut ReturnFlow) {
+        for s in stmts {
+            self.statement(s, flow);
+        }
+    }
+
+    /// Walks a loop body, binding `names`, until a pass rebinds no local to
+    /// a parameter it did not already name: each pass starts with the locals
+    /// the last one may have left. The names a local may hold only grow and
+    /// are bounded by the parameters, so the walk ends.
+    fn looped(
+        &mut self,
+        names: HashSet<String>,
+        flow: &mut ReturnFlow,
+        mut pass: impl FnMut(&mut Self, &mut ReturnFlow),
+    ) {
+        loop {
+            let before = self.scopes.locals.clone();
+            self.scoped_with(names.clone(), |walk| pass(walk, flow));
+            if self.scopes.locals == before {
+                return;
             }
         }
     }
-    walk_expr_for_rule4(callee, params, summaries, direct_escapes);
-    for a in args {
-        walk_expr_for_rule4(a, params, summaries, direct_escapes);
-    }
-}
 
-fn walk_conditional_for_rule4(
-    cond: &Expression,
-    then: &Expression,
-    else_: &Option<Box<Expression>>,
-    params: &[Parameter],
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-) {
-    walk_expr_for_rule4(cond, params, summaries, direct_escapes);
-    walk_expr_for_rule4(then, params, summaries, direct_escapes);
-    if let Some(e) = else_ {
-        walk_expr_for_rule4(e, params, summaries, direct_escapes);
+    /// Walks `inner` in a scope of its own.
+    fn scoped(&mut self, inner: impl FnOnce(&mut Self)) {
+        self.scoped_with(HashSet::new(), inner);
     }
-}
 
-fn walk_block_for_rule4(
-    stmts: &[Statement],
-    e: &Expression,
-    params: &[Parameter],
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-) {
-    for s in stmts {
-        walk_stmt_for_rule4(s, params, summaries, direct_escapes);
-    }
-    walk_expr_for_rule4(e, params, summaries, direct_escapes);
-}
-
-fn walk_match_for_rule4(
-    sc: &Expression,
-    branches: &[crate::ast::MatchBranch],
-    params: &[Parameter],
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-) {
-    walk_expr_for_rule4(sc, params, summaries, direct_escapes);
-    for b in branches {
-        if let Some(g) = &b.guard {
-            walk_expr_for_rule4(g, params, summaries, direct_escapes);
+    /// Walks `inner` in a scope of its own that binds `names`, each naming
+    /// no parameter: a binding of a parameter's name hides the parameter.
+    fn scoped_with(&mut self, names: HashSet<String>, inner: impl FnOnce(&mut Self)) {
+        self.scopes.enter();
+        for name in &names {
+            self.scopes.declare(name, BTreeSet::new());
         }
-        walk_stmt_for_rule4(b.body.as_ref(), params, summaries, direct_escapes);
+        inner(self);
+        self.scopes.exit();
     }
-}
 
-fn walk_elems_for_rule4(
-    elems: &[Expression],
-    params: &[Parameter],
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-) {
-    for e in elems {
-        walk_expr_for_rule4(e, params, summaries, direct_escapes);
+    /// Walks an expression outside the returned value for the calls that keep
+    /// a parameter, the stores that hold one and the values built of one.
+    fn expression(&mut self, expr: &Expression, flow: &mut ReturnFlow) {
+        match &expr.node {
+            ExpressionKind::Call(callee, args) => self.call(callee, args, flow),
+            ExpressionKind::Assignment(lhs, _, rhs) => self.assignment(lhs, rhs, flow),
+            ExpressionKind::Binary(l, _, r) | ExpressionKind::Logical(l, _, r) => {
+                self.expression(l, flow);
+                self.expression(r, flow);
+            }
+            ExpressionKind::Unary(_, e)
+            | ExpressionKind::Guard(_, e)
+            | ExpressionKind::Member(e, _)
+            | ExpressionKind::NamedArgument(_, e)
+            | ExpressionKind::Cast(e, _) => self.expression(e, flow),
+            ExpressionKind::Index(obj, idx) => {
+                self.expression(obj, flow);
+                self.expression(idx, flow);
+            }
+            ExpressionKind::Conditional(then, cond, else_, _) => {
+                self.expression(cond, flow);
+                self.expression(then, flow);
+                self.optional(else_.as_deref(), flow);
+            }
+            ExpressionKind::Range(start, end, _) => {
+                self.expression(start, flow);
+                self.optional(end.as_deref(), flow);
+            }
+            ExpressionKind::Block(stmts, last) => self.scoped(|walk| {
+                walk.statements(stmts, flow);
+                walk.expression(last, flow);
+            }),
+            ExpressionKind::Match(scrutinee, branches) => {
+                self.match_arms(scrutinee, branches, flow)
+            }
+            ExpressionKind::FormattedString(elems, _) => self.each(elems, flow),
+            ExpressionKind::List(elems)
+            | ExpressionKind::Set(elems)
+            | ExpressionKind::Tuple(elems)
+            | ExpressionKind::Array(elems, _)
+            | ExpressionKind::EnumValue(_, elems) => {
+                self.stored(expr, flow);
+                self.each(elems, flow);
+            }
+            ExpressionKind::Map(pairs) => {
+                self.stored(expr, flow);
+                for (k, v) in pairs {
+                    self.expression(k, flow);
+                    self.expression(v, flow);
+                }
+            }
+            // A closure holds what it captures, wherever it goes.
+            ExpressionKind::Lambda(_) => self.stored(expr, flow),
+            ExpressionKind::Identifier(_, _)
+            | ExpressionKind::Literal(_)
+            | ExpressionKind::Type(_, _)
+            | ExpressionKind::GenericType(_, _, _)
+            | ExpressionKind::TypeDeclaration(_, _, _, _)
+            | ExpressionKind::StructMember(_, _)
+            | ExpressionKind::ImportPath(_, _)
+            | ExpressionKind::Super => {}
+        }
     }
-}
 
-fn walk_pairs_for_rule4(
-    pairs: &[(Expression, Expression)],
-    params: &[Parameter],
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-) {
-    for (k, v) in pairs {
-        walk_expr_for_rule4(k, params, summaries, direct_escapes);
-        walk_expr_for_rule4(v, params, summaries, direct_escapes);
+    fn optional(&mut self, expr: Option<&Expression>, flow: &mut ReturnFlow) {
+        if let Some(e) = expr {
+            self.expression(e, flow);
+        }
     }
-}
 
-fn walk_assignment_for_rule4(
-    lhs: &LeftHandSideExpression,
-    rhs: &Expression,
-    params: &[Parameter],
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-) {
-    if let LeftHandSideExpression::Member(member_expr) = lhs {
-        if let ExpressionKind::Member(obj, _) = &member_expr.node {
-            if let ExpressionKind::Identifier(obj_name, _) = &obj.node {
-                if obj_name == "self" {
-                    apply_rule4_to_arg(rhs, 0, params, direct_escapes);
+    fn each(&mut self, exprs: &[Expression], flow: &mut ReturnFlow) {
+        for e in exprs {
+            self.expression(e, flow);
+        }
+    }
+
+    /// Each arm is a scope binding what its patterns bind.
+    fn match_arms(
+        &mut self,
+        scrutinee: &Expression,
+        branches: &[crate::ast::MatchBranch],
+        flow: &mut ReturnFlow,
+    ) {
+        self.expression(scrutinee, flow);
+        for branch in branches {
+            let mut names = HashSet::new();
+            for pattern in &branch.patterns {
+                collect_pattern_bindings(pattern, &mut names);
+            }
+            self.scoped_with(names, |walk| {
+                walk.optional(branch.guard.as_deref(), flow);
+                walk.statement(&branch.body, flow);
+            });
+        }
+    }
+
+    /// A parameter passed at a position the callee keeps is kept: a free
+    /// function's or a method's, as its summary says, and every position of
+    /// a call through a function-typed parameter, which this body cannot see
+    /// into. A method's receiver is position 0 of its summary. A closure
+    /// passed straight to a call is lent to it unless the call keeps it.
+    fn call(&mut self, callee: &Expression, args: &[Expression], flow: &mut ReturnFlow) {
+        self.keep_passed(callee, args, flow);
+        self.expression(callee, flow);
+        for arg in args {
+            if !matches!(argument_value(arg).node, ExpressionKind::Lambda(_)) {
+                self.expression(arg, flow);
+            }
+        }
+    }
+
+    /// Records what each position the callee keeps holds; the value a
+    /// constructor builds keeps every argument.
+    fn keep_passed(&self, callee: &Expression, args: &[Expression], flow: &mut ReturnFlow) {
+        if call_builds_a_value(callee, self.facts.type_defs) {
+            for arg in args {
+                self.stored(arg, flow);
+            }
+            return;
+        }
+        let analyzer = self.analyzer();
+        if let ExpressionKind::Identifier(name, _) = &callee.node {
+            let through_parameter = analyzer.is_parameter_call(callee);
+            let summary = self.summaries.get(&analyzer.free_callee(callee, name));
+            for (i, arg) in args.iter().enumerate() {
+                if through_parameter || summary.is_some_and(|s| s.directly_escapes(i)) {
+                    self.stored(arg, flow);
+                }
+            }
+        } else if let ExpressionKind::Member(receiver, method) = &callee.node {
+            if let Some(summary) = analyzer.method_call_summary(receiver, method) {
+                let positions = std::iter::once(receiver.as_ref()).chain(args);
+                for (i, passed) in positions.enumerate() {
+                    if summary.directly_escapes(i) {
+                        self.stored(passed, flow);
+                    }
                 }
             }
         }
     }
-    walk_expr_for_rule4(rhs, params, summaries, direct_escapes);
+
+    /// A value assigned into a field or an element is held by the place it
+    /// is stored in. A local assigned a new value names what that value
+    /// names from then on.
+    fn assignment(
+        &mut self,
+        lhs: &LeftHandSideExpression,
+        rhs: &Expression,
+        flow: &mut ReturnFlow,
+    ) {
+        self.expression(rhs, flow);
+        match lhs {
+            LeftHandSideExpression::Member(_) | LeftHandSideExpression::Index(_) => {
+                self.stored(rhs, flow);
+            }
+            LeftHandSideExpression::Identifier(target) => {
+                if let ExpressionKind::Identifier(name, _) = &target.node {
+                    let named = self.named_by(rhs);
+                    self.scopes.rebind(name, named);
+                }
+            }
+        }
+    }
 }
 
-/// If `arg` (or its `NamedArgument` wrapper) is a bare identifier that names
-/// one of `params`, adds that parameter's index to `direct_escapes`.
-fn apply_rule4_to_arg(
-    arg: &Expression,
-    _summary_idx: ParamIndex,
-    params: &[Parameter],
-    direct_escapes: &mut BTreeSet<ParamIndex>,
-) {
-    let inner = match &arg.node {
-        ExpressionKind::NamedArgument(_, val) => val.as_ref(),
-        _ => arg,
-    };
-    if let ExpressionKind::Identifier(name, _) = &inner.node {
-        if let Some(idx) = params.iter().position(|p| p.name == *name) {
-            direct_escapes.insert(idx);
+/// The value an argument passes, past the name it is passed under.
+fn argument_value(arg: &Expression) -> &Expression {
+    if let ExpressionKind::NamedArgument(_, value) = &arg.node {
+        value
+    } else {
+        arg
+    }
+}
+
+/// Adds every name `pattern` binds to `out`: an identifier, and the names
+/// inside a tuple, a variant's payload or a qualified pattern.
+pub(crate) fn collect_pattern_bindings(pattern: &Pattern, out: &mut HashSet<String>) {
+    match pattern {
+        Pattern::Identifier(name) => {
+            out.insert(name.clone());
         }
+        Pattern::Tuple(parts) | Pattern::EnumVariant(_, parts) => {
+            for part in parts {
+                collect_pattern_bindings(part, out);
+            }
+        }
+        Pattern::Member(inner, _) => collect_pattern_bindings(inner, out),
+        Pattern::Literal(_) | Pattern::Regex(_) | Pattern::Default => {}
     }
 }
 
@@ -1817,18 +1985,23 @@ fn apply_rule4_to_arg(
 /// Must be called after the fixpoint has converged so that callee summaries
 /// (consulted when the hop is a `Call`) are stable.
 fn resolve_next_hops(
-    params: &[Parameter],
+    def: &FunctionDef<'_>,
     direct_escapes: &BTreeSet<ParamIndex>,
-    body: &Statement,
     summaries: &HashMap<FunctionId, EscapeSummary>,
-    types: &HashMap<usize, Type>,
+    facts: &ProgramFacts<'_>,
 ) -> HashMap<ParamIndex, EscapeNextHop> {
     let mut hops = HashMap::new();
     for &param_idx in direct_escapes {
-        let Some(param) = params.get(param_idx) else {
+        let Some(param) = def.params.get(param_idx) else {
             continue;
         };
-        if let Some(hop) = find_hop_in_stmt(&param.name, body, summaries, types) {
+        let in_tail = || {
+            (def.tails.iter())
+                .find_map(|tail| find_hop_in_return_expr(&param.name, tail, summaries, facts))
+        };
+        if let Some(hop) =
+            find_hop_in_stmt(&param.name, def.body, summaries, facts).or_else(in_tail)
+        {
             hops.insert(param_idx, hop);
         }
     }
@@ -1839,23 +2012,23 @@ fn find_hop_in_stmt(
     param_name: &str,
     stmt: &Statement,
     summaries: &HashMap<FunctionId, EscapeSummary>,
-    types: &HashMap<usize, Type>,
+    facts: &ProgramFacts<'_>,
 ) -> Option<EscapeNextHop> {
     match &stmt.node {
-        StatementKind::Return(Some(e)) => find_hop_in_return_expr(param_name, e, summaries, types),
+        StatementKind::Return(Some(e)) => find_hop_in_return_expr(param_name, e, summaries, facts),
         StatementKind::Block(stmts) => {
             for s in stmts {
-                if let Some(h) = find_hop_in_stmt(param_name, s, summaries, types) {
+                if let Some(h) = find_hop_in_stmt(param_name, s, summaries, facts) {
                     return Some(h);
                 }
             }
             None
         }
-        StatementKind::Expression(e) => find_hop_in_stmt_expr(param_name, e, summaries, types),
+        StatementKind::Expression(e) => find_hop_in_stmt_expr(param_name, e, summaries, facts),
         StatementKind::Variable(decls, _) => {
             for d in decls {
                 if let Some(init) = &d.initializer {
-                    if let Some(h) = find_hop_in_stmt_expr(param_name, init, summaries, types) {
+                    if let Some(h) = find_hop_in_stmt_expr(param_name, init, summaries, facts) {
                         return Some(h);
                     }
                 }
@@ -1863,20 +2036,20 @@ fn find_hop_in_stmt(
             None
         }
         StatementKind::If(_, then, else_, _) => {
-            if let Some(h) = find_hop_in_stmt(param_name, then, summaries, types) {
+            if let Some(h) = find_hop_in_stmt(param_name, then, summaries, facts) {
                 return Some(h);
             }
             if let Some(e) = else_ {
-                find_hop_in_stmt(param_name, e, summaries, types)
+                find_hop_in_stmt(param_name, e, summaries, facts)
             } else {
                 None
             }
         }
-        StatementKind::While(_, body, _) => find_hop_in_stmt(param_name, body, summaries, types),
+        StatementKind::While(_, body, _) => find_hop_in_stmt(param_name, body, summaries, facts),
         StatementKind::For(_, _, body) | StatementKind::GpuFrame(_, _, body) => {
-            find_hop_in_stmt(param_name, body, summaries, types)
+            find_hop_in_stmt(param_name, body, summaries, facts)
         }
-        StatementKind::Forall { body, .. } => find_hop_in_stmt(param_name, body, summaries, types),
+        StatementKind::Forall { body, .. } => find_hop_in_stmt(param_name, body, summaries, facts),
         _ => None,
     }
 }
@@ -1885,7 +2058,7 @@ fn find_hop_in_return_expr(
     param_name: &str,
     expr: &Expression,
     summaries: &HashMap<FunctionId, EscapeSummary>,
-    types: &HashMap<usize, Type>,
+    facts: &ProgramFacts<'_>,
 ) -> Option<EscapeNextHop> {
     match &expr.node {
         ExpressionKind::Identifier(name, _) if name == param_name => Some(EscapeNextHop::Return),
@@ -1914,24 +2087,24 @@ fn find_hop_in_return_expr(
         // no hop of its own (see `classify_range`).
         ExpressionKind::Range(..) => None,
         ExpressionKind::Call(callee, args) => {
-            find_hop_in_call_expr(param_name, callee, args, summaries, types)
+            find_hop_in_call_expr(param_name, callee, args, summaries, facts)
         }
         ExpressionKind::Lambda(_) => Some(EscapeNextHop::ClosureCapture),
         ExpressionKind::Conditional(then, _, else_, _) => {
-            if let Some(h) = find_hop_in_return_expr(param_name, then, summaries, types) {
+            if let Some(h) = find_hop_in_return_expr(param_name, then, summaries, facts) {
                 return Some(h);
             }
             if let Some(e) = else_ {
-                find_hop_in_return_expr(param_name, e, summaries, types)
+                find_hop_in_return_expr(param_name, e, summaries, facts)
             } else {
                 None
             }
         }
         ExpressionKind::Block(_, final_expr) => {
-            find_hop_in_return_expr(param_name, final_expr, summaries, types)
+            find_hop_in_return_expr(param_name, final_expr, summaries, facts)
         }
         ExpressionKind::NamedArgument(_, val) => {
-            find_hop_in_return_expr(param_name, val, summaries, types)
+            find_hop_in_return_expr(param_name, val, summaries, facts)
         }
         _ => None,
     }
@@ -1941,11 +2114,11 @@ fn find_hop_in_stmt_expr(
     param_name: &str,
     expr: &Expression,
     summaries: &HashMap<FunctionId, EscapeSummary>,
-    types: &HashMap<usize, Type>,
+    facts: &ProgramFacts<'_>,
 ) -> Option<EscapeNextHop> {
     match &expr.node {
         ExpressionKind::Call(callee, args) => {
-            find_hop_in_call_expr(param_name, callee, args, summaries, types)
+            find_hop_in_call_expr(param_name, callee, args, summaries, facts)
         }
         ExpressionKind::Assignment(lhs, _, rhs) => {
             // self.field = param → FieldStore
@@ -1973,7 +2146,7 @@ fn find_hop_in_call_expr(
     callee: &Expression,
     args: &[Expression],
     summaries: &HashMap<FunctionId, EscapeSummary>,
-    types: &HashMap<usize, Type>,
+    facts: &ProgramFacts<'_>,
 ) -> Option<EscapeNextHop> {
     match &callee.node {
         // Free function call: f(param)
@@ -1981,7 +2154,7 @@ fn find_hop_in_call_expr(
             let arg_pos = args
                 .iter()
                 .position(|a| expr_contains_param(a, param_name))?;
-            let callee = FunctionId::free(fn_name);
+            let callee = free_callee(callee, fn_name, facts.callees);
             let summary = summaries.get(&callee)?;
             if summary.directly_escapes(arg_pos) {
                 Some(EscapeNextHop::Call {
@@ -1997,7 +2170,7 @@ fn find_hop_in_call_expr(
             let ExpressionKind::Identifier(method_name, _) = &method_expr.node else {
                 return None;
             };
-            let receiver_ty = types.get(&obj.id)?;
+            let receiver_ty = facts.types.get(&obj.id)?;
             let TypeKind::Custom(class_name, _) = &receiver_ty.kind else {
                 return None;
             };

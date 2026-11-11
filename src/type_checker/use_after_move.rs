@@ -14,7 +14,6 @@
 //! level of a file as inside a function: the rule does not depend on scope.
 
 use crate::ast::expression::{ExpressionKind, LeftHandSideExpression};
-use crate::ast::pattern::Pattern;
 use crate::ast::statement::{BindingResidency, StatementKind, WhileStatementType, DROP_HOOK_NAME};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
@@ -24,8 +23,12 @@ use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 use std::collections::{HashMap, HashSet};
 
-use super::context::{class_implements_trait, TypeDefinition};
-use super::escape_analysis::{EscapeNextHop, EscapeSummary, FunctionId};
+use super::context::TypeDefinition;
+use super::escape_analysis::{
+    call_builds_a_value, collect_pattern_bindings, free_callee, method_owner, method_summary,
+    returned_tails, EscapeNextHop, EscapeSummary, FunctionId,
+};
+use super::function_analysis::DeclaredFunction;
 use super::utils::{is_resource, runs_drop_hook, trait_declares_drop_hook};
 use crate::ast::captures::collect_lambda_captures;
 
@@ -246,6 +249,9 @@ pub struct UseAfterMoveChecker<'a> {
     /// method by its declaring type and name.
     /// Pre-populated with FFI summaries; user-method summaries added during analysis.
     escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
+    /// The function each free-function callee resolved to, by callee id: a
+    /// free function's summary is its declaration's, never its name's.
+    callees: &'a HashMap<usize, DeclaredFunction>,
     errors: Vec<TypeError>,
     warnings: Vec<Diagnostic>,
     /// Names currently bound as parameters or `let`/`var` locals.  Used to
@@ -288,6 +294,9 @@ pub struct UseAfterMoveChecker<'a> {
     /// closure's expression: the call consumes them only if it keeps the
     /// closure, and lends them otherwise.
     lent_closures: HashMap<usize, Vec<Capture>>,
+    /// The expressions the function being analysed returns without `return`
+    /// ([`returned_tails`]), by id.
+    tail_values: HashSet<usize>,
 }
 
 /// A resource a closure captures.
@@ -314,12 +323,14 @@ impl<'a> UseAfterMoveChecker<'a> {
         types: &'a HashMap<usize, Type>,
         type_definitions: &'a HashMap<String, TypeDefinition>,
         escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
+        callees: &'a HashMap<usize, DeclaredFunction>,
     ) -> Self {
         Self {
             flow,
             types,
             type_definitions,
             escape_summaries,
+            callees,
             errors: vec![],
             warnings: vec![],
             fn_bindings: HashSet::new(),
@@ -330,6 +341,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             rechecking: false,
             closures: Vec::new(),
             lent_closures: HashMap::new(),
+            tail_values: HashSet::new(),
         }
     }
 
@@ -348,7 +360,12 @@ impl<'a> UseAfterMoveChecker<'a> {
         match &stmt.node {
             StatementKind::FunctionDeclaration(decl) => self.check_fn_decl(decl),
             StatementKind::Block(stmts) => self.check_block(stmts, consumed),
-            StatementKind::Expression(expr) => self.check_expr(expr, consumed),
+            StatementKind::Expression(expr) => {
+                self.check_expr(expr, consumed);
+                if self.tail_values.contains(&expr.id) {
+                    self.consume_returned_resource(expr, consumed);
+                }
+            }
             StatementKind::Variable(decls, _) => self.check_variable_stmt(decls, consumed),
             StatementKind::Return(expr) => {
                 if let Some(e) = expr {
@@ -406,6 +423,11 @@ impl<'a> UseAfterMoveChecker<'a> {
         let prev_gpu = std::mem::take(&mut self.gpu_bindings);
         let prev_owned = std::mem::take(&mut self.owned_locals);
         let prev_closures = std::mem::take(&mut self.closures);
+        let tails = returned_tails(decl.return_type.as_deref(), body);
+        let prev_tails = std::mem::replace(
+            &mut self.tail_values,
+            tails.iter().map(|tail| tail.id).collect(),
+        );
         for p in &decl.params {
             self.fn_bindings.insert(p.name.clone());
         }
@@ -413,15 +435,17 @@ impl<'a> UseAfterMoveChecker<'a> {
         let mut fn_consumed: HashMap<String, ConsumedInfo> = HashMap::new();
         self.check_stmt(body, &mut fn_consumed);
         self.closures = prev_closures;
+        self.tail_values = prev_tails;
         self.loop_exits = prev_loops;
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
         self.owned_locals = prev_owned;
     }
 
-    /// A resource returned by name moves to the caller, which owns it from
-    /// then on, so the scope it was declared in ends without it — as it does
-    /// for one assigned to another binding.
+    /// A resource returned by name, after `return` or as a tail value the
+    /// body ends on, moves to the caller, which owns it from then on, so the
+    /// scope it was declared in ends without it — as it does for one assigned
+    /// to another binding.
     fn consume_returned_resource(
         &mut self,
         returned: &Expression,
@@ -1036,7 +1060,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         let prev_owned = self.owned_locals.clone();
         let mut arm_bindings = HashSet::new();
         for pat in &branch.patterns {
-            Self::collect_pattern_bindings(pat, &mut arm_bindings);
+            collect_pattern_bindings(pat, &mut arm_bindings);
         }
         let mut shadowed = Shadowed::new();
         for name in &arm_bindings {
@@ -1074,7 +1098,8 @@ impl<'a> UseAfterMoveChecker<'a> {
                 ExpressionKind::Identifier(name, _)
                     if !self.fn_bindings.contains(name.as_str()) =>
                 {
-                    self.escape_summaries.get(&FunctionId::free(name)).cloned()
+                    let declared = free_callee(callee, name, self.callees);
+                    self.escape_summaries.get(&declared).cloned()
                 }
                 _ => None,
             }
@@ -1158,7 +1183,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             })
             .unwrap_or_default();
 
-        let named_sink = || Sink::Function(FunctionId::free(fn_name));
+        let named_sink = || Sink::Function(self.named_callee(callee, fn_name));
         if let Some(summary) = method_summary {
             let method_sink = method_chain_key.map_or_else(named_sink, Sink::Function);
             if summary.directly_escapes(0) {
@@ -1169,6 +1194,9 @@ impl<'a> UseAfterMoveChecker<'a> {
             self.apply_summary_to_args(args, &params, &summary, &method_sink, consumed, true);
         } else if let Some(summary) = free_fn_summary {
             self.apply_summary_to_args(args, &params, &summary, &named_sink(), consumed, false);
+        } else if call_builds_a_value(callee, self.type_definitions) {
+            // The value a constructor builds holds every argument it is handed.
+            self.consume_resource_args(args, &params, &named_sink(), consumed);
         } else {
             // A callee whose body the checker cannot see is assumed to keep
             // every resource it is handed.
@@ -1404,24 +1432,10 @@ impl<'a> UseAfterMoveChecker<'a> {
         );
     }
 
-    /// Collect every identifier name introduced by a match pattern,
-    /// adding it to `out` (the running `fn_bindings` set).  Recurses through
-    /// `Tuple` and `EnumVariant` payloads.  `Member` patterns describe a
-    /// *path* (`Color.Red`) — only their inner sub-pattern can introduce
-    /// bindings, never the path itself.
-    fn collect_pattern_bindings(pat: &Pattern, out: &mut HashSet<String>) {
-        match pat {
-            Pattern::Identifier(name) => {
-                out.insert(name.clone());
-            }
-            Pattern::Tuple(parts) | Pattern::EnumVariant(_, parts) => {
-                for p in parts {
-                    Self::collect_pattern_bindings(p, out);
-                }
-            }
-            Pattern::Member(inner, _) => Self::collect_pattern_bindings(inner, out),
-            Pattern::Literal(_) | Pattern::Regex(_) | Pattern::Default => {}
-        }
+    /// The function a call names: the declaration a free-function callee
+    /// resolved to, and otherwise the name it is written as.
+    fn named_callee(&self, callee: &Expression, name: &str) -> FunctionId {
+        free_callee(callee, name, self.callees)
     }
 
     /// Dynamic-fn classifier — see `fn_bindings` field doc.
@@ -1545,130 +1559,10 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
-    /// Look up the escape summary for a static method call on `class_name`.
-    ///
-    /// Walks the `base_class` chain so that inherited methods are found in the
-    /// defining class's summary, not the static type's.
-    fn lookup_static_method_summary(
-        &self,
-        class_name: &str,
-        method_name: &str,
-    ) -> Option<&EscapeSummary> {
-        let owner = self.resolve_method_owner_class(class_name, method_name)?;
-        self.escape_summaries
-            .get(&FunctionId::method(owner, method_name))
-    }
-
-    /// Walk the `base_class` chain to find the class that owns a registered
-    /// escape summary for `method_name`. Returns the first class whose method
-    /// key is present in `escape_summaries`, or `None`
-    /// if no class in the chain has one.
-    fn resolve_method_owner_class<'b>(
-        &'b self,
-        class_name: &'b str,
-        method_name: &str,
-    ) -> Option<&'b str> {
-        let mut current = class_name;
-        loop {
-            if self
-                .escape_summaries
-                .contains_key(&FunctionId::method(current, method_name))
-            {
-                return Some(current);
-            }
-            match self.type_definitions.get(current) {
-                Some(TypeDefinition::Class(cd)) => current = cd.base_class.as_deref()?,
-                None
-                | Some(TypeDefinition::Struct(_))
-                | Some(TypeDefinition::Enum(_))
-                | Some(TypeDefinition::Generic(_))
-                | Some(TypeDefinition::Alias(_))
-                | Some(TypeDefinition::Trait(_)) => return None,
-            }
-        }
-    }
-
-    /// Build a joined escape summary for a virtual / trait-dispatch method call.
-    ///
-    /// Collects all concrete classes that implement `trait_or_abstract` (directly
-    /// or via inheritance) and unions their escape summaries.
-    ///
-    /// Returns `None` when no implementers are visible — the caller falls back to
-    /// the "every managed param escapes" conservative treatment.
-    fn join_virtual_summaries(
-        &self,
-        trait_or_abstract: &str,
-        method_name: &str,
-    ) -> Option<EscapeSummary> {
-        let mut joined = EscapeSummary::default();
-        let mut any_found = false;
-
-        for (class_name, td) in self.type_definitions {
-            let TypeDefinition::Class(cd) = td else {
-                continue;
-            };
-            // Include concrete implementers only.
-            if cd.is_abstract {
-                continue;
-            }
-            // Membership is the shared answer, which walks the class's whole
-            // ancestry and every trait each step of it extends. Reading only
-            // this class's own trait list would leave out an implementer that
-            // reaches the trait through a base class or through a trait
-            // extending it — and leaving one out while finding another is worse
-            // than finding none, because the join then reports an escape the
-            // class it dispatches to actually has as absent.
-            let implements_trait =
-                class_implements_trait(class_name, trait_or_abstract, self.type_definitions);
-            // An abstract *class* is named the same way a trait is here, and is
-            // reached by inheritance rather than by implementing anything.
-            let inherits_abstract =
-                !implements_trait && self.class_extends(class_name, trait_or_abstract);
-            if !implements_trait && !inherits_abstract {
-                continue;
-            }
-            if let Some(s) = self.lookup_static_method_summary(class_name, method_name) {
-                joined
-                    .direct_escapes
-                    .extend(s.direct_escapes.iter().copied());
-                joined
-                    .return_aliases
-                    .extend(s.return_aliases.iter().copied());
-                joined
-                    .conditional_escapes
-                    .extend(s.conditional_escapes.iter().cloned());
-                any_found = true;
-            }
-        }
-
-        if any_found {
-            Some(joined)
-        } else {
-            None
-        }
-    }
-
-    /// Returns `true` if `class_name` has `ancestor` anywhere in its `base_class` chain.
-    fn class_extends(&self, class_name: &str, ancestor: &str) -> bool {
-        let mut current = class_name;
-        loop {
-            if current == ancestor {
-                return true;
-            }
-            match self.type_definitions.get(current) {
-                Some(TypeDefinition::Class(cd)) => match &cd.base_class {
-                    Some(base) => current = base.as_str(),
-                    None => return false,
-                },
-                _ => return false,
-            }
-        }
-    }
-
     /// Returns the summary key of a method-call callee,
     /// resolved to the **defining** class — walks the `base_class` chain so an
     /// inherited method's chain key points at the class that actually has the
-    /// escape summary (mirrors [`Self::lookup_static_method_summary`]).
+    /// escape summary (as [`method_summary`] does).
     ///
     /// Used so `build_chain` can look up the escape summary by its canonical key
     /// rather than the bare method name, and so the user-visible "consumed by"
@@ -1676,53 +1570,40 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// receiver's static type. Returns `None` for non-method callees or when
     /// the receiver type is unresolved.
     fn extract_method_chain_key(&self, callee: &Expression) -> Option<FunctionId> {
-        let ExpressionKind::Member(obj_expr, method_expr) = &callee.node else {
-            return None;
-        };
-        let ExpressionKind::Identifier(method_name, _) = &method_expr.node else {
-            return None;
-        };
-        let receiver_ty = self.types.get(&obj_expr.id)?;
-        let TypeKind::Custom(type_name, _) = &receiver_ty.kind else {
-            return None;
-        };
-        let owner = self
-            .resolve_method_owner_class(type_name, method_name)
-            .unwrap_or(type_name);
-        Some(FunctionId::method(owner, method_name))
+        let (type_name, method_name) = self.method_call_target(callee)?;
+        let has_summary = |id: &FunctionId| self.escape_summaries.contains_key(id);
+        let owner = method_owner(type_name, method_name, &has_summary, self.type_definitions);
+        Some(owner.unwrap_or_else(|| FunctionId::method(type_name, method_name)))
     }
 
-    /// If `callee` is a method call (`Member(receiver, method_name)`), looks up
-    /// and returns the applicable escape summary for the method.
+    /// If `callee` is a method call (`Member(receiver, method_name)`), the
+    /// escape summary the call reaches ([`method_summary`]).
     ///
     /// Returns `None` when the callee is a free function, the receiver type is
-    /// unresolved, or no summary is present for the method yet.
+    /// unresolved, or no summary is present for the method.
     fn extract_method_summary(&self, callee: &Expression) -> Option<EscapeSummary> {
+        let (type_name, method_name) = self.method_call_target(callee)?;
+        method_summary(
+            type_name,
+            method_name,
+            self.escape_summaries,
+            self.type_definitions,
+        )
+    }
+
+    /// The receiver's declared type and the method's name of a method-call
+    /// callee, when the receiver is of a named type.
+    fn method_call_target<'e>(&'e self, callee: &'e Expression) -> Option<(&'e str, &'e str)> {
         let ExpressionKind::Member(obj_expr, method_expr) = &callee.node else {
             return None;
         };
         let ExpressionKind::Identifier(method_name, _) = &method_expr.node else {
             return None;
         };
-        let receiver_ty = self.types.get(&obj_expr.id)?;
-        let TypeKind::Custom(type_name, _) = &receiver_ty.kind else {
+        let TypeKind::Custom(type_name, _) = &self.types.get(&obj_expr.id)?.kind else {
             return None;
         };
-
-        match self.type_definitions.get(type_name.as_str()) {
-            Some(TypeDefinition::Trait(_)) => self.join_virtual_summaries(type_name, method_name),
-            Some(TypeDefinition::Class(cd)) if cd.is_abstract => {
-                self.join_virtual_summaries(type_name, method_name)
-            }
-            Some(TypeDefinition::Class(_)) => self
-                .lookup_static_method_summary(type_name, method_name)
-                .cloned(),
-            Some(TypeDefinition::Struct(_))
-            | Some(TypeDefinition::Enum(_))
-            | Some(TypeDefinition::Generic(_))
-            | Some(TypeDefinition::Alias(_))
-            | None => None,
-        }
+        Some((type_name, method_name))
     }
 }
 

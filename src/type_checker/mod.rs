@@ -824,10 +824,15 @@ impl TypeChecker {
         if !self.diagnostics.is_empty() {
             return;
         }
+        let facts = escape_analysis::ProgramFacts {
+            types: &self.type_table.types,
+            type_defs: &self.type_table.global_type_definitions,
+            callees: &self.fn_analysis.declared_callees,
+            modules: &self.fn_analysis.declaring_modules,
+        };
         context.escape_summaries = escape_analysis::compute_escape_summaries(
-            &program.body,
-            &self.type_table.types,
-            &self.type_table.global_type_definitions,
+            program.body.iter().chain(&self.imported_statements),
+            &facts,
             escape_analysis::runtime_escape_summaries(&self.runtime_effects),
         );
     }
@@ -841,6 +846,7 @@ impl TypeChecker {
             &self.type_table.types,
             &self.type_table.global_type_definitions,
             &context.escape_summaries,
+            &self.fn_analysis.declared_callees,
         )
         .check_program(program);
         self.diagnostics.extend_errors(findings.errors);
