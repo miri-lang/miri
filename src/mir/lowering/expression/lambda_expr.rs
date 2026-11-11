@@ -38,6 +38,9 @@ use crate::mir::{
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::identifier_expr::lower_self_reference_value;
 use crate::mir::lowering::helpers::lower_body_as_return;
+use crate::mir::lowering::kept_parameters::{
+    record_and_bind_value_parameters, value_convention_in, KeptParameterBindings,
+};
 use crate::mir::lowering::requests::LoweringRequests;
 use crate::mir::lowering::resolve_execution_model;
 use crate::mir::lowering::written_parameters::copy_written_parameters;
@@ -197,10 +200,12 @@ fn lower_closure_body(
     let mut lambda_ctx = closure_context(ctx, closure, &ret_ty);
 
     let tentative_captures = declare_tentative_captures(ctx, &mut lambda_ctx, closure);
+    let owned = bind_closure_owned_parameters(&mut lambda_ctx, closure)?;
     let copies = copy_written_parameters(&mut lambda_ctx, closure.params);
 
     lower_body_as_return(&mut lambda_ctx, closure.body, &ret_ty)?;
     copies.close(&mut lambda_ctx, span);
+    owned.close(&mut lambda_ctx, span);
 
     // Falling off the end must end the root scope's storage exactly as an
     // explicit `return` does: a capture the body assigns owns the value it last
@@ -222,6 +227,25 @@ fn lower_closure_body(
     ctx.lambda_bodies.append(&mut lambda_ctx.lambda_bodies);
 
     Ok((lambda_ctx.body, lambda_ctx.requests, captures))
+}
+
+/// Records the parameters the closure's body owns — every one its function
+/// type hands a reference on at, the convention each call through its value
+/// follows — and binds each to a local of its own at the body's entry. A
+/// GPU closure owns none: device code holds no counts.
+fn bind_closure_owned_parameters(
+    lambda_ctx: &mut LoweringContext,
+    closure: &ClosureSource,
+) -> Result<KeptParameterBindings, LoweringError> {
+    let convention = if let TypeKind::Function(function) = &closure.ty.kind {
+        value_convention_in(lambda_ctx, function)
+    } else {
+        vec![false; closure.params.len()]
+    };
+    let params = (closure.params.iter()).map(|param| (param.name.as_str(), param.typ.span));
+    let (owned, _) =
+        record_and_bind_value_parameters(lambda_ctx, &convention, params, closure.span)?;
+    Ok(owned)
 }
 
 /// A fresh context for the closure's body, holding its return slot, its

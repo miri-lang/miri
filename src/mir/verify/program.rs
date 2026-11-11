@@ -111,7 +111,8 @@ pub fn verify_program(
         .into_iter()
         .map(|(symbol, v)| format!("  fn {}: {}", symbol, v))
         .collect();
-    let after_rc = verify_program_after_rc(definitions, bodies);
+    let mut after_rc = verify_program_after_rc(definitions, bodies);
+    after_rc.extend(super::verify_value_calls(bodies, definitions));
     functions_with_violations += after_rc
         .iter()
         .map(|(name, _)| name)

@@ -45,9 +45,10 @@ pub(crate) use super::method_dispatch::resolve_inherited_method;
 pub(crate) use super::kernel_launch::try_lower_kernel_launch;
 
 // Import private helpers from specialized modules.
+use super::expression::function_reference::{adapt_runtime_slot_closures, SlotCall};
 use super::generic_method_calls::{generic_method_symbol, GenericMethodSite};
 use super::kept_parameters::{
-    hand_over_kept_arguments, release_after_kept_call, HandedOver, KeptCall,
+    hand_over_kept_arguments, release_after_kept_call, value_call_convention, HandedOver, KeptCall,
 };
 use super::method_dispatch::{residency_specialize_call, with_mutated_receiver};
 use super::runtime_writes::{self, RuntimeCallee};
@@ -483,13 +484,16 @@ fn lower_aliased_function_call(
     if callee_takes_allocator(ctx, callee) {
         push_allocator_arg(ctx, &mut arg_ops);
     }
+    let slot_call = SlotCall::at(call_expr_id, arg_watermark);
+    adapt_runtime_slot_closures(ctx, slot_call, &func_op, &mut arg_ops)?;
 
     let return_ty = ctx
         .recorded_type(call_expr_id)
         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
     let (destination, result_op) = call_destination(ctx, return_ty, dest, *span);
     let at = (arg_watermark, destination.local);
-    let call = KeptCall::of(ctx.type_checker, callee, signature_id, &func_op, args, at)?;
+    let named = (callee, signature_id);
+    let call = KeptCall::of(ctx.type_checker, named, &func_op, None, args, at)?;
     let mut arg_modes = Vec::new();
     let handed = hand_over_kept_arguments(ctx, &call, &mut arg_ops, &mut arg_modes)?;
 
@@ -1609,6 +1613,7 @@ fn lower_direct_call(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    let tc = ctx.type_checker;
     let func_watermark = ctx.body.local_decls.len();
     let callee = callee_name_expression(func);
     let mut func_op = lower_callee(ctx, callee)?;
@@ -1623,6 +1628,8 @@ fn lower_direct_call(
     let mut arg_ops = lower_call_arguments(ctx, call, call_expr_id, args, &func_op)?;
 
     inject_allocator_arg(ctx, callee, &func_op, &mut arg_ops);
+    let slot_call = SlotCall::at(call_expr_id, arg_watermark);
+    adapt_runtime_slot_closures(ctx, slot_call, &func_op, &mut arg_ops)?;
 
     // Per-residency device-handle Call-ABI: when a gpu-resident buffer is passed
     // to a `GpuLaunchSafe` callee, retarget the call to a residency-specialized
@@ -1649,7 +1656,9 @@ fn lower_direct_call(
     // it a value to write through.
     let mut arg_modes = build_arg_modes(&resolve_param_types(ctx, callee.id), &arg_ops);
     let at = (arg_watermark, destination.local);
-    let call = KeptCall::of(ctx.type_checker, callee, callee.id, &func_op, args, at)?;
+    let convention = value_call_convention(ctx, callee, &func_op);
+    let named = (callee, callee.id);
+    let call = KeptCall::of(tc, named, &func_op, convention.as_deref(), args, at)?;
     let handed = hand_over_kept_arguments(ctx, &call, &mut arg_ops, &mut arg_modes)?;
 
     let arg_locals = operand_locals(&arg_ops);

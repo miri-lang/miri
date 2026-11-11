@@ -143,6 +143,7 @@ mod resource_transfers;
 mod stable_collections;
 mod unshared_writes;
 mod value_arguments;
+mod value_calls;
 mod value_representation;
 mod vtable_slots;
 
@@ -163,6 +164,7 @@ pub use resource_transfers::verify_resource_transfers;
 pub use stable_collections::verify_stable_collections;
 pub use unshared_writes::verify_unshared_writes;
 pub use value_arguments::verify_value_arguments;
+pub use value_calls::verify_value_calls;
 pub use value_representation::{verify_value_call_classes, verify_value_representation};
 pub use vtable_slots::{verify_vtable_slots, SlotViolation};
 
@@ -358,11 +360,12 @@ pub fn verify_body_with_harmless_calls(
 /// argument passed [`ArgMode::Owned`] to a parameter the callee only borrows
 /// leaks the reference the caller funded, and one lent to a parameter the
 /// callee owns is released by both. Neither side's body shows the mismatch on
-/// its own, so this is checked across the whole program. A call with no static
-/// callee, through a closure or a vtable, reaches no owned parameter — which is
-/// why a function taking a parameter over must also be lowered into one body,
-/// named nowhere but as the callee of a call, and called by no GPU body (see
-/// [`owner_violations`]).
+/// its own, so this is checked across the whole program. A call through a
+/// closure follows its value's convention instead
+/// ([`value_calls::verify_value_calls`]), and one through a vtable reaches no
+/// owned parameter — which is why a function taking a parameter over must
+/// also be lowered into one body, named nowhere but as the callee of a call,
+/// and called by no GPU body (see [`owner_violations`]).
 pub fn verify_owned_argument_modes(
     program: &[(Symbol, Body)],
     facts: &ProgramFacts,
@@ -575,6 +578,12 @@ fn argument_mode_violation(
     owned: &HashMap<&Symbol, &[bool]>,
 ) -> Option<VerificationViolation> {
     let (func, args, modes, destination) = match kind {
+        // A call through a function value follows the convention of the
+        // value's type, which `value_calls::verify_value_calls` checks.
+        TerminatorKind::Call {
+            func: Operand::Copy(_) | Operand::Move(_),
+            ..
+        } => return None,
         TerminatorKind::Call {
             func,
             args,

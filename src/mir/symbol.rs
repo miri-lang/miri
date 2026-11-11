@@ -163,6 +163,9 @@ const FUNCTION_REFERENCE_MARKER: &str = "fnref";
 /// Marks a function declared inside another body.
 const NESTED_FUNCTION_MARKER: &str = "nested";
 
+/// Marks the adapter a runtime closure slot calls a closure through.
+const SLOT_ADAPTER_MARKER: &str = "adapter";
+
 /// Marks the trampoline a runtime function calls a closure through.
 const TRAMPOLINE_MARKER: &str = "trampoline";
 
@@ -179,6 +182,10 @@ pub enum ClosureKind {
     FunctionReference(String),
     /// A function declared inside another body; carries its declared name.
     NestedFunction(String),
+    /// The adapter a runtime function calls the closure handed at argument
+    /// `position` of a call through: it lends every argument, and hands the
+    /// closure a reference of its own wherever the closure owns one.
+    SlotAdapter { position: usize },
 }
 
 /// The construct a GPU kernel is compiled from.
@@ -793,6 +800,7 @@ fn write_closure(
         ClosureKind::Lambda => LAMBDA_MARKER,
         ClosureKind::FunctionReference(_) => FUNCTION_REFERENCE_MARKER,
         ClosureKind::NestedFunction(_) => NESTED_FUNCTION_MARKER,
+        ClosureKind::SlotAdapter { .. } => SLOT_ADAPTER_MARKER,
     };
     write!(f, "{MARKER}{marker}{id}")?;
     write_arguments(f, context_args)?;
@@ -801,6 +809,7 @@ fn write_closure(
         ClosureKind::FunctionReference(name) | ClosureKind::NestedFunction(name) => {
             write!(f, "{SEGMENT_SEPARATOR}{name}")
         }
+        ClosureKind::SlotAdapter { position } => write!(f, "{SEGMENT_SEPARATOR}{position}"),
     }
 }
 

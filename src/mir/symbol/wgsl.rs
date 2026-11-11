@@ -244,6 +244,7 @@ fn write_closure_base(f: &mut fmt::Formatter<'_>, kind: &ClosureKind, id: usize)
         ClosureKind::Lambda => write!(f, "__lambda_{id}"),
         ClosureKind::FunctionReference(target) => write!(f, "__fnref_{target}_{id}"),
         ClosureKind::NestedFunction(name) => write!(f, "__nested_{name}_{id}"),
+        ClosureKind::SlotAdapter { position } => write!(f, "__adapter_{id}_{position}"),
     }
 }
 

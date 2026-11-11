@@ -98,10 +98,10 @@ fn a_parameter_the_callee_only_reads_is_not_kept() {
 }
 
 #[test]
-fn a_function_named_as_a_value_keeps_no_parameter() {
+fn a_function_named_as_a_value_keeps_its_parameter_at_direct_calls() {
     let program = format!("{MAIN}\nfn other()\n    let f = cond\n");
     let body = lowered(&program, "cond");
-    assert!(body.signature.kept_params.is_empty(), "{body}");
+    assert_eq!(body.signature.kept_params, vec![true, false], "{body}");
 }
 
 /// The call in `body` naming the function whose link name ends in `name`.
@@ -431,4 +431,129 @@ fn a_consumed_method_argument_is_handed_over_by_move() {
     assert_eq!(args[1], Operand::Move(Place::new(h)), "{body}");
     assert_eq!(modes[1], ArgMode::Owned, "{body}");
     assert_eq!(ends_by(&body, h, EndCause::Moved), 1, "{body}");
+}
+
+/// The bodies of the closures the function `name` the fixture declares
+/// builds: its lambdas, nested functions and function-value thunks.
+fn lowered_closures(program: &str, name: &str) -> (Body, Vec<Body>) {
+    let source = format!("{HANDLE}\n{program}");
+    let result = Pipeline::new()
+        .frontend(&source)
+        .expect("the fixture type checks");
+    let function = (result.ast.body.iter())
+        .find(
+            |stmt| matches!(&stmt.node, AstStatementKind::FunctionDeclaration(f) if f.name == name),
+        )
+        .expect("the fixture declares the function");
+    let lowered =
+        lower_function(function, &result.type_checker, false, false).expect("the fixture lowers");
+    let closures = lowered.lambdas.into_iter().map(|info| info.body).collect();
+    (lowered.body, closures)
+}
+
+/// The one call in `body` through a closure value, rather than a named
+/// function.
+fn closure_call(body: &Body) -> (&[Operand], &[ArgMode]) {
+    (body.basic_blocks.iter())
+        .filter_map(|block| block.terminator.as_ref())
+        .find_map(|terminator| match &terminator.kind {
+            TerminatorKind::Call {
+                func: Operand::Copy(_) | Operand::Move(_),
+                args,
+                arg_modes,
+                ..
+            } => Some((args.as_slice(), arg_modes.as_slice())),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no call through a closure in\n{body}"))
+}
+
+const VALUE_MAIN: &str = r#"
+fn main()
+    let f = cond
+    let h = Handle(1)
+    let n = f(h, true)
+    let g = peek
+    let m = g(Handle(2))
+    println(f"{n} {m}")
+"#;
+
+#[test]
+fn a_function_value_thunk_owns_every_resource_parameter() {
+    let (_, closures) = lowered_closures(VALUE_MAIN, "main");
+    assert_eq!(closures.len(), 2, "one thunk per function named as a value");
+    for thunk in &closures {
+        assert_eq!(
+            thunk.signature.kept_params.get(..2),
+            Some(&[false, true][..]),
+            "the thunk owns the handle, after its environment:\n{thunk}"
+        );
+    }
+}
+
+#[test]
+fn a_thunk_hands_its_target_exactly_what_the_target_keeps() {
+    let (_, closures) = lowered_closures(VALUE_MAIN, "main");
+    let keeper_thunk = (closures.iter())
+        .find(|body| {
+            (body.basic_blocks.iter())
+                .filter_map(|block| block.terminator.as_ref())
+                .any(|terminator| {
+                    matches!(&terminator.kind, TerminatorKind::Call { func, .. }
+                    if func.called_symbol().is_some_and(|s| s.link_name().ends_with(".cond")))
+                })
+        })
+        .expect("a thunk forwarding to `cond`");
+    let (args, modes) = call_to(keeper_thunk, ".cond");
+    assert!(matches!(args[0], Operand::Move(_)), "{keeper_thunk}");
+    assert_eq!(modes[0], ArgMode::Owned, "{keeper_thunk}");
+    assert_eq!(modes[1], ArgMode::Borrowed, "{keeper_thunk}");
+    let reader_thunk = (closures.iter())
+        .find(|body| !std::ptr::eq(*body, keeper_thunk))
+        .expect("a thunk forwarding to `peek`");
+    let (_, modes) = call_to(reader_thunk, ".peek");
+    assert_eq!(modes[0], ArgMode::Borrowed, "{reader_thunk}");
+}
+
+#[test]
+fn a_call_through_a_function_value_hands_over_each_resource_argument() {
+    let (body, _) = lowered_closures(VALUE_MAIN, "main");
+    let h = owned_local(&body, "h");
+    let (args, modes) = closure_call(&body);
+    assert_eq!(args[0], Operand::Move(Place::new(h)), "{body}");
+    assert_eq!(modes[0], ArgMode::Owned, "{body}");
+    assert_eq!(modes[1], ArgMode::Borrowed, "{body}");
+    assert_eq!(ends_by(&body, h, EndCause::Moved), 1, "{body}");
+}
+
+#[test]
+fn a_lambda_owns_every_resource_parameter_and_binds_it_on_entry() {
+    let program = r#"
+fn main()
+    let f = fn(h Handle, n int) int
+        return n
+    let m = f(Handle(1), 2)
+    println(f"{m}")
+"#;
+    let (_, closures) = lowered_closures(program, "main");
+    let [lambda] = closures.as_slice() else {
+        panic!("one lambda body");
+    };
+    assert_eq!(
+        lambda.signature.kept_params,
+        vec![false, true, false],
+        "{lambda}"
+    );
+    let h = owned_local(lambda, "h");
+    let moves_parameter = lambda.basic_blocks[0].statements.iter().any(|statement| {
+        statement.kind
+            == StatementKind::Assign(
+                Place::new(h),
+                Rvalue::Use(Operand::Move(Place::new(Local(2)))),
+            )
+    });
+    assert!(
+        moves_parameter,
+        "the entry block binds `h` by move:\n{lambda}"
+    );
 }

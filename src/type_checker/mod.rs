@@ -522,6 +522,15 @@ impl TypeChecker {
         self.kept_parameters.of_method(owner, method)
     }
 
+    /// Which argument positions a call through a function value of the type
+    /// `function` owns ([`kept_parameters::function_value_convention`]).
+    pub fn function_value_convention(&self, function: &FunctionTypeData) -> Vec<bool> {
+        kept_parameters::function_value_convention(
+            function,
+            &self.type_table.global_type_definitions,
+        )
+    }
+
     /// The module the top-level function declaration `statement_id` is
     /// written in: the module a `use` loaded it from, or the program's own
     /// file. `None` for a statement the type checker never recorded, for
@@ -579,9 +588,6 @@ impl TypeChecker {
             CalleeKind::Program => {
                 if matches!(info.ty.kind, TypeKind::Function(_)) {
                     let declared = DeclaredFunction::resolved(written, info);
-                    if self.callee_expr_id != Some(expr_id) {
-                        self.fn_analysis.function_values.insert(declared.clone());
-                    }
                     self.fn_analysis.declared_callees.insert(expr_id, declared);
                 }
             }
@@ -888,7 +894,7 @@ impl TypeChecker {
 
     /// Decides which resource parameters each of the program's own
     /// top-level functions owns ([`kept_parameters`]), from the converged
-    /// escape summaries and the functions named as values.
+    /// escape summaries.
     ///
     /// Only the program's bodies are decided: the consumption check walks
     /// those alone, and an owned parameter needs its consumption recorded to
@@ -905,7 +911,6 @@ impl TypeChecker {
             type_definitions,
             escape_summaries: &context.escape_summaries,
             modules: &self.fn_analysis.declaring_modules,
-            function_values: &self.fn_analysis.function_values,
             selectors: &selectors,
         };
         self.kept_parameters =

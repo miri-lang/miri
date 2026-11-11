@@ -23,8 +23,6 @@
 //!   convention the slot's callers use;
 //! - a constructor, a drop hook, and a method the compiler calls without a
 //!   written call: a runtime thunk's, an operator's, a loop's;
-//! - a function named as a value, called through the value with the one
-//!   convention every function of its type shares;
 //! - a generic function or method, or a method of a generic class, whose
 //!   body is shared by its instantiations, so no instance can own a
 //!   parameter the shared body leaves open;
@@ -44,13 +42,22 @@
 //! MIR lowering reads this table on both sides of every call: the callee's
 //! signature carries the owned parameters, and each direct call hands its
 //! argument over at the positions the callee owns.
+//!
+//! A call through a function value or a closure cannot see which body it
+//! reaches, so it follows the convention of the value's type instead
+//! ([`function_value_convention`]): it owns every position whose declared
+//! type hands its reference on. A lambda or nested function owns exactly
+//! those positions. A function named as a value keeps its own convention at
+//! the calls naming it, and the value reaches it through a forwarding body
+//! that owns the value's positions, hands the function what it keeps, and
+//! releases the rest once the function returns.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::implicit_methods::is_called_without_a_written_call;
 use crate::ast::statement::{FunctionDeclarationData, Statement, StatementKind};
-use crate::ast::types::TypeKind;
+use crate::ast::types::{FunctionTypeData, TypeKind};
 use crate::ast::Parameter;
 
 use super::context::{MethodInfo, TypeDefinition};
@@ -139,8 +146,6 @@ pub(crate) struct KeepFacts<'a> {
     pub escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
     /// The module declaring each top-level function, by statement id.
     pub modules: &'a HashMap<usize, ModuleId>,
-    /// The functions some expression names as a value rather than calls.
-    pub function_values: &'a HashSet<DeclaredFunction>,
     /// Every method name a vtable slot stands for
     /// ([`super::context::vtable_selectors`]).
     pub selectors: &'a BTreeSet<&'a str>,
@@ -311,7 +316,7 @@ fn owned_parameters(
     function: &DeclaredFunction,
     facts: &KeepFacts<'_>,
 ) -> Option<Vec<bool>> {
-    if !has_one_calling_convention(decl, function, facts) {
+    if !has_one_body(decl) {
         return None;
     }
     let summary = (facts.escape_summaries).get(&FunctionId::Declared(function.clone()))?;
@@ -322,16 +327,6 @@ fn owned_parameters(
         .then(|| decl.params.iter().enumerate().map(is_owned).collect())
 }
 
-/// Whether every call reaches `decl` directly, with one body for all of them:
-/// a host function with a body, no type parameters, never named as a value.
-fn has_one_calling_convention(
-    decl: &FunctionDeclarationData,
-    function: &DeclaredFunction,
-    facts: &KeepFacts<'_>,
-) -> bool {
-    has_one_body(decl) && !facts.function_values.contains(function)
-}
-
 /// Whether a value `param` declares hands its reference on when a call keeps
 /// it: not `out`, and of a type whose own drop hook its release runs.
 fn is_handed_on(param: &Parameter, type_definitions: &HashMap<String, TypeDefinition>) -> bool {
@@ -339,4 +334,23 @@ fn is_handed_on(param: &Parameter, type_definitions: &HashMap<String, TypeDefini
         return false;
     };
     !param.is_out && hands_on_a_reference(&declared.kind, type_definitions)
+}
+
+/// Which argument positions a call through a function value of the type
+/// `function` owns, in the order the call passes its arguments: each one
+/// whose declared type hands its reference on, the predicate a parameter a
+/// function keeps reads. `function` is read at the caller's substitution, so
+/// a value of a generic body's type owns what the instantiation's types hand
+/// on.
+///
+/// The one convention every call through a value, every lambda and nested
+/// function body, and every forwarding body of a function named as a value
+/// follows.
+pub fn function_value_convention(
+    function: &FunctionTypeData,
+    type_definitions: &HashMap<String, TypeDefinition>,
+) -> Vec<bool> {
+    (function.params.iter())
+        .map(|param| is_handed_on(param, type_definitions))
+        .collect()
 }

@@ -26,6 +26,7 @@ mod resource_transfers;
 mod stable_collections;
 mod unshared_writes;
 mod value_arguments;
+mod value_calls;
 mod value_representation;
 mod vtable_slots;
 

@@ -236,16 +236,18 @@ fn run()
     assert_eq!(ends_by(&body, h, EndCause::Scope), 1, "{body}");
 }
 
-/// A function named as a value lends its parameters, so a call keeping the
-/// resource releases the caller's binding where it consumes it.
+/// A generic function lends its parameters, so a call keeping the resource
+/// releases the caller's binding where it consumes it.
 #[test]
 fn a_call_lending_the_resource_it_keeps_spells_its_end_as_consumed() {
     let body = lowered(
         r#"
+fn close_any<T extends Handle>(h T) T
+    return h
+
 fn run()
-    let f = close
     let h = Handle(1)
-    close(h)
+    close_any(h)
 "#,
     );
     let h = local_named(&body, "h");

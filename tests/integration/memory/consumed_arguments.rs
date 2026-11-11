@@ -1594,12 +1594,12 @@ fn main()
     );
 }
 
-/// A function named as a value is called through the value with one calling
-/// convention for every function of its type, so it lends its parameters and
-/// the caller releases the argument after the call. Owning a parameter there
-/// needs the value's convention to carry it, which is a change of its own.
+/// A function named as a value keeps its own convention at the calls naming
+/// it: the value reaches it through a forwarding body, so a direct call
+/// still hands the handle over and its hook runs where the keeper's new
+/// owner ends.
 #[test]
-fn a_keeper_named_as_a_value_lends_and_the_caller_releases_after_the_call() {
+fn a_keeper_named_as_a_value_owns_its_parameter_at_a_direct_call() {
     assert_heap_guard_output(
         &with_handle(&format!(
             r#"{COND}
@@ -1609,7 +1609,7 @@ fn main()
     println("end")
 "#
         )),
-        "closing\nc\nafter\nclosed 1\nend",
+        "closing\nc\nclosed 1\nafter\nend",
     );
 }
 
@@ -1847,10 +1847,11 @@ fn main()
     );
 }
 
-/// A call through a function value lends: the caller releases the resource
-/// after the call returns.
+/// A call through a function value hands the resource over: the value's
+/// forwarding body hands the keeper what it keeps, so the hook runs where
+/// the keeper's new owner ends, inside the keeper.
 #[test]
-fn a_keeper_called_through_a_function_value_lends_and_the_caller_releases_after_the_call() {
+fn a_keeper_called_through_a_function_value_releases_where_its_new_owner_ends() {
     assert_heap_guard_output(
         &with_handle(
             r#"
@@ -1868,7 +1869,7 @@ fn main()
     println("back")
 "#,
         ),
-        "closing\ninside\nleaving\nclosed 1\nback",
+        "closing\ninside\nclosed 1\nleaving\nback",
     );
 }
 
@@ -1956,10 +1957,10 @@ fn main()
     );
 }
 
-/// A keeper named as a value inside a generic body is reached through the
-/// value's calling convention, so it lends everywhere.
+/// A keeper named as a value inside a generic body keeps its own convention
+/// at the calls naming it.
 #[test]
-fn a_keeper_named_as_a_value_in_a_generic_body_lends() {
+fn a_keeper_named_as_a_value_in_a_generic_body_owns_its_parameter_at_a_direct_call() {
     assert_heap_guard_output(
         &with_handle(&format!(
             r#"{COND}
@@ -1973,14 +1974,14 @@ fn main()
     println("end")
 "#
         )),
-        "closing\nc\nafter\nclosed 1\nend",
+        "closing\nc\nclosed 1\nafter\nend",
     );
 }
 
-/// A keeper named as a value inside a lambda is reached through the value's
-/// calling convention, so it lends everywhere.
+/// A keeper named as a value inside a lambda keeps its own convention at
+/// the calls naming it.
 #[test]
-fn a_keeper_named_as_a_value_in_a_lambda_lends() {
+fn a_keeper_named_as_a_value_in_a_lambda_owns_its_parameter_at_a_direct_call() {
     assert_heap_guard_output(
         &with_handle(&format!(
             r#"{COND}
@@ -1992,6 +1993,6 @@ fn main()
     println(f"end {{g()}}")
 "#
         )),
-        "closing\nc\nafter\nclosed 1\nend 0",
+        "closing\nc\nclosed 1\nafter\nend 0",
     );
 }

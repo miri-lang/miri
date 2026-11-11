@@ -91,6 +91,10 @@ fn write_written_closure(f: &mut fmt::Formatter<'_>, kind: &ClosureKind) -> fmt:
         ClosureKind::Lambda => f.write_str("a lambda expression"),
         ClosureKind::FunctionReference(target) => write!(f, "the reference to `{target}`"),
         ClosureKind::NestedFunction(name) => write!(f, "the nested function `{name}`"),
+        ClosureKind::SlotAdapter { position } => write!(
+            f,
+            "the adapter a runtime function calls the closure at argument {position} through"
+        ),
     }
 }
 

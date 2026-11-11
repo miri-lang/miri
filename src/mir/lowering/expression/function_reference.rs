@@ -35,7 +35,11 @@ use crate::mir::{
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::mir::lowering::context::LoweringContext;
+use crate::mir::lowering::kept_parameters::{
+    end_handed_over, hand_over_owned_locals, record_and_bind_value_parameters, value_convention_in,
+};
 use crate::mir::lowering::runtime_writes::{copy_forwarded_argument, RuntimeCallee};
+use crate::mir::place_type::PlaceTypes;
 
 /// The local holding a body's return value, by MIR convention.
 const RETURN_LOCAL: Local = Local(0);
@@ -132,15 +136,19 @@ fn lower_function_reference(
     let thunk_symbol =
         ctx.closure_symbol(ClosureKind::FunctionReference(symbol.link_name()), expr.id);
     let forwarded_allocator = forwarded_allocator(ctx, callee);
-    let thunk = build_forwarding_thunk(
+    let target = ForwardingTarget {
+        symbol,
+        kept: ctx.type_checker.kept_parameters_of_callee(callee.id),
+        func_data,
+    };
+    let bodies = build_forwarding_thunk(
         ctx,
         expr,
-        symbol,
+        &target,
         thunk_symbol.clone(),
-        func_data,
         forwarded_allocator.as_ref(),
     )?;
-    ctx.lambda_bodies.push(thunk);
+    ctx.lambda_bodies.extend(bodies);
 
     let target = dest.unwrap_or_else(|| Place::new(ctx.push_temp(fn_ty.clone(), expr.span)));
     let capture_operands: Vec<Operand> = forwarded_allocator
@@ -185,22 +193,115 @@ struct AllocatorCapture {
     ty: Type,
 }
 
+/// The function a thunk forwards to: its symbol, the parameters it keeps
+/// and its declared type.
+struct ForwardingTarget<'t> {
+    symbol: &'t Symbol,
+    /// Which parameters the function owns at the calls naming it, in
+    /// parameter order; empty when it owns none.
+    kept: &'t [bool],
+    func_data: &'t FunctionTypeData,
+}
+
 /// Build the thunk body: `(env_ptr, p0..pN) -> symbol(p0..pN)`.
+///
+/// The thunk is the body every call through the value reaches, so it owns
+/// what the value's calls hand over: every parameter whose declared type
+/// hands its reference on
+/// ([`crate::type_checker::kept_parameters::function_value_convention`]),
+/// each bound to a local of its own on entry. It hands its target, by
+/// `move`, exactly the parameters the target keeps at a call naming it, and
+/// the rest end where the thunk's owned locals do, once the target returns:
+/// the thunk releases what it was handed and its target did not keep.
 ///
 /// A parameter a runtime entry point writes in place is forwarded as a copy
 /// the thunk makes its own (`runtime_writes::copy_forwarded_argument`),
 /// released once the call returns, so the write never reaches the caller's
-/// value.
+/// value; a closure it hands a runtime closure slot is adapted
+/// ([`adapt_runtime_slot_closures`]).
+///
+/// Answers the thunk's body, then the body of every adapter it builds.
 fn build_forwarding_thunk(
     ctx: &LoweringContext,
     expr: &Expression,
-    symbol: &Symbol,
+    target: &ForwardingTarget<'_>,
     thunk_symbol: Symbol,
-    func_data: &FunctionTypeData,
     allocator: Option<&AllocatorCapture>,
-) -> Result<LambdaInfo, LoweringError> {
+) -> Result<Vec<LambdaInfo>, LoweringError> {
     let span = expr.span;
-    let params = &func_data.params;
+    let func_data = target.func_data;
+    let mut thunk_ctx = thunk_context(ctx, func_data, span);
+
+    let params = declare_thunk_parameters(ctx, &mut thunk_ctx, func_data);
+    let convention = value_convention_in(&thunk_ctx, func_data);
+    let named = params.names.iter().map(|name| (name.as_str(), span));
+    let (owned, owned_locals) =
+        record_and_bind_value_parameters(&mut thunk_ctx, &convention, named, span)?;
+
+    let func = Operand::function(target.symbol.clone(), span);
+    let ForwardedArguments {
+        mut args,
+        copies,
+        watermark,
+    } = forward_parameters(&mut thunk_ctx, &func, &params, &owned_locals)?;
+
+    let captures = capture_allocator(&mut thunk_ctx, allocator, span, &mut args);
+    let slot_call = SlotCall {
+        id: expr.id,
+        arg_watermark: thunk_ctx.body.local_decls.len(),
+        named_in: Some(ctx),
+    };
+    let adapters = adapt_runtime_slot_closures(&mut thunk_ctx, slot_call, &func, &mut args)?;
+    let mut arg_modes: Vec<ArgMode> = (func_data.params.iter())
+        .map(|param| ArgMode::from_out_flag(param.is_out))
+        .collect();
+    let handed = hand_over_owned_locals(
+        target.kept,
+        &owned_locals,
+        (&mut args, &mut arg_modes),
+        span,
+    )?;
+
+    let after_call = thunk_ctx.new_basic_block();
+    thunk_ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func,
+            args,
+            arg_modes,
+            arg_handles: Vec::new(),
+            flags: crate::mir::CallFlags::default(),
+            destination: Place::new(RETURN_LOCAL),
+            target: Some(after_call),
+        },
+        span,
+    ));
+    thunk_ctx.set_current_block(after_call);
+    end_handed_over(&mut thunk_ctx, &handed, span);
+    for copy in copies.into_iter().chain(adapters) {
+        thunk_ctx.emit_temp_drop(copy, watermark, span);
+    }
+    owned.close(&mut thunk_ctx, span);
+    thunk_ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
+    thunk_ctx.body.captures.closure = Some(thunk_symbol.clone());
+
+    let thunk = LambdaInfo {
+        symbol: thunk_symbol,
+        body: thunk_ctx.body,
+        requests: thunk_ctx.requests,
+        captures,
+    };
+    Ok(std::iter::once(thunk)
+        .chain(thunk_ctx.lambda_bodies)
+        .collect())
+}
+
+/// A fresh context for the thunk body of a function of type `func_data`,
+/// holding its return slot and its environment pointer.
+fn thunk_context<'a>(
+    ctx: &LoweringContext<'a>,
+    func_data: &FunctionTypeData,
+    span: crate::error::syntax::Span,
+) -> LoweringContext<'a> {
     // The thunk's types are the referenced function's declared ones, in the
     // canonical spelling its body is compiled at: `Option<int>` is `int?`.
     let ret_ty = match &func_data.return_type {
@@ -208,7 +309,7 @@ fn build_forwarding_thunk(
         None => Type::new(TypeKind::Void, span),
     };
 
-    let mut body = Body::new(1 + params.len(), span, ExecutionModel::Cpu);
+    let mut body = Body::new(1 + func_data.params.len(), span, ExecutionModel::Cpu);
     body.new_local(LocalDecl::new(ret_ty, span));
 
     let mut thunk_ctx = LoweringContext::new(body, ctx.type_checker, ctx.is_release);
@@ -223,45 +324,7 @@ fn build_forwarding_thunk(
         Type::new(TypeKind::RawPtr, span),
         span,
     );
-
-    let func = Operand::function(symbol.clone(), span);
-    let ForwardedArguments {
-        mut args,
-        copies,
-        watermark,
-    } = forward_parameters(ctx, &mut thunk_ctx, &func, params)?;
-
-    let captures = capture_allocator(&mut thunk_ctx, allocator, span, &mut args);
-
-    let after_call = thunk_ctx.new_basic_block();
-    thunk_ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func,
-            args,
-            arg_modes: params
-                .iter()
-                .map(|param| ArgMode::from_out_flag(param.is_out))
-                .collect(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(RETURN_LOCAL),
-            target: Some(after_call),
-        },
-        span,
-    ));
-    thunk_ctx.set_current_block(after_call);
-    for copy in copies {
-        thunk_ctx.emit_temp_drop(copy, watermark, span);
-    }
-    thunk_ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
-    thunk_ctx.body.captures.closure = Some(thunk_symbol.clone());
-
-    Ok(LambdaInfo {
-        symbol: thunk_symbol,
-        body: thunk_ctx.body,
-        requests: thunk_ctx.requests,
-        captures,
-    })
+    thunk_ctx
 }
 
 /// Declare the captured allocator inside the thunk and append it to the
@@ -296,6 +359,35 @@ fn thunk_param_name(param: &Parameter, index: usize) -> String {
     }
 }
 
+/// The parameters a thunk declares, one per parameter of the function type
+/// it is built for: each one's name, type and local.
+struct ThunkParameters {
+    names: Vec<String>,
+    tys: Vec<Type>,
+    locals: Vec<Local>,
+}
+
+/// Declares the parameters of a thunk built for a function of type
+/// `func_data`, after its environment, at the types the enclosing body reads
+/// them at. Everything is spanned at the thunk body.
+fn declare_thunk_parameters(
+    ctx: &LoweringContext,
+    thunk_ctx: &mut LoweringContext,
+    func_data: &FunctionTypeData,
+) -> ThunkParameters {
+    let span = thunk_ctx.body.span;
+    let tys: Vec<Type> = (func_data.params.iter())
+        .map(|param| ctx.declared_type(&param.typ))
+        .collect();
+    let names: Vec<String> = (func_data.params.iter().enumerate())
+        .map(|(index, param)| thunk_param_name(param, index))
+        .collect();
+    let locals = (names.iter().zip(&tys))
+        .map(|(name, ty)| thunk_ctx.push_param(name.clone(), ty.clone(), span))
+        .collect();
+    ThunkParameters { names, tys, locals }
+}
+
 /// The arguments a thunk hands the function it forwards to, with the copies
 /// it bound for them and the local count from before the first copy.
 struct ForwardedArguments {
@@ -304,40 +396,237 @@ struct ForwardedArguments {
     watermark: usize,
 }
 
-/// Declares the thunk's parameters, one per parameter of `func`, and the
-/// arguments it forwards them as: each as it is, or a copy of its own where
-/// `func` is a runtime entry point writing it in place. Everything is
-/// spanned at the thunk body, the reference it is built for.
+/// The arguments a thunk forwards its parameters, `params`, to `func` as:
+/// the local each owned one was bound to, `owned_locals`, or the parameter,
+/// each as it is, or a copy of its own where `func` is a runtime entry point
+/// writing it in place.
 fn forward_parameters(
-    ctx: &LoweringContext,
     thunk_ctx: &mut LoweringContext,
     func: &Operand,
-    params: &[Parameter],
+    params: &ThunkParameters,
+    owned_locals: &[Option<Local>],
 ) -> Result<ForwardedArguments, LoweringError> {
     let span = thunk_ctx.body.span;
-    let param_tys: Vec<Type> = params
-        .iter()
-        .map(|param| ctx.declared_type(&param.typ))
-        .collect();
-    let locals: Vec<Local> = params
-        .iter()
-        .zip(&param_tys)
-        .enumerate()
-        .map(|(index, (param, ty))| {
-            thunk_ctx.push_param(thunk_param_name(param, index), ty.clone(), span)
-        })
-        .collect();
-    let callee = RuntimeCallee::of(func, &param_tys);
-    let watermark = thunk_ctx.body.local_decls.len();
+    let callee = RuntimeCallee::of(func, &params.tys);
     let mut forwarded = ForwardedArguments {
-        args: Vec::with_capacity(params.len()),
+        args: Vec::with_capacity(params.locals.len()),
         copies: Vec::new(),
-        watermark,
+        watermark: thunk_ctx.body.local_decls.len(),
     };
-    for (position, &local) in locals.iter().enumerate() {
+    let sources =
+        (params.locals.iter().zip(owned_locals)).map(|(&param, owned)| owned.unwrap_or(param));
+    for (position, local) in sources.enumerate() {
         let (arg, copy) = copy_forwarded_argument(thunk_ctx, callee, position, local, span)?;
         forwarded.args.push(arg);
         forwarded.copies.extend(copy);
     }
     Ok(forwarded)
+}
+
+/// Wraps each closure `args` hands a runtime function in an adapter, when
+/// the closure owns a parameter: the runtime calls a closure lending every
+/// argument (`@closure`), while a closure owns each one its type hands a
+/// reference on at ([`value_convention_in`]). The adapter lends its
+/// parameters and calls the closure through the value's convention, handing
+/// each owned position a copy funded with a reference of its own, so the
+/// closure releases what it was handed and the runtime's elements keep
+/// theirs. Answers the temporaries holding the adapters, each of which the
+/// caller releases once the call returns.
+///
+/// Every call reaching a runtime function is lowered through here once its
+/// operands are final, and nowhere else: a direct call
+/// (`dispatch::lower_direct_call`), a call through a module alias
+/// (`dispatch::lower_aliased_function_call`) and the forwarding thunk of a
+/// runtime function named as a value ([`build_forwarding_thunk`]). The
+/// terminator setter cannot own this: it has no call to name an adapter
+/// after, no block to release it in, and no way to report a failure.
+///
+/// The adapter for argument `position` is named after the call, `call.id`,
+/// in the context the call is lowered at, `call.named_in`, or `ctx` itself;
+/// a closure it replaces that the call alone holds, past
+/// `call.arg_watermark`, is released once the adapter holds it.
+pub(crate) fn adapt_runtime_slot_closures(
+    ctx: &mut LoweringContext,
+    call: SlotCall<'_, '_>,
+    func: &Operand,
+    args: &mut [Operand],
+) -> Result<Vec<Local>, LoweringError> {
+    let takes_a_closure =
+        (func.called_runtime_effect()).is_some_and(|effect| !effect.closure_positions().is_empty());
+    if !takes_a_closure || ctx.body.is_gpu() {
+        return Ok(Vec::new());
+    }
+    let named_in = call.named_in.unwrap_or(ctx);
+    let symbols: Vec<Symbol> = (0..args.len())
+        .map(|position| named_in.closure_symbol(ClosureKind::SlotAdapter { position }, call.id))
+        .collect();
+    let mut adapters = Vec::new();
+    for (arg, symbol) in args.iter_mut().zip(symbols) {
+        let Some((closure, function_ty, convention)) = owning_closure(ctx, arg) else {
+            continue;
+        };
+        let adapter = SlotAdapter {
+            symbol,
+            closure,
+            function_ty,
+            convention,
+        };
+        let local = adapter.lower(ctx, call.arg_watermark)?;
+        *arg = Operand::Copy(Place::new(local));
+        adapters.push(local);
+    }
+    Ok(adapters)
+}
+
+/// The call [`adapt_runtime_slot_closures`] adapts the closures of.
+pub(crate) struct SlotCall<'n, 'a> {
+    /// The AST node of the call, or of the reference a thunk forwards.
+    pub id: usize,
+    /// The first local the call's own argument temporaries live in.
+    pub arg_watermark: usize,
+    /// The context the call is lowered at, when it is not the one its
+    /// statements are written into: a forwarding thunk's call is named at
+    /// the instantiation its reference is lowered at.
+    pub named_in: Option<&'n LoweringContext<'a>>,
+}
+
+impl SlotCall<'_, '_> {
+    /// The call `id`, its argument temporaries from `arg_watermark` on,
+    /// named in the context its statements are written into.
+    pub(crate) fn at(id: usize, arg_watermark: usize) -> Self {
+        Self {
+            id,
+            arg_watermark,
+            named_in: None,
+        }
+    }
+}
+
+/// The closure `arg` carries, as a local, with its function type and the
+/// positions its convention owns, when it owns any.
+fn owning_closure(ctx: &mut LoweringContext, arg: &Operand) -> Option<(Local, Type, Vec<bool>)> {
+    let (Operand::Copy(place) | Operand::Move(place)) = arg else {
+        return None;
+    };
+    let ty = PlaceTypes::of(&ctx.body).declared(place)?;
+    let TypeKind::Function(function) = &ty.kind else {
+        return None;
+    };
+    let convention = value_convention_in(ctx, function);
+    if !convention.contains(&true) {
+        return None;
+    }
+    let local = if place.projection.is_empty() {
+        place.local
+    } else {
+        let copy = ctx.push_temp(ty.clone(), ctx.body.span);
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                Place::new(copy),
+                Rvalue::Use(Operand::Copy(place.clone())),
+            ),
+            span: ctx.body.span,
+        });
+        copy
+    };
+    Some((local, ty, convention))
+}
+
+/// The adapter a runtime closure slot calls in place of a closure owning a
+/// parameter.
+struct SlotAdapter {
+    symbol: Symbol,
+    /// The local holding the closure the adapter calls, which it captures.
+    closure: Local,
+    function_ty: Type,
+    /// The positions the closure owns.
+    convention: Vec<bool>,
+}
+
+/// The name the adapter's body captures the closure it calls under.
+const ADAPTED_CLOSURE: &str = "__adapted_closure";
+
+impl SlotAdapter {
+    /// Registers the adapter's body and builds the closure value over it,
+    /// capturing the adapted closure, then releases the temporary the
+    /// adapted closure was read into, past `arg_watermark`: the adapter
+    /// holds a reference of its own.
+    fn lower(
+        self,
+        ctx: &mut LoweringContext,
+        arg_watermark: usize,
+    ) -> Result<Local, LoweringError> {
+        let span = ctx.body.span;
+        let body = self.body(ctx)?;
+        ctx.lambda_bodies.push(body);
+        let target = Place::new(ctx.push_temp(self.function_ty.clone(), span));
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                target.clone(),
+                Rvalue::Aggregate(
+                    AggregateKind::Closure(self.symbol, self.function_ty),
+                    vec![Operand::Copy(Place::new(self.closure))],
+                ),
+            ),
+            span,
+        });
+        ctx.emit_temp_drop(self.closure, arg_watermark, span);
+        Ok(target.local)
+    }
+
+    /// The adapter's body: `(env_ptr, p0..pN) -> closure(p0..pN)`, lending
+    /// every parameter and passing each position the closure owns
+    /// [`ArgMode::Owned`] by copy, which reference counting funds.
+    fn body(&self, ctx: &LoweringContext) -> Result<LambdaInfo, LoweringError> {
+        let span = ctx.body.span;
+        let TypeKind::Function(function) = &self.function_ty.kind else {
+            return Err(LoweringError::internal(
+                DiagnosticCode::MirValidationFailed,
+                "a runtime closure slot is adapted for a value of no function type",
+                span,
+            ));
+        };
+        let mut adapter_ctx = thunk_context(ctx, function, span);
+        let params = declare_thunk_parameters(ctx, &mut adapter_ctx, function);
+        let captured =
+            adapter_ctx.push_param(ADAPTED_CLOSURE.to_string(), self.function_ty.clone(), span);
+        adapter_ctx.body.captures.env_capture_locals.push(captured);
+        let arg_modes = (function.params.iter().zip(&self.convention))
+            .map(|(param, &is_owned)| {
+                if is_owned {
+                    ArgMode::Owned
+                } else {
+                    ArgMode::from_out_flag(param.is_out)
+                }
+            })
+            .collect();
+        let after_call = adapter_ctx.new_basic_block();
+        adapter_ctx.set_terminator(Terminator::new(
+            TerminatorKind::Call {
+                func: Operand::Copy(Place::new(captured)),
+                args: (params.locals.iter())
+                    .map(|&local| Operand::Copy(Place::new(local)))
+                    .collect(),
+                arg_modes,
+                arg_handles: Vec::new(),
+                flags: crate::mir::CallFlags::default(),
+                destination: Place::new(RETURN_LOCAL),
+                target: Some(after_call),
+            },
+            span,
+        ));
+        adapter_ctx.set_current_block(after_call);
+        adapter_ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
+        adapter_ctx.body.captures.closure = Some(self.symbol.clone());
+        Ok(LambdaInfo {
+            symbol: self.symbol.clone(),
+            body: adapter_ctx.body,
+            requests: adapter_ctx.requests,
+            captures: vec![CapturedVar {
+                name: ADAPTED_CLOSURE.into(),
+                lambda_local: captured,
+                outer_local: self.closure,
+            }],
+        })
+    }
 }

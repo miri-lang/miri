@@ -15,6 +15,13 @@
 //! consuming end, a drop flag, the release where its scope ends and the
 //! reverse order of declaration apply to it as to any local.
 //!
+//! A call through a function value or a closure follows the convention of
+//! the value's type ([`value_call_convention`]); every body a value reaches
+//! — a lambda, a nested function, the forwarding thunk of a function named
+//! as a value — owns exactly those positions
+//! ([`record_and_bind_value_parameters`]), and a thunk hands its target what
+//! the target keeps ([`hand_over_owned_locals`]).
+//!
 //! Each direct call passes the argument at an owned position
 //! [`ArgMode::Owned`]. A binding the call consumes, and a temporary the call
 //! alone releases, are handed over by `move`, and their end after the call
@@ -25,7 +32,7 @@
 use crate::ast::common::Parameter;
 use crate::ast::expression::Expression;
 use crate::ast::statement::RECEIVER_PARAM_NAME;
-use crate::ast::types::TypeKind;
+use crate::ast::types::{FunctionTypeData, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -100,18 +107,77 @@ pub(crate) fn record_and_bind_kept_parameters(
     if !kept.contains(&true) {
         return Ok(KeptParameterBindings { is_scoped: false });
     }
-    if ctx.body.is_gpu() || kept.len() != params.len() {
-        let message = "a GPU body, or a parameter list the owned parameters do not match, \
-                       owns a parameter";
+    if kept.len() != params.len() {
+        return Err(mismatched_owned_parameters(span));
+    }
+    let owned = (params.names().zip(kept)).map(|((name, span), &is_kept)| (name, span, is_kept));
+    let (bindings, _) = bind_owned_parameters(ctx, kept.to_vec(), owned, span)?;
+    Ok(bindings)
+}
+
+/// Records on the signature of a body reached only through a function
+/// value — a lambda, a nested function, the forwarding body of a function
+/// named as a value — the parameters it owns, `convention` in the order
+/// the value's calls pass their arguments
+/// ([`crate::type_checker::kept_parameters::function_value_convention`]),
+/// and binds each one at the body's entry to a local of its own. The body's
+/// first parameter is its environment, which it never owns.
+///
+/// Returns, for each of `params`, the local an owned one was bound to.
+pub(crate) fn record_and_bind_value_parameters<'p>(
+    ctx: &mut LoweringContext,
+    convention: &[bool],
+    params: impl ExactSizeIterator<Item = (&'p str, Span)>,
+    span: Span,
+) -> Result<(KeptParameterBindings, Vec<Option<Local>>), LoweringError> {
+    if params.len() != convention.len() {
+        return Err(mismatched_owned_parameters(span));
+    }
+    let kept_params = std::iter::once(false)
+        .chain(convention.iter().copied())
+        .collect();
+    let owned = (params.zip(convention)).map(|((name, span), &is_kept)| (name, span, is_kept));
+    bind_owned_parameters(ctx, kept_params, owned, span)
+}
+
+fn mismatched_owned_parameters(span: Span) -> LoweringError {
+    LoweringError::internal(
+        DiagnosticCode::MirValidationFailed,
+        "a parameter list the owned parameters do not match owns a parameter",
+        span,
+    )
+}
+
+/// Records `kept_params` on the body's signature and binds each parameter
+/// of `params` marked owned to a local of its own, returning for each one
+/// the local it was bound to. Nothing is recorded or bound when no
+/// parameter is owned.
+fn bind_owned_parameters<'p>(
+    ctx: &mut LoweringContext,
+    kept_params: Vec<bool>,
+    params: impl Iterator<Item = (&'p str, Span, bool)>,
+    span: Span,
+) -> Result<(KeptParameterBindings, Vec<Option<Local>>), LoweringError> {
+    if !kept_params.contains(&true) {
+        let unbound = params.map(|_| None).collect();
+        return Ok((KeptParameterBindings { is_scoped: false }, unbound));
+    }
+    if ctx.body.is_gpu() {
+        let message = "a GPU body owns a parameter";
         return Err(LoweringError::internal(
             DiagnosticCode::MirValidationFailed,
             message,
             span,
         ));
     }
-    ctx.body.signature.kept_params = kept.to_vec();
+    ctx.body.signature.kept_params = kept_params;
     ctx.push_scope();
-    for ((name, span), _) in params.names().zip(kept).filter(|(_, is_kept)| **is_kept) {
+    let mut bound = Vec::new();
+    for (name, span, is_kept) in params {
+        if !is_kept {
+            bound.push(None);
+            continue;
+        }
         let Some(&local) = ctx.variable_map.get(name) else {
             let message = format!("the owned parameter `{name}` has no binding");
             return Err(LoweringError::internal(
@@ -120,9 +186,9 @@ pub(crate) fn record_and_bind_kept_parameters(
                 span,
             ));
         };
-        bind_owned_parameter(ctx, name, local, span);
+        bound.push(Some(bind_owned_parameter(ctx, name, local, span)));
     }
-    Ok(KeptParameterBindings { is_scoped: true })
+    Ok((KeptParameterBindings { is_scoped: true }, bound))
 }
 
 /// Binds the parameter `name` to a new local the parameter `local` moves
@@ -131,7 +197,7 @@ pub(crate) fn record_and_bind_kept_parameters(
 /// The local is numbered past `arg_count`, so it is the binding a consuming
 /// site ends (`variable::end_consumed_binding`) and a drop hook call releases
 /// (`drop_hook_call::release_owned_local`), as a `let` would be.
-fn bind_owned_parameter(ctx: &mut LoweringContext, name: &str, local: Local, span: Span) {
+fn bind_owned_parameter(ctx: &mut LoweringContext, name: &str, local: Local, span: Span) -> Local {
     let ty = ctx.body.local_decls[local.0].ty.clone();
     let owned = ctx.push_local(name.to_string(), ty, span);
     ctx.push_statement(MirStatement {
@@ -141,6 +207,7 @@ fn bind_owned_parameter(ctx: &mut LoweringContext, name: &str, local: Local, spa
         ),
         span,
     });
+    owned
 }
 
 /// A direct call, with the parameters its callee owns.
@@ -162,21 +229,32 @@ pub(crate) struct KeptCall<'a> {
 }
 
 impl<'a> KeptCall<'a> {
-    /// The direct call to `func`, named by `callee`, whose declared type is
-    /// the type checker's for the expression `signature_id`. A call through
-    /// a value reaches no owner: only a call naming the function by its
-    /// symbol passes an argument owned.
+    /// The call to `func`, named by `callee`, whose declared type is the type
+    /// checker's for the expression `signature_id`. A call naming its
+    /// function owns the parameters that function keeps; a call through a
+    /// value owns what the value's convention, `value_convention`, marks
+    /// ([`value_call_convention`]).
     ///
     /// Refused when the owned parameters do not match the parameters the
     /// callee declares, which would hand over the wrong argument.
     pub(crate) fn of(
         tc: &'a TypeChecker,
-        callee: &'a Expression,
-        signature_id: usize,
+        (callee, signature_id): (&'a Expression, usize),
         func: &Operand,
+        value_convention: Option<&'a [bool]>,
         args: &'a [Expression],
         (arg_watermark, destination): (usize, Local),
     ) -> Result<Self, LoweringError> {
+        if let Some(kept) = value_convention {
+            return Ok(KeptCall {
+                span: callee.span,
+                receiver: None,
+                kept,
+                args,
+                arg_watermark,
+                destination,
+            });
+        }
         let kept = match func {
             Operand::Function(_) => tc.kept_parameters_of_callee(callee.id),
             Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => &[],
@@ -237,6 +315,41 @@ impl<'a> KeptCall<'a> {
     }
 }
 
+/// The positions a call through the value `callee` evaluates to, `func`,
+/// owns ([`value_convention_in`]), read at the substitution being lowered,
+/// so every instantiation of a generic body agrees with the bodies its
+/// values reach; empty when the type checker recorded no function type for
+/// `callee`. `None` for a call naming its function, which follows that
+/// function's own convention.
+pub(crate) fn value_call_convention(
+    ctx: &LoweringContext,
+    callee: &Expression,
+    func: &Operand,
+) -> Option<Vec<bool>> {
+    match func {
+        Operand::Copy(_) | Operand::Move(_) => {}
+        Operand::Function(_) | Operand::Constant(_) => return None,
+    }
+    let Some(ty) = ctx.recorded_type(callee.id) else {
+        return Some(Vec::new());
+    };
+    let TypeKind::Function(function) = &ty.kind else {
+        return Some(Vec::new());
+    };
+    Some(value_convention_in(ctx, function))
+}
+
+/// The positions every call through a value of type `function` owns in the
+/// body being lowered
+/// ([`crate::type_checker::kept_parameters::function_value_convention`]); in
+/// a GPU body none, since device code holds no counts.
+pub(crate) fn value_convention_in(ctx: &LoweringContext, function: &FunctionTypeData) -> Vec<bool> {
+    if ctx.body.is_gpu() {
+        return vec![false; function.params.len()];
+    }
+    ctx.type_checker.function_value_convention(function)
+}
+
 /// The bindings and temporaries a call took over, which it ends after it
 /// returns ([`end_handed_over`]).
 #[derive(Default)]
@@ -273,14 +386,6 @@ pub(crate) fn hand_over_kept_arguments(
     if !call.kept.contains(&true) {
         return Ok(handed);
     }
-    if arg_ops.len() < call.kept.len() {
-        let message = "a call passes fewer arguments than its callee owns parameters";
-        return Err(LoweringError::internal(
-            DiagnosticCode::MirValidationFailed,
-            message,
-            call.span,
-        ));
-    }
     if arg_modes.len() < arg_ops.len() {
         arg_modes.resize(arg_ops.len(), ArgMode::Borrowed);
     }
@@ -288,38 +393,97 @@ pub(crate) fn hand_over_kept_arguments(
     for &(argument, _) in &consumed {
         ctx.consumed_reads.insert(argument, ConsumedRead::Ended);
     }
-    let owned_positions = (call.kept.iter().enumerate()).filter(|(_, is_kept)| **is_kept);
-    for (position, _) in owned_positions {
-        arg_modes[position] = ArgMode::Owned;
-        // TODO: a field read, an element read or an `out` parameter handed
-        // to a keeper is copied and funded with a retain, so the value has
-        // two holders until the call's new owner ends: reading a resource
-        // out of a field is not yet a borrow that cannot be stored, and an
-        // `out` parameter handed to a keeper is not yet refused.
-        let Some(local) = whole_local_copied(&arg_ops[position]) else {
-            continue;
-        };
-        let is_consumed_binding =
-            consumed.iter().any(|&(_, read)| read == local) && variable::is_own_binding(ctx, local);
-        if !is_consumed_binding && !is_call_temporary(ctx, call, local) {
-            continue;
-        }
-        if handed.moved.contains(&local) {
-            let message = "a call hands the same local over at two owned positions";
-            return Err(LoweringError::internal(
-                DiagnosticCode::MirValidationFailed,
-                message,
-                call.span,
-            ));
-        }
-        arg_ops[position] = Operand::Move(Place::new(local));
-        handed.moved.push(local);
-    }
+    let taken = |_, arg: &Operand| Ok(handed_over_local(ctx, call, &consumed, arg));
+    handed.moved = pass_owned(call.kept, (arg_ops, arg_modes), call.span, taken)?;
     handed.consumed = (consumed.into_iter())
         .map(|(_, local)| local)
         .filter(|local| !handed.moved.contains(local))
         .collect();
     Ok(handed)
+}
+
+/// The local a call hands over by `move` at an owned position whose argument
+/// is `arg`: a binding of the caller's the call consumes, a temporary only
+/// the call releases, or, inside an instantiation, a funded copy of a
+/// binding the type checker saw as a value of an open type parameter, which
+/// it lends; `None` when the argument is copied and funded where it stands.
+fn handed_over_local(
+    ctx: &mut LoweringContext,
+    call: &KeptCall<'_>,
+    consumed: &[(usize, Local)],
+    arg: &Operand,
+) -> Option<Local> {
+    // TODO: a field read, an element read or an `out` parameter handed to a
+    // keeper is copied and funded with a retain, so the value has two
+    // holders until the call's new owner ends: reading a resource out of a
+    // field is not yet a borrow that cannot be stored, and an `out`
+    // parameter handed to a keeper is not yet refused.
+    let local = whole_local_copied(arg)?;
+    let is_own_binding = variable::is_own_binding(ctx, local);
+    let is_consumed = consumed.iter().any(|&(_, read)| read == local);
+    if (is_consumed && is_own_binding) || is_call_temporary(ctx, call, local) {
+        return Some(local);
+    }
+    (is_own_binding && is_lowering_an_instantiation(ctx))
+        .then(|| funded_copy(ctx, local, call.span))
+}
+
+/// Whether the body being lowered is an instantiation of a generic body,
+/// whose consumption the type checker decided at the open type parameters:
+/// a value of one is lent there, so a binding the instantiation's types make
+/// a resource is never consumed, and may be read again after the call.
+fn is_lowering_an_instantiation(ctx: &LoweringContext) -> bool {
+    !ctx.generic_subs.is_empty()
+}
+
+/// A temporary holding a copy of `local`, which reference counting funds
+/// with a retain: the reference a call hands over when the caller keeps its
+/// own binding.
+fn funded_copy(ctx: &mut LoweringContext, local: Local, span: Span) -> Local {
+    let ty = ctx.body.local_decls[local.0].ty.clone();
+    let copy = ctx.push_temp(ty, span);
+    ctx.push_statement(MirStatement {
+        kind: MirStatementKind::Assign(
+            Place::new(copy),
+            Rvalue::Use(Operand::Copy(Place::new(local))),
+        ),
+        span,
+    });
+    copy
+}
+
+/// Marks each argument at a position `kept` marks [`ArgMode::Owned`], and
+/// hands over by `move` each one `take` answers a local for, returning the
+/// locals handed over. Refused when the call passes fewer arguments than the
+/// positions `kept` lists, or hands one local over twice.
+fn pass_owned(
+    kept: &[bool],
+    (arg_ops, arg_modes): (&mut [Operand], &mut [ArgMode]),
+    span: Span,
+    mut take: impl FnMut(usize, &Operand) -> Result<Option<Local>, LoweringError>,
+) -> Result<Vec<Local>, LoweringError> {
+    if arg_ops.len() < kept.len() || arg_modes.len() < kept.len() {
+        let message = "a call passes fewer arguments than its callee owns parameters";
+        return Err(internal_error(message, span));
+    }
+    let mut moved = Vec::new();
+    for (position, _) in (kept.iter().enumerate()).filter(|(_, is_kept)| **is_kept) {
+        arg_modes[position] = ArgMode::Owned;
+        let Some(local) = take(position, &arg_ops[position])? else {
+            continue;
+        };
+        if moved.contains(&local) {
+            let message = "a call hands the same local over at two owned positions";
+            return Err(internal_error(message, span));
+        }
+        arg_ops[position] = Operand::Move(Place::new(local));
+        moved.push(local);
+    }
+    Ok(moved)
+}
+
+fn internal_error(message: &str, span: Span) -> LoweringError {
+    LoweringError::internal(DiagnosticCode::MirValidationFailed, message, span)
 }
 
 /// The local `operand` copies whole, if it copies one.
@@ -328,6 +492,35 @@ fn whole_local_copied(operand: &Operand) -> Option<Local> {
         Operand::Copy(place) if place.projection.is_empty() => Some(place.local),
         Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => None,
     }
+}
+
+/// Passes each argument at a position the forwarding body's target keeps,
+/// `kept`, [`ArgMode::Owned`], by `move` of the local the body bound that
+/// parameter to, `owned`, which the body gives up to the target. Returns
+/// what the call took over, which [`end_handed_over`] ends after it; every
+/// owned local the target does not take ends where the body's owned locals
+/// do, releasing what the body was handed and its target did not keep.
+///
+/// Refused when the target keeps a parameter the body does not own: the
+/// value's convention owns every position a function keeps.
+pub(crate) fn hand_over_owned_locals(
+    kept: &[bool],
+    owned: &[Option<Local>],
+    (arg_ops, arg_modes): (&mut [Operand], &mut [ArgMode]),
+    span: Span,
+) -> Result<HandedOver, LoweringError> {
+    let taken = |position: usize, arg: &Operand| {
+        let Some(&Some(local)) = owned.get(position) else {
+            let message = "a forwarding body hands its target a parameter it does not own";
+            return Err(internal_error(message, span));
+        };
+        Ok((whole_local_copied(arg) == Some(local)).then_some(local))
+    };
+    let moved = pass_owned(kept, (arg_ops, arg_modes), span, taken)?;
+    Ok(HandedOver {
+        moved,
+        consumed: Vec::new(),
+    })
 }
 
 /// Whether `local` is a counted temporary lowering the call's arguments made
