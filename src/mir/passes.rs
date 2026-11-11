@@ -401,7 +401,11 @@ pub type BodyRun = fn(&mut Body, &mut BodyFacts);
 pub type FallibleBodyRun = fn(&mut Body, &mut BodyFacts) -> Result<(), String>;
 
 /// A whole-program pass's work.
-pub type ProgramRun = fn(&mut [(Symbol, Body)], &mut ProgramFacts, &mut PassContext<'_>);
+///
+/// It fails with the reason when it finds the program breaks an invariant
+/// the passes before it promise, a fault of the compiler.
+pub type ProgramRun =
+    fn(&mut [(Symbol, Body)], &mut ProgramFacts, &mut PassContext<'_>) -> Result<(), String>;
 
 /// What a program pass reads beyond the bodies, and what it reports.
 pub struct PassContext<'a> {
@@ -596,6 +600,10 @@ impl<'s> PassManager<'s> {
                 Run::Program(run) => {
                     run_program_pass_with_facts(step.pass, bodies, facts, |bodies, facts| {
                         run(bodies, facts, context)
+                    })?
+                    .map_err(|reason| PassContract::Failed {
+                        pass: step.pass.name,
+                        reason,
                     })?;
                 }
             }
@@ -628,11 +636,13 @@ pub const MIR_PASSES: &[Step] = &[
         crate::mir::value_arguments::copy_value_arguments(body)
     }),
     Step::program(&CONFORM_OPTIONAL_OPERANDS, |bodies, _, _| {
-        crate::mir::optional_conformance::conform_optional_operands(bodies)
+        crate::mir::optional_conformance::conform_optional_operands(bodies);
+        Ok(())
     }),
     Step::program(&DECIDE_OWNED_PARAMETERS, decide_owned_parameters),
     Step::program(&STAMP_QUIET_CALLS, |bodies, facts, context| {
-        crate::mir::analysis::heap_effects::stamp_quiet_calls(bodies, facts, &context.hooks)
+        crate::mir::analysis::heap_effects::stamp_quiet_calls(bodies, facts, &context.hooks);
+        Ok(())
     }),
     Step::fallible_body(&INSERT_RC, |body, facts| {
         crate::mir::optimization::insert_rc(body, facts.ownership_mut())
@@ -658,29 +668,33 @@ pub const MIR_PASSES: &[Step] = &[
     }),
 ];
 
-/// Decides which parameters each function takes over, then, while
-/// verifying, checks every call against the decision and the layouts its
+/// Refuses a program reaching a function that keeps a parameter other than
+/// by a direct call, decides which parameters each function takes over,
+/// then, while verifying, checks every call against the decision and the layouts its
 /// arguments cross bodies in.
 fn decide_owned_parameters(
     bodies: &mut [(Symbol, Body)],
     facts: &mut ProgramFacts,
     context: &mut PassContext<'_>,
-) {
+) -> Result<(), String> {
+    use crate::mir::optimization::owned_params;
     use crate::mir::verify;
     let synthesized = &context.synthesized;
-    crate::mir::optimization::owned_params::decide_owned_parameters(
-        bodies,
-        facts,
-        synthesized,
-        &context.hooks,
-    );
+    owned_params::refuse_indirectly_reached_keepers(bodies, synthesized)?;
+    owned_params::decide_owned_parameters(bodies, facts, synthesized, &context.hooks);
     if !context.verifying {
-        return;
+        return Ok(());
     }
     let definitions = context.definitions;
     let violations = &mut context.violations;
     violations.extend(verify::verify_owned_argument_modes(bodies, facts));
+    violations.extend(verify::verify_owners_are_called_directly(
+        bodies,
+        facts,
+        &context.synthesized,
+    ));
     violations.extend(verify::verify_optional_call_layouts(bodies, definitions));
     violations.extend(verify::verify_value_call_classes(bodies, definitions));
     violations.extend(verify::verify_optional_slots(bodies, Symbol::link_name));
+    Ok(())
 }

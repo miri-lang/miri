@@ -304,8 +304,10 @@ fn start_optional_absent(ctx: &mut LoweringContext, local: crate::mir::Local, sp
 /// would run only when `a`'s scope ends. Ending `a` here releases its reference
 /// right after the copy; drop elaboration (`mir::drop_elaboration`) then
 /// removes, or guards by a drop flag, the end of `a` its scope exit would
-/// otherwise reach a second time. A call that keeps `a` consumes it the same
-/// way, its callee holding a reference of its own.
+/// otherwise reach a second time. A call that keeps `a` but lends it consumes
+/// it the same way, its callee holding a reference of its own; a callee that
+/// owns the parameter takes `a`'s own reference by `move` instead
+/// (`lowering::kept_parameters`).
 pub(crate) fn release_consumed_binding(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -317,9 +319,59 @@ pub(crate) fn release_consumed_binding(
     Ok(())
 }
 
+/// What became of a read the type checker records as consumed, by the id of
+/// the expression consuming it ([`LoweringContext::consumed_reads`]).
+pub(crate) enum ConsumedRead {
+    /// The binding read, which the site consuming it has yet to end.
+    Pending(crate::mir::Local),
+    /// The call consuming it ended the binding where it handed it over
+    /// (`lowering::kept_parameters`), so no later site ends it again.
+    Ended,
+}
+
+/// The bindings a call's arguments consume, the receiver of a method call
+/// among them, each once, with the id of the first argument naming it. Each
+/// read is taken: the caller ends every binding returned.
+pub(crate) fn consumed_argument_locals(
+    ctx: &mut LoweringContext,
+    func: &Expression,
+    args: &[Expression],
+) -> Result<Vec<(usize, crate::mir::Local)>, LoweringError> {
+    let receiver = if let ExpressionKind::Member(receiver, _) = &func.node {
+        Some(receiver.as_ref())
+    } else {
+        None
+    };
+    let mut consumed: Vec<(usize, crate::mir::Local)> = Vec::new();
+    for argument in receiver.into_iter().chain(args.iter().map(argument_value)) {
+        let Some(local) = consumed_read(ctx, argument)? else {
+            continue;
+        };
+        if !consumed.iter().any(|&(_, found)| found == local) {
+            consumed.push((argument.id, local));
+        }
+    }
+    Ok(consumed)
+}
+
+/// The value an argument passes: a named argument's value, or the argument.
+fn argument_value(arg: &Expression) -> &Expression {
+    if let ExpressionKind::NamedArgument(_, value) = &arg.node {
+        value
+    } else {
+        arg
+    }
+}
+
+/// Whether `local` is a binding of the body's own rather than a parameter,
+/// whose reference belongs to the caller.
+pub(crate) fn is_own_binding(ctx: &LoweringContext, local: crate::mir::Local) -> bool {
+    local.0 > ctx.body.arg_count
+}
+
 /// The binding the lowering of `expr` read, when the type checker records
 /// that consuming `expr` hands its reference on; `None` for any other
-/// expression. Refused when the lowering of a consumed expression read no
+/// expression, and for one whose call already ended the binding. Refused when the lowering of a consumed expression read no
 /// binding, which would leave the binding released only where its scope ends.
 pub(crate) fn consumed_read(
     ctx: &mut LoweringContext,
@@ -329,7 +381,8 @@ pub(crate) fn consumed_read(
         return Ok(None);
     }
     match ctx.consumed_reads.remove(&expr.id) {
-        Some(local) => Ok(Some(local)),
+        Some(ConsumedRead::Pending(local)) => Ok(Some(local)),
+        Some(ConsumedRead::Ended) => Ok(None),
         None => Err(LoweringError::internal(
             crate::diagnostics::DiagnosticCode::MirValidationFailed,
             "a consumed argument was lowered without reading the binding it names",
@@ -346,7 +399,7 @@ pub(crate) fn end_consumed_binding(
     local: crate::mir::Local,
     span: Span,
 ) -> bool {
-    if local.0 <= ctx.body.arg_count {
+    if !is_own_binding(ctx, local) {
         return false;
     }
     ctx.push_statement(crate::mir::Statement {

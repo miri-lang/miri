@@ -70,6 +70,13 @@ pub struct Signature {
     /// Populated by MIR lowering from `Parameter::is_out`.
     /// Used by codegen to emit pointer ABI for scalar out params (copy-in/copy-out).
     pub out_params: Vec<bool>,
+    /// Which parameters (indexed 1..=arg_count) the body owns because it keeps
+    /// them: a resource parameter its escape summary keeps
+    /// (`type_checker::kept_parameters`). `kept_params[i-1] == true` means
+    /// every call hands parameter `_i` over [`crate::mir::ArgMode::Owned`],
+    /// and the body binds it on entry to a local of its own, released where
+    /// that local's owner ends. Empty means every parameter is lent.
+    pub kept_params: Vec<bool>,
     /// The parameter a method body is called on, `self`; `None` in any other
     /// body. A call to a method that writes its receiver hands it one only the
     /// caller holds, so the body writes it in place.

@@ -5,11 +5,13 @@
 //! once on every path, however many places end it.
 //!
 //! Lowering ends a binding's storage where its scope ends
-//! ([`EndCause::Scope`]), and also where a consuming site gives its value up
-//! ([`EndCause::Consumed`]): a call that keeps a resource, a `let` that moves
-//! one into a new binding, a `value.drop()`. Each end is where reference
-//! counting places the binding's release. A scope end reached after a
-//! consuming end would release the value a second time, so this pass decides,
+//! ([`EndCause::Scope`]), and also where a consuming site gives its value up:
+//! a call that keeps a resource, a `let` that moves one into a new binding, a
+//! `value.drop()`. A consuming end either releases the binding's reference
+//! there ([`EndCause::Consumed`]) or marks where a `move` took it
+//! ([`EndCause::Moved`]); reference counting places a release at every end
+//! but a moved one. A scope end reached after a consuming end would release
+//! the value a second time, so this pass decides,
 //! for every scope end of a binding with a consuming end, what the paths into
 //! it hold:
 //!
@@ -98,13 +100,8 @@ struct Tracked {
 impl Tracked {
     /// The bindings with a consuming end, which the pass elaborates, and the
     /// bindings ended at more than one place, which it checks are never
-    /// ended twice along one path.
-    // TODO: a parameter is never elaborated. Lowering writes no consuming end
-    // for a parameter, so a resource parameter consumed on some paths and not
-    // others keeps no flag, and the reference the body took over is released
-    // where the function ends rather than where its new owner ends. Ending a
-    // parameter's storage where it is consumed, and flagging it like a local,
-    // would release it at the consuming site on every path.
+    /// ended twice along one path. A parameter a body owns is bound on entry
+    /// to a local of its own, which is tracked like any other.
     fn of(body: &Body) -> Tracked {
         let mut ends = vec![(0usize, false); body.local_decls.len()];
         for statement in body.basic_blocks.iter().flat_map(|block| &block.statements) {
@@ -114,7 +111,7 @@ impl Tracked {
                     .filter(|_| place.projection.is_empty())
                 {
                     end.0 += 1;
-                    end.1 |= *cause == EndCause::Consumed;
+                    end.1 |= cause.is_consuming();
                 }
             }
         }
@@ -148,7 +145,7 @@ fn statement_effect(tracked: &Tracked, kind: &StatementKind) -> Option<(usize, H
         StatementKind::StorageDead(place, EndCause::Scope) => {
             Some((tracked.of_place(place)?, Held::ENDED))
         }
-        StatementKind::StorageDead(place, EndCause::Consumed) => {
+        StatementKind::StorageDead(place, EndCause::Consumed | EndCause::Moved) => {
             Some((tracked.of_place(place)?, Held::CONSUMED))
         }
         StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) => {
@@ -280,10 +277,10 @@ fn end_rewrite(cause: EndCause, held: Held) -> Result<Option<Rewrite>, &'static 
         return Err("its storage ends a second time along a path that never bound it again");
     }
     match cause {
-        EndCause::Consumed if held.consumed => {
+        EndCause::Consumed | EndCause::Moved if held.consumed => {
             Err("it is consumed a second time along a path that never bound it again")
         }
-        EndCause::Consumed => Ok(None),
+        EndCause::Consumed | EndCause::Moved => Ok(None),
         EndCause::Scope if !held.consumed => Ok(None),
         EndCause::Scope if held.live => Ok(Some(Rewrite::Guard)),
         EndCause::Scope => Ok(Some(Rewrite::Remove)),

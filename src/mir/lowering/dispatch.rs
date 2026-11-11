@@ -46,6 +46,7 @@ pub(crate) use super::kernel_launch::try_lower_kernel_launch;
 
 // Import private helpers from specialized modules.
 use super::generic_method_calls::{generic_method_symbol, GenericMethodSite};
+use super::kept_parameters::{end_handed_over, hand_over_kept_arguments, HandedOver, KeptCall};
 use super::method_dispatch::{residency_specialize_call, with_mutated_receiver};
 use super::runtime_writes::{self, RuntimeCallee};
 use super::sequencing::lower_operand;
@@ -325,7 +326,7 @@ fn lower_static_method_impl(
         destination.clone(),
         *span,
     );
-    emit_direct_call_drops(ctx, &arg_ops, arg_watermark, destination.local, *span);
+    emit_direct_call_drops(ctx, &arg_ops, arg_watermark, &[destination.local], *span);
     Ok(Some(result_op))
 }
 
@@ -468,17 +469,21 @@ fn lower_aliased_function_call(
         .recorded_type(call_expr_id)
         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
     let (destination, result_op) = call_destination(ctx, return_ty, dest, *span);
+    let at = (arg_watermark, destination.local);
+    let call = KeptCall::of(ctx.type_checker, callee, signature_id, &func_op, args, at)?;
+    let mut arg_modes = Vec::new();
+    let handed = hand_over_kept_arguments(ctx, &call, &mut arg_ops, &mut arg_modes)?;
 
     emit_call_terminator(
         ctx,
         func_op,
         arg_ops.clone(),
-        Vec::new(),
+        arg_modes,
         Vec::new(),
         destination.clone(),
         *span,
     );
-    emit_direct_call_drops(ctx, &arg_ops, arg_watermark, destination.local, *span);
+    end_direct_call(ctx, &call, &arg_ops, &handed, *span);
     Ok(Some(result_op))
 }
 
@@ -1616,13 +1621,15 @@ fn lower_direct_call(
         .unwrap_or(Type::new(TypeKind::Void, *span));
     let (destination, op) = call_destination(ctx, return_ty, dest, *span);
 
-    let is_indirect_call = !matches!(func_op, Operand::Function(_));
     let func_op_for_drop = func_op.clone();
     // Which parameters are `out` is declared, not instantiated, so a generic
     // call reads it off the declaration too: the instance's body takes those
     // parameters by address, and a call that passed them by value would hand
     // it a value to write through.
-    let arg_modes = build_arg_modes(&resolve_param_types(ctx, callee.id), &arg_ops);
+    let mut arg_modes = build_arg_modes(&resolve_param_types(ctx, callee.id), &arg_ops);
+    let at = (arg_watermark, destination.local);
+    let call = KeptCall::of(ctx.type_checker, callee, callee.id, &func_op, args, at)?;
+    let handed = hand_over_kept_arguments(ctx, &call, &mut arg_ops, &mut arg_modes)?;
 
     emit_call_terminator(
         ctx,
@@ -1633,15 +1640,32 @@ fn lower_direct_call(
         destination.clone(),
         *span,
     );
-    emit_direct_call_drops(ctx, &arg_ops, arg_watermark, destination.local, *span);
-    if is_indirect_call {
-        if let Operand::Copy(place) | Operand::Move(place) = &func_op_for_drop {
-            if place.local != destination.local {
-                ctx.emit_temp_drop(place.local, func_watermark, *span);
-            }
-        }
-    }
+    end_direct_call(ctx, &call, &arg_ops, &handed, *span);
+    release_called_value(
+        ctx,
+        &func_op_for_drop,
+        destination.local,
+        func_watermark,
+        *span,
+    );
     Ok(op)
+}
+
+/// Releases the temporary an indirect call read its callee from, unless the
+/// call wrote its result into that same local; a named function holds nothing.
+fn release_called_value(
+    ctx: &mut LoweringContext,
+    callee: &Operand,
+    destination: Local,
+    watermark: usize,
+    span: Span,
+) {
+    let (Operand::Copy(place) | Operand::Move(place)) = callee else {
+        return;
+    };
+    if place.local != destination {
+        ctx.emit_temp_drop(place.local, watermark, span);
+    }
 }
 
 /// Emit a `Call` terminator to `destination` and advance to its successor block.
@@ -1699,12 +1723,14 @@ fn build_arg_modes(
     }
 }
 
-/// Drop each freshly-created argument temp (skipping the call destination).
+/// Drop each freshly-created argument temp, skipping `held`: the call's
+/// destination and every temp the call took over by `move`, which it ended
+/// already.
 fn emit_direct_call_drops(
     ctx: &mut LoweringContext,
     arg_ops: &[Operand],
     arg_watermark: usize,
-    dest_local: Local,
+    held: &[Local],
     span: Span,
 ) {
     // A temporary is the call's once however many arguments it fills: a
@@ -1713,11 +1739,40 @@ fn emit_direct_call_drops(
     let mut released = std::collections::HashSet::new();
     for arg_op in arg_ops {
         if let Operand::Copy(place) | Operand::Move(place) = arg_op {
-            if place.local != dest_local && released.insert(place.local) {
+            if !held.contains(&place.local) && released.insert(place.local) {
                 ctx.emit_temp_drop(place.local, arg_watermark, span);
             }
         }
     }
+}
+
+/// End the block a call to `callee` continues in as unreachable when the
+/// callee never returns, and go on lowering in a fresh block nothing reaches.
+/// No path leaves such a call, so nothing written after it runs, and no
+/// analysis may follow a path out of it: a binding the call's arguments moved
+/// would read as used after the move along it.
+fn seal_after_diverging_call(ctx: &mut LoweringContext, callee: &Expression, span: Span) {
+    if ctx.type_checker.callee_never_returns(callee) {
+        ctx.set_terminator(Terminator::new(TerminatorKind::Unreachable, span));
+        ctx.leave_terminated_block();
+    }
+}
+
+/// What follows a direct call once it returns: the continuation sealed when
+/// the callee never returns, every argument temporary the call did not take
+/// over released, and what it took over ended.
+fn end_direct_call(
+    ctx: &mut LoweringContext,
+    call: &KeptCall<'_>,
+    arg_ops: &[Operand],
+    handed: &HandedOver,
+    span: Span,
+) {
+    seal_after_diverging_call(ctx, call.callee, span);
+    let mut held = handed.moved.clone();
+    held.push(call.destination);
+    emit_direct_call_drops(ctx, arg_ops, call.arg_watermark, &held, span);
+    end_handed_over(ctx, handed, span);
 }
 
 fn apply_generic_mangling(

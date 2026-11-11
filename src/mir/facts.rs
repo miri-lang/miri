@@ -51,7 +51,10 @@ pub struct OwnershipFacts {
     /// callers. `owned_params[i-1] == true` means parameter `_i` is passed
     /// [`crate::mir::ArgMode::Owned`] by every call: the caller funds one
     /// reference for it and this body releases it. Empty means every
-    /// parameter is borrowed. Decided by `crate::mir::optimization::owned_params`.
+    /// parameter is borrowed. Starts as the parameters the body's signature
+    /// keeps ([`crate::mir::Signature::kept_params`]), to which
+    /// `crate::mir::optimization::owned_params` may add others, never
+    /// removing one.
     pub owned_params: Vec<bool>,
     /// The locals that borrow a value from a place the body owns, each with
     /// every local whose value keeps what it holds alive: the roots its
@@ -123,12 +126,17 @@ pub struct BodyFacts {
 }
 
 impl BodyFacts {
-    /// The facts of a body nothing has been recorded about yet: each group
-    /// holds its default, which states nothing a fresh body contradicts (no
-    /// parameter taken over, no local borrowed), at the body's generation.
+    /// The facts of a body nothing has been recorded about yet, at the
+    /// body's generation: the parameters its signature keeps
+    /// ([`crate::mir::Signature::kept_params`]) are taken over, and every
+    /// other group holds its default, which states nothing a fresh body
+    /// contradicts (no other parameter taken over, no local borrowed).
     pub fn new(body: &Body) -> Self {
         BodyFacts {
-            ownership: OwnershipFacts::default(),
+            ownership: OwnershipFacts {
+                owned_params: body.signature.kept_params.clone(),
+                ..OwnershipFacts::default()
+            },
             ownership_at: Some(body.generation()),
             drops_elaborated_at: None,
             recorded: Vec::new(),

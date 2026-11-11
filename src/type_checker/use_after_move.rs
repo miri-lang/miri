@@ -29,7 +29,7 @@ use super::escape_analysis::{
     returned_tails, EscapeNextHop, EscapeSummary, FunctionId,
 };
 use super::function_analysis::DeclaredFunction;
-use super::utils::{is_resource, runs_drop_hook, trait_declares_drop_hook};
+use super::utils::{hands_on_a_reference, is_resource, runs_drop_hook};
 use crate::ast::captures::collect_lambda_captures;
 
 /// Why `value.drop()` is refused on a receiver the scope does not own.
@@ -1373,12 +1373,9 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// type runs a drop hook of its own, rather than reaching the value
     /// through a trait, which shares it.
     fn hands_on_its_reference(&self, expr: &Expression) -> bool {
-        let Some(ty) = self.types.get(&expr.id) else {
-            return false;
-        };
-        let held_at_a_trait = matches!(&ty.kind, TypeKind::Custom(name, _)
-            if trait_declares_drop_hook(name, self.type_definitions));
-        !held_at_a_trait && runs_drop_hook(&ty.kind, self.type_definitions)
+        self.types
+            .get(&expr.id)
+            .is_some_and(|ty| hands_on_a_reference(&ty.kind, self.type_definitions))
     }
 
     /// Marks the variable `arg` names consumed by `sink` when it is a resource,

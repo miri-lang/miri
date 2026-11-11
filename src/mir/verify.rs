@@ -139,6 +139,7 @@ mod optional_slots;
 mod parameter_writes;
 mod program;
 mod resolved_self;
+mod resource_transfers;
 mod stable_collections;
 mod unshared_writes;
 mod value_arguments;
@@ -158,6 +159,7 @@ pub use optional_slots::verify_optional_slots;
 pub use parameter_writes::verify_parameter_writes;
 pub use program::{verify_backend_bodies, verify_program, ProgramReport};
 pub use resolved_self::verify_resolved_self;
+pub use resource_transfers::verify_resource_transfers;
 pub use stable_collections::verify_stable_collections;
 pub use unshared_writes::verify_unshared_writes;
 pub use value_arguments::verify_value_arguments;
@@ -380,6 +382,27 @@ pub fn verify_owned_argument_modes(
         .collect();
     violations.extend(owner_violations(program, facts));
     violations
+}
+
+/// Every function of `program` taking a parameter over that codegen calls
+/// without a MIR call naming it — a filled vtable slot, a runtime thunk —
+/// listed in `synthesized`. Such a call lends every argument, so the
+/// function would release a reference no caller handed it.
+pub fn verify_owners_are_called_directly(
+    program: &[(Symbol, Body)],
+    facts: &ProgramFacts,
+    synthesized: &HashSet<Symbol>,
+) -> Vec<(Symbol, VerificationViolation)> {
+    (program.iter().zip(facts.iter()))
+        .filter(|((symbol, _), facts)| {
+            synthesized.contains(symbol) && facts.ownership().owned_params.contains(&true)
+        })
+        .map(|((symbol, body), _)| {
+            let message = "is called through a vtable slot or a runtime thunk, which lends \
+                           every argument, yet takes a parameter over";
+            (symbol.clone(), body_violation(body, message.to_string()))
+        })
+        .collect()
 }
 
 /// Every place `program` reaches a function taking a parameter over other than
@@ -1233,9 +1256,17 @@ fn apply_statement(
                 state.insert(place.local, Delta::Uninit);
             }
         }
-        StatementKind::StorageDead(place, _) => {
-            flag_leak_at_scope_end(body, place, tracked, state, violations);
-        }
+        // Every end must find the binding owning nothing: a scope or a
+        // consuming end after the release RC insertion put before it, a
+        // moved end after the `move` handed its reference over. A moved end
+        // still owning one names a hand-over that transferred nothing.
+        StatementKind::StorageDead(place, cause) => match cause {
+            crate::mir::EndCause::Scope
+            | crate::mir::EndCause::Consumed
+            | crate::mir::EndCause::Moved => {
+                flag_leak_at_scope_end(body, place, tracked, state, violations);
+            }
+        },
         // A retain whose reference is claimed elsewhere never reaches here: the
         // block skips it and credits the claimant instead. What is left pays for
         // the local it names.

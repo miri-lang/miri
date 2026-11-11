@@ -123,6 +123,7 @@ pub fn verify_program(
             .map(|(name, v)| format!("  fn {}: {}", name, v)),
     );
     let harmless_calls = harmless_calls_after_rc(definitions, bodies);
+    let hooks = crate::mir::type_facts::DropHookReach::new(definitions);
     for (((name, body), harmless), facts) in bodies.iter().zip(&harmless_calls).zip(facts.iter()) {
         let ownership = facts.current_ownership(body)?;
         let mut violations =
@@ -136,6 +137,7 @@ pub fn verify_program(
         violations.extend(super::verify_value_representation(body, definitions));
         violations.extend(super::verify_value_arguments(body));
         violations.extend(super::verify_moved_out(body));
+        violations.extend(super::verify_resource_transfers(body, ownership, &hooks));
         // TODO: this check runs only under --verify-mir; a normal build does
         // not check that in-place writes land on unshared collections.
         violations.extend(super::verify_unshared_writes(body, ownership));

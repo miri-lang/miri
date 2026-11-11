@@ -30,9 +30,13 @@
 //! reaches. A method's receiver stays borrowed.
 //!
 //! Owning a parameter moves where the value's last release may happen — from
-//! the caller, after the call, into the callee — so a parameter whose release
-//! may run a drop hook anywhere inside it stays borrowed, and the hooks run in
-//! the order the program was written in.
+//! the caller, after the call, into the callee — so this pass never owns a
+//! parameter whose release may run a drop hook anywhere inside it: when a hook
+//! runs is the program's meaning, and an optimisation must not move it. A
+//! resource parameter the callee keeps is owned by the semantics instead: the
+//! type checker decides it, the callee's signature carries it
+//! ([`crate::mir::Signature::kept_params`]), and lowering writes both sides
+//! of every call to it. This pass starts from those and only adds to them.
 
 use crate::ast::implicit_methods::THUNK_METHOD_NAMES;
 use crate::ast::statement::DROP_HOOK_NAME;
@@ -58,25 +62,41 @@ use std::collections::{HashMap, HashSet};
 /// `drop_hooks` answers which parameter types may run a drop hook when
 /// released. Bodies are visited in `program` order, so the result is
 /// deterministic. Which parameters each body takes over is recorded in its
-/// entry of `facts`, the facts of `program`'s bodies in order.
+/// entry of `facts`, the facts of `program`'s bodies in order: they start
+/// from the ones its signature keeps, and this pass only adds to them.
 pub fn decide_owned_parameters(
     program: &mut [(Symbol, Body)],
     facts: &mut ProgramFacts,
     synthesized: &HashSet<Symbol>,
     drop_hooks: &DropHookReach,
 ) {
+    debug_assert!(
+        (program.iter().zip(facts.iter())).all(|((_, body), facts)| {
+            let owned = &facts.ownership().owned_params;
+            (body.signature.kept_params.iter().enumerate())
+                .all(|(index, is_kept)| !is_kept || owned.get(index).copied().unwrap_or(false))
+        }),
+        "the facts own every parameter a signature keeps"
+    );
     let mut candidates = collect_candidates(program, synthesized, drop_hooks);
     if candidates.is_empty() {
         return;
     }
-    count_references(program, &mut candidates);
-    candidates.retain(|_, candidate| candidate.is_only_called_directly());
+    let arities = (candidates.iter())
+        .map(|(symbol, candidate)| (symbol.clone(), candidate.arity))
+        .collect();
+    let reach = reach_of(program, arities);
+    candidates.retain(|symbol, _| {
+        reach
+            .get(symbol)
+            .is_some_and(|reach| reach.is_called() && reach.is_only_called_directly())
+    });
     let mut owners = HashMap::new();
     for ((symbol, body), facts) in program.iter_mut().zip(facts.iter_mut()) {
         if let Some(candidate) = candidates.get(symbol) {
             let owned = take_over_parameters(body, &candidate.bindings);
             owners.insert(symbol.clone(), owned.clone());
-            facts.ownership_mut().owned_params = owned;
+            add_owned_parameters(&mut facts.ownership_mut().owned_params, &owned);
         }
     }
     for (_, body) in program.iter_mut() {
@@ -84,12 +104,34 @@ pub fn decide_owned_parameters(
     }
 }
 
-/// A function some of whose parameters could be owned, and what the program
-/// does with its symbol.
+/// Mark each parameter this pass took over, `owned`, as owned in `params`,
+/// keeping every parameter `params` already owns: the facts start from the
+/// ones the body's signature keeps ([`crate::mir::facts::BodyFacts::new`]),
+/// which are the semantics', never the optimisation's to give back.
+fn add_owned_parameters(params: &mut Vec<bool>, owned: &[bool]) {
+    if params.len() < owned.len() {
+        params.resize(owned.len(), false);
+    }
+    for (param, is_owned) in params.iter_mut().zip(owned) {
+        *param |= *is_owned;
+    }
+}
+
+/// A function some of whose parameters could be owned.
 struct Candidate {
     /// For each parameter, the entry-block statement binding it, when that
     /// binding is the parameter's only use.
     bindings: Vec<Option<Binding>>,
+    /// How many parameters the function takes.
+    arity: usize,
+}
+
+/// What a program does with a function's symbol: the one answer to whether
+/// every caller reaches it through a MIR call naming it, which a function
+/// owning a parameter needs, since only such a call can pass the argument
+/// owned.
+#[derive(Default)]
+pub struct Reach {
     /// How many parameters the function takes.
     arity: usize,
     /// How many bodies were lowered under the symbol.
@@ -101,12 +143,83 @@ struct Candidate {
     called: usize,
 }
 
-impl Candidate {
-    /// Whether the symbol is called, and every mention of it is a host call
-    /// the pass can mark, made to the one body lowered under it.
-    fn is_only_called_directly(&self) -> bool {
-        self.bodies == 1 && self.called > 0 && self.named == self.called
+impl Reach {
+    /// Whether some host call names the function as its callee.
+    pub fn is_called(&self) -> bool {
+        self.called > 0
     }
+
+    /// Whether every mention of the symbol is a host call made to the one
+    /// body lowered under it: no function value, no GPU call, no second body.
+    pub fn is_only_called_directly(&self) -> bool {
+        self.bodies == 1 && self.named == self.called
+    }
+}
+
+/// How `program` reaches each function of `arities`, a map from its symbol to
+/// the number of parameters it takes.
+///
+/// A GPU body's call is counted as a mention only, so a function a GPU body
+/// reaches is not called directly. A body the runtime or a vtable slot calls
+/// is reached without any MIR call: the caller checks `synthesized` beside
+/// this.
+pub fn reach_of(
+    program: &[(Symbol, Body)],
+    arities: HashMap<Symbol, usize>,
+) -> HashMap<Symbol, Reach> {
+    let mut reach: HashMap<Symbol, Reach> = (arities.into_iter())
+        .map(|(symbol, arity)| {
+            let reach = Reach {
+                arity,
+                ..Reach::default()
+            };
+            (symbol, reach)
+        })
+        .collect();
+    if reach.is_empty() {
+        return reach;
+    }
+    for (symbol, body) in program {
+        if let Some(found) = reach.get_mut(symbol) {
+            found.bodies += 1;
+        }
+        FunctionMentions { reach: &mut reach }.visit_body(body);
+        if !body.is_gpu() {
+            count_direct_calls(body, &mut reach);
+        }
+    }
+    reach
+}
+
+/// Refuses a program reaching a function whose signature keeps a parameter
+/// other than through a host call naming it: as a value, from a GPU body,
+/// through a vtable slot or a runtime thunk (`synthesized`), or under a
+/// symbol with a second body. Such a caller lends every argument, so the
+/// callee would release a reference nobody handed it.
+///
+/// The type checker keeps no parameter of a function it sees reached any of
+/// these ways; this holds that decision to what the lowered program does.
+pub fn refuse_indirectly_reached_keepers(
+    program: &[(Symbol, Body)],
+    synthesized: &HashSet<Symbol>,
+) -> Result<(), String> {
+    let arities: HashMap<Symbol, usize> = (program.iter())
+        .filter(|(_, body)| body.signature.kept_params.contains(&true))
+        .map(|(symbol, body)| (symbol.clone(), body.arg_count))
+        .collect();
+    let reach = reach_of(program, arities);
+    let mut refused: Vec<String> = (reach.iter())
+        .filter(|(symbol, reach)| synthesized.contains(*symbol) || !reach.is_only_called_directly())
+        .map(|(symbol, _)| symbol.link_name())
+        .collect();
+    if refused.is_empty() {
+        return Ok(());
+    }
+    refused.sort_unstable();
+    Err(format!(
+        "{} keeps a parameter, yet is reached other than by a host call naming it",
+        refused.join(", ")
+    ))
 }
 
 /// The functions with at least one parameter that could be owned, keyed by
@@ -126,9 +239,6 @@ fn collect_candidates(
             let candidate = Candidate {
                 bindings,
                 arity: body.arg_count,
-                bodies: 0,
-                named: 0,
-                called: 0,
             };
             candidates.insert(symbol.clone(), candidate);
         }
@@ -322,38 +432,22 @@ fn dies_in_entry_block(body: &Body, local: Local) -> bool {
     })
 }
 
-/// Count, for every candidate, the bodies lowered under its symbol, the
-/// operands naming it, and the host calls to it at its arity. A GPU body's
-/// call is counted as a mention only, so a function a GPU body reaches stays
-/// borrowed.
-fn count_references(program: &[(Symbol, Body)], candidates: &mut HashMap<Symbol, Candidate>) {
-    for (symbol, body) in program {
-        if let Some(candidate) = candidates.get_mut(symbol) {
-            candidate.bodies += 1;
-        }
-        FunctionMentions { candidates }.visit_body(body);
-        if !body.is_gpu() {
-            count_direct_calls(body, candidates);
-        }
-    }
-}
-
-/// Counts every operand naming a candidate.
+/// Counts every operand naming a function whose reach is wanted.
 struct FunctionMentions<'c> {
-    candidates: &'c mut HashMap<Symbol, Candidate>,
+    reach: &'c mut HashMap<Symbol, Reach>,
 }
 
 impl Visitor for FunctionMentions<'_> {
     fn visit_function(&mut self, function: &FunctionConstant, _location: BasicBlock) {
-        if let Some(candidate) = self.candidates.get_mut(&function.symbol) {
-            candidate.named += 1;
+        if let Some(reach) = self.reach.get_mut(&function.symbol) {
+            reach.named += 1;
         }
     }
 }
 
-/// Count each call in `body` naming a candidate as its callee with as many
-/// arguments as the candidate takes.
-fn count_direct_calls(body: &Body, candidates: &mut HashMap<Symbol, Candidate>) {
+/// Count each call in `body` naming a function whose reach is wanted as its
+/// callee with as many arguments as the function takes.
+fn count_direct_calls(body: &Body, reach: &mut HashMap<Symbol, Reach>) {
     for terminator in body
         .basic_blocks
         .iter()
@@ -367,9 +461,9 @@ fn count_direct_calls(body: &Body, candidates: &mut HashMap<Symbol, Candidate>) 
         else {
             continue;
         };
-        if let Some(candidate) = candidates.get_mut(&function.symbol) {
-            if args.len() == candidate.arity {
-                candidate.called += 1;
+        if let Some(found) = reach.get_mut(&function.symbol) {
+            if args.len() == found.arity {
+                found.called += 1;
             }
         }
     }

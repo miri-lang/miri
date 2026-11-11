@@ -22,8 +22,9 @@
 //! that lands. The pass never reuses a released block for a new value.
 //!
 //! The pass does not decide ownership itself. It reads the answers of the passes
-//! that own each question: [`super::owned_params`] (which parameters a callee
-//! takes over from its callers, inferred over the whole program),
+//! that own each question: the body's ownership facts (which parameters a
+//! callee takes over from its callers: the resource parameters its signature
+//! keeps, and the ones [`super::owned_params`] infers over the whole program),
 //! [`super::local_borrows`] (which locals read out of a place the body holds and
 //! need no count of their own), and [`crate::mir::rc::RcClassifier`] (whether a
 //! value, slot or element is counted at all). [`super::rc_elision`] runs after it
@@ -44,7 +45,8 @@ use crate::mir::{Body, Operand, Place, PlaceElem, Rvalue};
 ///
 /// For each assignment whose source is a managed place, an `IncRef` is inserted
 /// before the assignment. For each `StorageDead` of a managed place, a `DecRef`
-/// is inserted before the storage is released.
+/// is inserted before the storage is released, except at a moved end
+/// ([`crate::mir::EndCause::Moved`]), whose reference a `move` took.
 pub struct RcInsertion;
 /// Metadata context for the RC insertion optimization pass.
 /// Holds immutable references to necessary fields of `Body` to satisfy the borrow checker
@@ -305,7 +307,7 @@ impl RcInsertion {
             StatementKind::Assign(..) | StatementKind::Reassign(..) => {
                 self.handle_assignment(ctx, stmt, managed_locals, new_stmts)
             }
-            StatementKind::StorageDead(place, _) => {
+            StatementKind::StorageDead(place, cause) if cause.releases() => {
                 self.handle_storage_dead(ctx, stmt, place, managed_locals, new_stmts)
             }
             _ => false,

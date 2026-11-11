@@ -45,6 +45,9 @@ impl fmt::Display for Statement {
             StatementKind::StorageDead(place, EndCause::Consumed) => {
                 write!(f, "StorageDead({}, consumed)", place)
             }
+            StatementKind::StorageDead(place, EndCause::Moved) => {
+                write!(f, "StorageDead({}, moved)", place)
+            }
             StatementKind::IncRef(place) => write!(f, "IncRef({})", place),
             StatementKind::DecRef(place) => write!(f, "DecRef({})", place),
             StatementKind::Dealloc(place) => write!(f, "Dealloc({})", place),
@@ -96,16 +99,41 @@ impl StatementKind {
 
 /// Why a binding's storage ends.
 ///
-/// Both causes release the binding there. A consuming end is written where a
-/// site gives the binding's value up — a call that keeps it, a `let` moving
-/// it into a new binding, `value.drop()` — and drop elaboration decides, from
-/// the consuming ends alone, which later scope ends still release it.
+/// A scope end and a consuming end release the binding there; a moved end
+/// releases nothing, its reference having left through a `move`. A consuming
+/// or moved end is written where a site gives the binding's value up — a call
+/// that keeps it, a `let` moving it into a new binding, `value.drop()` — and
+/// drop elaboration decides, from those ends alone, which later scope ends
+/// still release it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EndCause {
     /// The scope declaring the binding ends.
     Scope,
-    /// A consuming site gave the binding's value up.
+    /// A consuming site gave the binding's value up, keeping a reference of
+    /// its own, so the binding's reference is released here.
     Consumed,
+    /// A consuming site took the binding's own reference with a `move`, so
+    /// the binding ends here and releases nothing.
+    Moved,
+}
+
+impl EndCause {
+    /// Whether a site gave the binding's value up here, rather than its
+    /// scope ending.
+    pub fn is_consuming(self) -> bool {
+        match self {
+            EndCause::Consumed | EndCause::Moved => true,
+            EndCause::Scope => false,
+        }
+    }
+
+    /// Whether ending the binding here releases the reference it holds.
+    pub fn releases(self) -> bool {
+        match self {
+            EndCause::Scope | EndCause::Consumed => true,
+            EndCause::Moved => false,
+        }
+    }
 }
 
 /// What a [`StatementKind::ReadHeader`] reads and for which blocks: the

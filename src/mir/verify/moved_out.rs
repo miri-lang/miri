@@ -19,7 +19,8 @@
 //! | `Assign`/`Reassign` of the whole of `x`, a call writing its result into `x`, `StorageLive(x)` | `x` re-bound: no longer moved |
 //! | any other mention of `x` — a `Copy` or `Move` of `x` or of a place under it, an index by `x`, a store under `x`, `IncRef`, `ReadHeader` | a read: a finding while moved |
 //! | `DecRef(x)`, `Dealloc(x)` | a release: a finding while moved |
-//! | `StorageDead(x, _)`, either cause | nothing: the end of storage releases no reference |
+//! | `StorageDead(x, _)`, any cause | nothing: the end of storage releases no reference |
+//! | `StorageDead(x, moved)` | a finding unless every path into it moved `x` since binding it |
 //! | `flag = true` / `flag = false` on a drop flag | the paths take the flag's new value |
 //! | the edge a switch on a drop flag leaves along | taken only by the paths whose flag holds the value leading there |
 //! | `Move` of a place under `x` | a finding: a move hands on a whole local's reference |
@@ -46,6 +47,13 @@
 //! release is the finding. The reference-count verifier holds each write to
 //! a flag to where it may sit.
 //!
+//! A moved end ([`crate::mir::EndCause::Moved`]) says the binding's reference
+//! left through a `move`, so reference counting places no release there. It
+//! is checked the other way round: some path reaching it with the binding
+//! bound and not moved since would keep a reference nothing releases. Each
+//! local is followed as held from the entry and from every re-binding until
+//! a move, the same way across the drop flags' values.
+//!
 //! The rule shares nothing with the passes that write a `move`; it reads the
 //! body alone. A GPU body is not checked: it holds no counts.
 
@@ -53,7 +61,9 @@ use super::drop_flags::{DropFlags, Partitioned};
 use super::{local_display_name, VerificationViolation};
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
-use crate::mir::{BasicBlock, Body, Local, Operand, Place, StatementKind, TerminatorKind};
+use crate::mir::{
+    BasicBlock, Body, EndCause, Local, Operand, Place, StatementKind, TerminatorKind,
+};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 use std::fmt;
@@ -75,10 +85,25 @@ impl fmt::Display for Site {
     }
 }
 
-/// The locals moved on some path into a point, indexed by local, each with
-/// the least site, in block order, that moved it, so a report names the same
-/// move every run.
-type Moved = Vec<Option<Site>>;
+/// What the paths into a point did to each local, indexed by local.
+#[derive(Debug, Clone, PartialEq)]
+struct Moved {
+    /// The least site, in block order, that moved it on some path, so a
+    /// report names the same move every run.
+    sites: Vec<Option<Site>>,
+    /// Whether some path holds it bound and not moved since.
+    held: Vec<bool>,
+}
+
+impl Moved {
+    /// Every local held and none moved: the state at the body's entry.
+    fn at_entry(locals: usize) -> Moved {
+        Moved {
+            sites: vec![None; locals],
+            held: vec![true; locals],
+        }
+    }
+}
 
 /// How a statement or terminator touches a local the analysis tracks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,6 +115,8 @@ enum Touch {
     /// A move of a place under the local, which no pass may write: a move
     /// hands on a whole local's reference.
     ProjectedMove,
+    /// A moved end some path reaches holding the local unmoved.
+    UnmovedEnd,
 }
 
 /// What one statement or terminator does to the locals it mentions, in the
@@ -101,6 +128,8 @@ struct Effect {
     moves: Vec<Local>,
     rebinds: Vec<Local>,
     projected_moves: Vec<Local>,
+    /// The locals a moved end ends.
+    moved_ends: Vec<Local>,
 }
 
 impl Effect {
@@ -163,6 +192,9 @@ fn statement_effect(kind: &StatementKind, here: BasicBlock) -> Effect {
         StatementKind::IncRef(place) => effect.read_place(place),
         StatementKind::ReadHeader(read) => effect.read_place(&read.collection),
         StatementKind::DecRef(place) | StatementKind::Dealloc(place) => effect.release_place(place),
+        StatementKind::StorageDead(place, EndCause::Moved) if place.projection.is_empty() => {
+            effect.moved_ends.push(place.local)
+        }
         StatementKind::StorageDead(_, _) | StatementKind::Nop => {}
     }
     effect
@@ -221,8 +253,18 @@ fn apply(effect: &Effect, site: Site, moved: &mut Moved, found: &mut impl FnMut(
             touch: Touch::ProjectedMove,
         });
     }
+    for &local in &effect.moved_ends {
+        if moved.held[local.0] {
+            found(Finding {
+                local,
+                moved_at: site,
+                used_at: site,
+                touch: Touch::UnmovedEnd,
+            });
+        }
+    }
     for &(local, touch) in &effect.uses {
-        if let Some(moved_at) = moved[local.0] {
+        if let Some(moved_at) = moved.sites[local.0] {
             found(Finding {
                 local,
                 moved_at,
@@ -240,18 +282,20 @@ fn apply(effect: &Effect, site: Site, moved: &mut Moved, found: &mut impl FnMut(
                 touch: Touch::Move,
             });
         }
-        moved[local.0].get_or_insert(site);
+        moved.sites[local.0].get_or_insert(site);
+        moved.held[local.0] = false;
     }
     for local in &effect.rebinds {
-        moved[local.0] = None;
+        moved.sites[local.0] = None;
+        moved.held[local.0] = true;
     }
 }
 
-/// Merge `from` into `into`, keeping the least move site of each local;
-/// whether `into` changed.
+/// Merge `from` into `into`, keeping the least move site of each local and
+/// every local some path holds; whether `into` changed.
 fn join(into: &mut Moved, from: &Moved) -> bool {
     let mut changed = false;
-    for (entry, site) in into.iter_mut().zip(from) {
+    for (entry, site) in into.sites.iter_mut().zip(&from.sites) {
         let Some(site) = site else {
             continue;
         };
@@ -259,6 +303,10 @@ fn join(into: &mut Moved, from: &Moved) -> bool {
             *entry = Some(*site);
             changed = true;
         }
+    }
+    for (held, from_held) in into.held.iter_mut().zip(&from.held) {
+        changed |= *from_held && !*held;
+        *held |= *from_held;
     }
     changed
 }
@@ -339,7 +387,7 @@ fn entry_states(
     let mut entries: Vec<Option<FlowState>> = vec![None; blocks];
     entries[0] = Some(Partitioned::single(
         flags.on_entry(),
-        vec![None; body.local_decls.len()],
+        Moved::at_entry(body.local_decls.len()),
     ));
     let mut queued = vec![false; blocks];
     let mut work = BinaryHeap::from([Reverse((flow.order[0], 0usize))]);
@@ -411,6 +459,11 @@ pub fn verify_moved_out(body: &Body) -> Vec<VerificationViolation> {
 
 fn violation_of(body: &Body, finding: &Finding) -> VerificationViolation {
     let message = match finding.touch {
+        Touch::UnmovedEnd => format!(
+            "ended as moved at {}, where some path holds it bound and not moved since, so \
+             nothing releases the reference it holds",
+            finding.used_at
+        ),
         Touch::ProjectedMove => format!(
             "moved through a projection at {}; a `move` hands on the reference of a whole \
              local, never of a place under one",
@@ -420,7 +473,7 @@ fn violation_of(body: &Body, finding: &Finding) -> VerificationViolation {
             let verb = match finding.touch {
                 Touch::Read => "read",
                 Touch::Release => "released",
-                Touch::Move | Touch::ProjectedMove => "moved again",
+                Touch::Move | Touch::ProjectedMove | Touch::UnmovedEnd => "moved again",
             };
             format!(
                 "{verb} at {} after the `move` at {} handed its reference on, with no \

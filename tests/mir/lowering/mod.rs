@@ -21,6 +21,7 @@ pub mod gpu_launch;
 pub mod helpers;
 pub mod if_statement;
 pub mod instantiation_limits;
+pub mod kept_parameters;
 pub mod literal;
 pub mod r#loop;
 pub mod match_expression;

@@ -22,6 +22,7 @@ mod moved_out;
 mod optional_representation;
 mod parameter_writes;
 mod resolved_self;
+mod resource_transfers;
 mod stable_collections;
 mod unshared_writes;
 mod value_arguments;
@@ -36,10 +37,12 @@ use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::body::{BindingResidency, DeviceHandleId};
 use miri::mir::facts::{OwnershipFacts, ProgramFacts};
+use miri::mir::optimization::owned_params::refuse_indirectly_reached_keepers;
 use miri::mir::symbol::{ClosureKind, GpuKernelKind, Symbol};
 use miri::mir::verify::{
     verify_body, verify_callees, verify_collection_element_ownership,
-    verify_cross_residency_readback, verify_owned_argument_modes, VerificationViolation,
+    verify_cross_residency_readback, verify_owned_argument_modes,
+    verify_owners_are_called_directly, VerificationViolation,
 };
 use miri::mir::{
     AggregateKind, ArgMode, Body, Constant, Discriminant, ExecutionModel, GpuLaunchArgs, Local,
@@ -2737,6 +2740,11 @@ fn a_function_taking_a_parameter_over_named_as_a_value_is_reported() {
         "a call through the value lends the argument"
     );
     assert_eq!(found[0].0, Symbol::entry());
+    let message = &found[0].1.message;
+    assert!(
+        message.contains("which takes a parameter over, as a value"),
+        "the finding names the value: {message}"
+    );
 }
 
 #[test]
@@ -2802,5 +2810,179 @@ fn an_append_receiver_is_handed_over_and_its_count_balances() {
         lent.len(),
         1,
         "a receiver the append takes over, passed lent"
+    );
+}
+
+/// A callee whose signature keeps its one parameter, as a function owning a
+/// resource it keeps is lowered, called by the entry point in `mode`. Its
+/// facts are the fresh facts of the program: the signature alone makes the
+/// parameter taken over.
+fn kept_param_program(mode: ArgMode) -> Vec<(Symbol, Body)> {
+    let mut callee = owned_param_body(Vec::new());
+    callee.signature.kept_params = vec![true];
+    vec![
+        (callee_symbol(), callee),
+        (Symbol::entry(), caller_passing_temp(mode)),
+    ]
+}
+
+#[test]
+fn a_parameter_the_signature_keeps_is_taken_over_without_the_optimisation() {
+    let program = kept_param_program(ArgMode::Owned);
+    let facts = ProgramFacts::of(&program);
+    assert!(facts
+        .iter()
+        .next()
+        .is_some_and(|callee| callee.ownership().is_owned_param(Local(1))));
+    assert!(
+        verify_owned_argument_modes(&program, &facts).is_empty(),
+        "a call handing over what the callee keeps agrees with it"
+    );
+}
+
+#[test]
+fn a_call_lending_a_parameter_the_callee_keeps_is_reported() {
+    let program = kept_param_program(ArgMode::Borrowed);
+    let found = verify_owned_argument_modes(&program, &ProgramFacts::of(&program));
+    assert_eq!(found.len(), 1, "a call lending what its callee keeps");
+    assert_eq!(found[0].0, Symbol::entry());
+}
+
+#[test]
+fn a_function_keeping_a_parameter_named_as_a_value_is_reported() {
+    let mut program = kept_param_program(ArgMode::Owned);
+    program[1].1.basic_blocks[0]
+        .statements
+        .push(stmt(StatementKind::Assign(
+            place(2),
+            Rvalue::Use(Operand::function(callee_symbol(), span())),
+        )));
+    let found = verify_owned_argument_modes(&program, &ProgramFacts::of(&program));
+    assert_eq!(
+        found.len(),
+        1,
+        "a call through the value lends the argument"
+    );
+    assert_eq!(found[0].0, Symbol::entry());
+    let message = &found[0].1.message;
+    assert!(
+        message.contains("which takes a parameter over, as a value"),
+        "the finding names the value: {message}"
+    );
+}
+
+#[test]
+fn a_function_keeping_a_parameter_filling_a_vtable_slot_is_reported() {
+    let program = kept_param_program(ArgMode::Owned);
+    let facts = ProgramFacts::of(&program);
+    let called_directly = verify_owners_are_called_directly(&program, &facts, &HashSet::new());
+    assert!(called_directly.is_empty(), "every call to it is a MIR call");
+    let slot = HashSet::from([callee_symbol()]);
+    let found = verify_owners_are_called_directly(&program, &facts, &slot);
+    assert_eq!(found.len(), 1, "a slot lends every argument");
+    assert_eq!(found[0].0, callee_symbol());
+    let message = &found[0].1.message;
+    assert!(
+        message.contains("vtable slot or a runtime thunk"),
+        "the finding names the slot: {message}"
+    );
+}
+
+#[test]
+fn a_keeper_reached_only_by_direct_calls_passes_the_reach_check() {
+    let program = kept_param_program(ArgMode::Owned);
+    assert_eq!(
+        refuse_indirectly_reached_keepers(&program, &HashSet::new()),
+        Ok(())
+    );
+}
+
+/// The reach check runs on every build: a keeper named as a value is a fault
+/// of the compiler, whatever let it through.
+#[test]
+fn a_keeper_named_as_a_value_fails_the_reach_check() {
+    let mut program = kept_param_program(ArgMode::Owned);
+    program[1].1.basic_blocks[0]
+        .statements
+        .push(stmt(StatementKind::Assign(
+            place(2),
+            Rvalue::Use(Operand::function(callee_symbol(), span())),
+        )));
+    let refused = refuse_indirectly_reached_keepers(&program, &HashSet::new());
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|reason| reason.contains("keeps a parameter")),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn a_keeper_filling_a_vtable_slot_fails_the_reach_check() {
+    let program = kept_param_program(ArgMode::Owned);
+    let slot = HashSet::from([callee_symbol()]);
+    assert!(refuse_indirectly_reached_keepers(&program, &slot).is_err());
+}
+
+/// The post-pass body of `cond` from the keeper fixture, with its ownership,
+/// and the local its kept handle moves into.
+fn kept_handle_body() -> (Body, OwnershipFacts, Local) {
+    use resource_transfers::{owned_local, Compiled, KEEPER};
+    let (body, ownership) = Compiled::of(KEEPER).body("cond");
+    let h = owned_local(&body, "h");
+    (body, ownership, h)
+}
+
+#[test]
+fn a_kept_parameter_is_released_exactly_once_on_every_path() {
+    let (body, ownership, _) = kept_handle_body();
+    assert_clean_with(&body, &ownership, "a kept handle released behind its flag");
+}
+
+#[test]
+fn a_kept_parameter_whose_scope_end_release_is_deleted_leaks() {
+    let (mut body, ownership, h) = kept_handle_body();
+    for block in &mut body.basic_blocks {
+        block
+            .statements
+            .retain(|statement| statement.kind != StatementKind::DecRef(Place::new(h)));
+    }
+    let found = verify_body(&body, &ownership);
+    assert!(
+        found
+            .iter()
+            .any(|violation| violation.local == h && violation.message.contains("leaks")),
+        "the path keeping no handle leaks it: {}\n{body}",
+        messages(&found)
+    );
+}
+
+#[test]
+fn a_kept_parameter_whose_flag_guard_is_deleted_is_released_twice() {
+    let (mut body, ownership, h) = kept_handle_body();
+    let flag = (body.local_decls.iter().enumerate())
+        .find(|(_, decl)| decl.drop_flag_of() == Some(h))
+        .map(|(index, _)| Local(index))
+        .expect("the kept handle has a drop flag");
+    for block in &mut body.basic_blocks {
+        let Some(terminator) = block.terminator.as_mut() else {
+            continue;
+        };
+        if let TerminatorKind::SwitchInt {
+            discr, otherwise, ..
+        } = &terminator.kind
+        {
+            if discr.place() == Some(&Place::new(flag)) {
+                terminator.kind = TerminatorKind::Goto { target: *otherwise };
+            }
+        }
+    }
+    let found = verify_body(&body, &ownership);
+    assert!(
+        found
+            .iter()
+            .any(|violation| violation.local == h && violation.message.contains("double-release")),
+        "the path that handed the handle on releases it again: {}\n{body}",
+        messages(&found)
     );
 }

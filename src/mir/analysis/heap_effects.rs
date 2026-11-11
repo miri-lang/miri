@@ -514,8 +514,9 @@ impl<'b> Classifier<'b> {
                 self.is_shared_store(dest)
                     || (self.phase == Phase::Lowered && self.may_run_drop_hook(dest))
             }
-            StatementKind::StorageDead(place, _) => {
+            StatementKind::StorageDead(place, cause) => {
                 self.phase == Phase::Lowered
+                    && cause.releases()
                     && self.may_release(place.local)
                     && self.may_run_drop_hook(place)
             }

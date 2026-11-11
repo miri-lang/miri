@@ -118,7 +118,10 @@ fn lower_local_identifier(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     if ctx.type_checker.consumed_arguments.consumes(expr) {
-        ctx.consumed_reads.insert(expr.id, local);
+        ctx.consumed_reads.insert(
+            expr.id,
+            crate::mir::lowering::variable::ConsumedRead::Pending(local),
+        );
     }
     let ty = ctx.body.local_decls[local.0].ty.clone();
     let source = Place::new(local);

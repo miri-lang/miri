@@ -161,9 +161,14 @@ impl<'a> FunctionTranslator<'a> {
             StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
                 Self::translate_assign(builder, ctx, place, rvalue, locals, type_ctx)
             }
-            StatementKind::StorageDead(place, _) => {
-                Self::translate_gpu_buffer_release(builder, ctx, place, body)
-            }
+            StatementKind::StorageDead(place, cause) => match cause {
+                crate::mir::EndCause::Scope | crate::mir::EndCause::Consumed => {
+                    Self::translate_gpu_buffer_release(builder, ctx, place, body)
+                }
+                // A `move` took the binding's reference, so its end releases
+                // nothing, a device buffer included.
+                crate::mir::EndCause::Moved => Ok(()),
+            },
             StatementKind::ReadHeader(read) => {
                 Self::read_stable_headers(builder, &read.collection, locals, type_ctx)
             }

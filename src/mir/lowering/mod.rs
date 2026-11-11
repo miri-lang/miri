@@ -32,6 +32,7 @@ pub mod inherited_instantiation;
 pub mod instance_demand;
 pub mod instantiation_limits;
 mod iterator_loop;
+mod kept_parameters;
 pub mod kernel_launch;
 pub mod loops;
 pub mod method_dispatch;
@@ -231,6 +232,9 @@ fn lower_function_body(
         inject_allocator_param(&mut ctx, name, ast_func.span);
     }
 
+    let kept = tc.kept_parameters_of_declaration(ast_func.id);
+    let owned =
+        kept_parameters::record_and_bind_kept_parameters(&mut ctx, params, kept, ast_func.span)?;
     let copies = copy_written_parameters(&mut ctx, params);
 
     // Emit guard checks for parameters with guards
@@ -241,6 +245,7 @@ fn lower_function_body(
         lower_body_as_return(&mut ctx, body_box, &ret_ty)?;
     }
     copies.close(&mut ctx, ast_func.span);
+    owned.close(&mut ctx, ast_func.span);
 
     finalize_body(&mut ctx, ast_func.span)
 }

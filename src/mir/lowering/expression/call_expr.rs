@@ -37,39 +37,28 @@ pub(crate) fn lower_call_expr(
         unreachable!()
     };
     let result = lower_call_form(ctx, expr, func, args, dest)?;
-    release_consumed_arguments(ctx, func, args, expr.span)?;
+    end_consumed_arguments(ctx, func, args, expr.span)?;
     Ok(result)
 }
 
-/// Give up the caller's reference to every binding the call consumed.
+/// End every binding the call consumed, where the call consumed it.
 ///
 /// The type checker decides which arguments a call consumes: a resource the
-/// callee keeps (`type_checker::use_after_move::ConsumedArguments`). The call
-/// lends it like any argument, and the callee funds whatever it keeps with a
-/// reference of its own, so the binding the argument was read from is
-/// released here, where the call consumed it, as `let b = a` releases `a`'s.
-fn release_consumed_arguments(
+/// callee keeps (`type_checker::use_after_move::ConsumedArguments`). A callee
+/// owning the parameter took the binding's reference by `move`, and the call
+/// ended the binding where it handed it over (`lowering::kept_parameters`),
+/// so nothing is left here. Any other call — a method, a function value, a
+/// runtime entry point storing the value — lends it, and whatever keeps it
+/// funds a reference of its own, so the binding is released here, as
+/// `let b = a` releases `a`'s.
+fn end_consumed_arguments(
     ctx: &mut LoweringContext,
     func: &Expression,
     args: &[Expression],
     span: crate::error::syntax::Span,
 ) -> Result<(), LoweringError> {
-    let receiver = match &func.node {
-        ExpressionKind::Member(receiver, _) => Some(receiver.as_ref()),
-        _ => None,
-    };
-    let named = args.iter().map(|arg| match &arg.node {
-        ExpressionKind::NamedArgument(_, value) => value.as_ref(),
-        _ => arg,
-    });
-    let mut released = Vec::new();
-    for argument in receiver.into_iter().chain(named) {
-        let Some(local) = variable::consumed_read(ctx, argument)? else {
-            continue;
-        };
-        if !released.contains(&local) && variable::end_consumed_binding(ctx, local, span) {
-            released.push(local);
-        }
+    for (_, local) in variable::consumed_argument_locals(ctx, func, args)? {
+        variable::end_consumed_binding(ctx, local, span);
     }
     Ok(())
 }

@@ -178,6 +178,19 @@ pub fn runs_drop_hook(
     false
 }
 
+/// Whether consuming a value of `kind` hands its reference on: its type runs
+/// a drop hook of its own, rather than reaching the value through a trait,
+/// which shares it. The one predicate both the consumption check and the
+/// owned parameters ([`super::kept_parameters`]) read.
+pub(crate) fn hands_on_a_reference(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> bool {
+    let held_at_a_trait = matches!(kind, TypeKind::Custom(name, _)
+        if trait_declares_drop_hook(name, type_definitions));
+    !held_at_a_trait && runs_drop_hook(kind, type_definitions)
+}
+
 /// Determines whether a type is a resource — i.e., it defines `fn drop(self)` or
 /// transitively contains a field whose type is a resource.
 ///

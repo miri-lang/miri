@@ -220,11 +220,30 @@ fn ends_by(body: &Body, local: Local, cause: EndCause) -> usize {
         .count()
 }
 
+/// `close` owns the parameter it keeps, so the call takes the binding's own
+/// reference by `move`, and the binding's end there releases nothing.
 #[test]
-fn a_call_keeping_a_resource_spells_its_end_as_consumed() {
+fn a_call_owning_the_resource_it_keeps_spells_its_end_as_moved() {
     let body = lowered(
         r#"
 fn run()
+    let h = Handle(1)
+    close(h)
+"#,
+    );
+    let h = local_named(&body, "h");
+    assert_eq!(ends_by(&body, h, EndCause::Moved), 1, "{body}");
+    assert_eq!(ends_by(&body, h, EndCause::Scope), 1, "{body}");
+}
+
+/// A function named as a value lends its parameters, so a call keeping the
+/// resource releases the caller's binding where it consumes it.
+#[test]
+fn a_call_lending_the_resource_it_keeps_spells_its_end_as_consumed() {
+    let body = lowered(
+        r#"
+fn run()
+    let f = close
     let h = Handle(1)
     close(h)
 "#,
@@ -316,7 +335,7 @@ fn run(flag bool)
     );
     let h = local_named(&body, "h");
     assert!(drop_flags(&body).is_empty(), "a flag was declared:\n{body}");
-    assert_eq!(ends_by(&body, h, EndCause::Consumed), 1, "{body}");
+    assert_eq!(ends_by(&body, h, EndCause::Moved), 1, "{body}");
     assert_eq!(
         ends_by(&body, h, EndCause::Scope),
         1,

@@ -506,9 +506,13 @@ pub enum ArgMode {
     /// The callee's parameter is declared `out`: the caller passes the address
     /// of a slot holding its value and reads the slot back after the call.
     Out,
-    /// The callee takes over one reference the caller funds and is responsible
-    /// for releasing it. Marked by `crate::mir::optimization::owned_params` on
-    /// every call to a function that takes the parameter over.
+    /// The callee takes over one reference the caller hands it and is
+    /// responsible for releasing it: the caller's own, by `move`, or one a
+    /// retain funds for a copy. Written by lowering on every direct call to a
+    /// function whose signature keeps the parameter
+    /// ([`crate::mir::Signature::kept_params`]), and by
+    /// `crate::mir::optimization::owned_params` on every call to a function
+    /// that pass takes the parameter over for.
     Owned,
     /// The callee keeps the reference the caller hands it past the call: a
     /// container storing an element. The caller funds one reference when the

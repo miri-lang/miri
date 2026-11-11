@@ -145,7 +145,7 @@ pub struct LoweringContext<'a> {
     /// read from where it was lowered, by the argument's expression id: the
     /// site consuming it ends exactly that binding
     /// ([`super::variable::consumed_read`]).
-    pub consumed_reads: HashMap<usize, Local>,
+    pub(crate) consumed_reads: HashMap<usize, super::variable::ConsumedRead>,
 }
 
 /// A source file as lowering reads spans against it: the number the body

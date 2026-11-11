@@ -359,3 +359,97 @@ fn a_release_behind_a_flag_that_guards_nothing_is_still_flagged() {
 fn a_release_behind_a_flag_never_cleared_where_the_local_was_moved_is_flagged() {
     assert_one_finding(&flag_guarded_release(true, false), &["released", "bb4[0]"]);
 }
+
+fn moved_end(local: usize) -> Statement {
+    stmt(StatementKind::StorageDead(place(local), EndCause::Moved))
+}
+
+/// A call took the binding by `move`, so its end there releases nothing.
+#[test]
+fn a_moved_end_after_the_call_that_moved_the_local_is_accepted() {
+    let body = host_body(vec![
+        block(vec![assign_fresh(1)], call(vec![moved(1)], 3, 1)),
+        block(vec![moved_end(1), decref(3)], TerminatorKind::Return),
+    ]);
+    assert_clean(&body);
+}
+
+/// A consuming end written as moved where nothing moved the binding keeps a
+/// reference nothing releases.
+#[test]
+fn a_moved_end_no_move_reaches_is_flagged() {
+    let body = host_body(vec![
+        block(vec![assign_fresh(1)], call(vec![copied(1)], 3, 1)),
+        block(vec![moved_end(1), decref(3)], TerminatorKind::Return),
+    ]);
+    assert_one_finding(&body, &["bb1[0]", "ended as moved"]);
+}
+
+/// Every path into a moved end must have moved the binding.
+#[test]
+fn a_moved_end_one_path_into_which_never_moved_the_local_is_flagged() {
+    let body = host_body(vec![
+        block(vec![assign_fresh(1)], branch(1, 2)),
+        block(vec![assign(2, moved(1)), decref(2)], goto(3)),
+        block(Vec::new(), goto(3)),
+        block(vec![moved_end(1)], TerminatorKind::Return),
+    ]);
+    assert_one_finding(&body, &["bb3[0]", "ended as moved"]);
+}
+
+/// A binding re-bound after a move holds a reference again.
+#[test]
+fn a_moved_end_after_the_moved_local_is_re_bound_is_flagged() {
+    let body = host_body(vec![
+        block(vec![assign_fresh(1)], call(vec![moved(1)], 3, 1)),
+        block(
+            vec![assign_fresh(1), moved_end(1), decref(3)],
+            TerminatorKind::Return,
+        ),
+    ]);
+    assert_one_finding(&body, &["bb1[1]", "ended as moved"]);
+}
+
+/// A moved end spelled as a consuming one is released by reference counting
+/// after the move took the reference: the release after a move is the finding.
+#[test]
+fn a_moved_binding_released_at_a_consuming_end_is_flagged() {
+    let body = host_body(vec![
+        block(vec![assign_fresh(1)], call(vec![moved(1)], 3, 1)),
+        block(
+            vec![decref(1), consumed_end(1), decref(3)],
+            TerminatorKind::Return,
+        ),
+    ]);
+    assert_one_finding(&body, &["bb0 terminator", "bb1[0]", "released"]);
+}
+
+/// The caller of a function owning the handle it keeps, with its `move` of
+/// the handle turned into a copy: the moved end after the call is reached
+/// with the handle still held.
+#[test]
+fn a_kept_argument_whose_move_is_turned_into_a_copy_is_flagged() {
+    use super::resource_transfers::{owned_local, Compiled, KEEPER};
+    let compiled = Compiled::of(KEEPER);
+    let (mut body, _) = compiled.body("main");
+    let h = owned_local(&body, "h");
+    assert!(verify_moved_out(&body).is_empty(), "{body}");
+    for block in &mut body.basic_blocks {
+        if let Some(TerminatorKind::Call { args, .. }) = block
+            .terminator
+            .as_mut()
+            .map(|terminator| &mut terminator.kind)
+        {
+            for arg in args.iter_mut() {
+                if *arg == Operand::Move(Place::new(h)) {
+                    *arg = Operand::Copy(Place::new(h));
+                }
+            }
+        }
+    }
+    let found = verify_moved_out(&body);
+    let text = messages(&found);
+    assert_eq!(found.len(), 1, "{text}\n{body}");
+    assert_eq!(found[0].local, h, "{text}");
+    assert!(text.contains("ended as moved"), "{text}");
+}

@@ -65,6 +65,7 @@ pub(crate) mod hygiene;
 pub(crate) mod instantiation_requirements;
 pub(crate) mod int_literals;
 pub(crate) mod iteration_plan;
+pub mod kept_parameters;
 pub(crate) mod launch_rules;
 pub mod literal_hooks;
 pub(crate) mod member_hints;
@@ -200,6 +201,9 @@ pub struct TypeChecker {
     /// caller's reference lowering releases at the call; see
     /// [`use_after_move::ConsumedArguments`].
     pub consumed_arguments: use_after_move::ConsumedArguments,
+    /// The resource parameters each function owns, which both sides of a
+    /// call read; see [`kept_parameters::KeptParameters`].
+    pub kept_parameters: kept_parameters::KeptParameters,
     /// What each declared runtime entry point does to its arguments and its
     /// result, as its `runtime` declaration states.
     pub runtime_effects: crate::runtime_effects::RuntimeEffects,
@@ -378,6 +382,7 @@ impl TypeChecker {
             captured_mentions: body_writes::CapturedMentions::default(),
             held_operands: body_writes::HeldOperands::default(),
             consumed_arguments: use_after_move::ConsumedArguments::default(),
+            kept_parameters: kept_parameters::KeptParameters::default(),
             runtime_effects: HashMap::new(),
             call_generic_mappings: HashMap::new(),
             open_generic_calls: call_instantiation::OpenGenericCalls::default(),
@@ -494,6 +499,20 @@ impl TypeChecker {
         self.fn_analysis.declared_callees.get(&expr_id)
     }
 
+    /// Which parameters the function the callee expression `expr_id` names
+    /// owns ([`kept_parameters::KeptParameters`]); empty when it names none
+    /// or the function owns none.
+    pub fn kept_parameters_of_callee(&self, expr_id: usize) -> &[bool] {
+        self.declared_callee(expr_id)
+            .map_or(&[], |function| self.kept_parameters.of(function))
+    }
+
+    /// Which parameters the top-level function `statement_id` declares
+    /// owns; empty when it owns none.
+    pub fn kept_parameters_of_declaration(&self, statement_id: usize) -> &[bool] {
+        self.kept_parameters.of_declaration(statement_id)
+    }
+
     /// The module the top-level function declaration `statement_id` is
     /// written in: the module a `use` loaded it from, or the program's own
     /// file. `None` for a statement the type checker never recorded, for
@@ -550,9 +569,11 @@ impl TypeChecker {
         match CalleeKind::of(info) {
             CalleeKind::Program => {
                 if matches!(info.ty.kind, TypeKind::Function(_)) {
-                    self.fn_analysis
-                        .declared_callees
-                        .insert(expr_id, DeclaredFunction::resolved(written, info));
+                    let declared = DeclaredFunction::resolved(written, info);
+                    if self.callee_expr_id != Some(expr_id) {
+                        self.fn_analysis.function_values.insert(declared.clone());
+                    }
+                    self.fn_analysis.declared_callees.insert(expr_id, declared);
                 }
             }
             CalleeKind::Intrinsic => {
@@ -744,6 +765,7 @@ impl TypeChecker {
         self.answer_pinning_sites(&context);
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_use_after_move(program, &context);
+        self.run_pass_kept_parameters(program, &context);
         self.check_hygiene(program);
         self.receiver_writes = body_writes::ReceiverWrites::of(
             top_level_statements(program).chain(&self.imported_statements),
@@ -853,6 +875,29 @@ impl TypeChecker {
         self.diagnostics.extend_errors(findings.errors);
         self.diagnostics.extend_warnings(findings.warnings);
         self.consumed_arguments.extend(findings.consumed_arguments);
+    }
+
+    /// Decides which resource parameters each of the program's own
+    /// top-level functions owns ([`kept_parameters`]), from the converged
+    /// escape summaries and the functions named as values.
+    ///
+    /// Only the program's bodies are decided: the consumption check walks
+    /// those alone, and an owned parameter needs its consumption recorded to
+    /// be handed on by `move`. A program already refused decides nothing:
+    /// its escape summaries and types may be incomplete, and no MIR is
+    /// lowered from it.
+    fn run_pass_kept_parameters(&mut self, program: &Program, context: &Context) {
+        if !self.diagnostics.is_empty() {
+            return;
+        }
+        let facts = kept_parameters::KeepFacts {
+            type_definitions: &self.type_table.global_type_definitions,
+            escape_summaries: &context.escape_summaries,
+            modules: &self.fn_analysis.declaring_modules,
+            function_values: &self.fn_analysis.function_values,
+        };
+        self.kept_parameters =
+            kept_parameters::decide_kept_parameters(top_level_statements(program), &facts);
     }
 
     /// Registers every class, trait, struct and enum among `statements` as
