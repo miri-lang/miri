@@ -54,6 +54,22 @@ impl TypeChecker {
     ///
     /// Answering leaves the checker's own diagnostics as they were.
     pub fn compiled_instance_refusals(&mut self, instance: &CompiledInstance) -> Vec<TypeError> {
+        let Some(scope) = self.global_scope.take() else {
+            return Vec::new();
+        };
+        let refusals = self.instance_refusals_in(instance, &scope.0);
+        self.global_scope = Some(scope);
+        refusals
+    }
+
+    /// The refusals compiling `instance` earns, answered in `scope`, the
+    /// program's global scope: what [`Self::compiled_instance_refusals`]
+    /// answers, before the check keeps that scope.
+    pub(super) fn instance_refusals_in(
+        &mut self,
+        instance: &CompiledInstance,
+        scope: &Context,
+    ) -> Vec<TypeError> {
         let CompiledInstance {
             class_name,
             method,
@@ -62,9 +78,6 @@ impl TypeChecker {
             span,
         } = instance;
         let span = *span;
-        let Some(scope) = self.global_scope.take() else {
-            return Vec::new();
-        };
         let requirements = std::mem::take(&mut self.instantiation_requirements);
         let errors_before = self.diagnostics.errors.len();
         let reported_before = self.diagnostics.reported_errors.clone();
@@ -81,6 +94,7 @@ impl TypeChecker {
                 span,
                 caller_parameters: Vec::new(),
                 reached_because: None,
+                through_slot: None,
             })
             .collect();
         // The methods these bodies run on what they pin — an element's
@@ -92,10 +106,9 @@ impl TypeChecker {
             let stated = requirements
                 .get(&site.callee)
                 .map_or(&[][..], Vec::as_slice);
-            self.answer_pinning_site(stated, site, &scope.0);
+            self.answer_pinning_site(stated, site, scope);
         }
         self.instantiation_requirements = requirements;
-        self.global_scope = Some(scope);
         self.diagnostics.reported_errors = reported_before;
         self.diagnostics.errors.split_off(errors_before)
     }

@@ -320,3 +320,63 @@ fn main()
         "grows on every call",
     );
 }
+
+const MAKER: &str = r#"
+trait Maker<T>
+    fn make() int
+
+class Impl<T> implements Maker<T>
+    public var v T
+    fn init(v T)
+        self.v = v
+    fn make() int
+        let b = Box<T>(self.v)
+        return b.label()
+
+fn as_maker<T>(v T) Maker<T>
+    return Impl<T>(v)
+"#;
+
+/// A slot is compiled only for a call through a receiver the instance can
+/// stand behind: `make` is called through `Maker<int>`, so the `Impl<Handle>`
+/// built in `as_maker` never runs its `make`, and the `Box<Handle>` that
+/// `make` would build is never built. The trait above `Box` stays plain, and
+/// a keeping function is lent its value, which stays usable.
+#[test]
+fn a_resource_instance_only_an_unread_slot_would_build_leaves_the_trait_plain() {
+    assert_heap_guard_output(
+        &with_shelving(&format!(
+            "{MAKER}\n{}",
+            r#"
+fn main()
+    let unused = as_maker(Handle(7))
+    let m = as_maker(3)
+    println(f"{m.make()}")
+    let s Shelving = Box<int>(6)
+    keep_shelving(s)
+    keep_shelving(s)
+    println("end")
+"#
+        )),
+        "1\nkept\nleaving keep\nkept\nleaving keep\nend\nclosed 7",
+    );
+}
+
+/// The same slot, read through a receiver the `Impl<Handle>` stands behind,
+/// builds the `Box<Handle>`, so the trait above it is a resource and its
+/// value cannot be handed on twice.
+#[test]
+fn a_resource_instance_a_read_slot_builds_makes_the_trait_a_resource() {
+    let program = with_shelving(&format!(
+        "{MAKER}\n{}",
+        r#"
+fn main()
+    let h = as_maker(Handle(7))
+    println(f"{h.make()}")
+    let s Shelving = Box<int>(6)
+    keep_shelving(s)
+    keep_shelving(s)
+"#
+    ));
+    assert_compiler_error(&program, "MER_OWN_003");
+}

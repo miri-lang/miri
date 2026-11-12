@@ -27,7 +27,7 @@ use super::context::{resolve_method_source, Context, TypeDefinition};
 use super::expressions::calls::type_arg_is_concrete;
 use super::instantiation_requirements::{
     spells_a_type, written_type, GenericBodyId, InstantiationRequirements, Obligation, Pin,
-    PinningSite, ReachedBecause, SELF_PIN,
+    PinningSite, ReachedBecause, SlotRead, SELF_PIN,
 };
 use super::trait_self::self_trait_name;
 use super::{ProtocolWalk, TypeChecker};
@@ -46,6 +46,7 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::RelatedNote;
 use crate::error::syntax::Span;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// An instance of a class converted to a trait: the sites each method called
 /// through that trait would pin, and the traits a receiver holding it can be.
@@ -59,6 +60,10 @@ pub(crate) struct TraitConversion {
     reached: Vec<(String, Vec<Option<Type>>)>,
     /// The converted instance's own type.
     instance: Type,
+    /// The converted instance's class, and what the instance pins its
+    /// parameters to.
+    class_name: String,
+    substitution: HashMap<String, Type>,
     trait_name: String,
 }
 
@@ -85,6 +90,39 @@ pub(crate) struct TraitMethodCall {
     /// Where the first such call is written, when it is in the program's own
     /// source rather than a module it imports.
     span: Option<Span>,
+}
+
+impl TraitConversion {
+    /// Whether `call` reads a slot of this conversion's vtable: it goes
+    /// through the trait converted to, or one above it, at arguments that
+    /// agree with the conversion's.
+    fn is_read_by(&self, call: &TraitMethodCall) -> bool {
+        reads_converted_slot(&self.reached, (&call.trait_name, &call.arguments))
+    }
+
+    /// The slot `call` reads of this conversion's vtable.
+    fn read_by(&self, call: &TraitMethodCall) -> SlotRead {
+        SlotRead {
+            class_name: self.class_name.clone(),
+            substitution: self.substitution.clone(),
+            instance: self.instance.clone(),
+            method: call.method.clone(),
+            converted: self.reached.clone(),
+            called: (call.trait_name.clone(), call.arguments.clone()),
+        }
+    }
+}
+
+/// Whether a call through `called_trait` at `called` reads a slot of a
+/// vtable whose instance stands behind each of `converted`: one of them is
+/// that trait, at arguments that agree.
+pub(super) fn reads_converted_slot(
+    converted: &[(String, Vec<Option<Type>>)],
+    (called_trait, called): (&str, &[Option<Type>]),
+) -> bool {
+    (converted.iter()).any(|(name, arguments)| {
+        name == called_trait && TypeChecker::arguments_agree(arguments, called)
+    })
 }
 
 impl TraitMethodCall {
@@ -562,6 +600,8 @@ impl TypeChecker {
             sites,
             reached,
             instance: conversion.instance.clone(),
+            class_name: conversion.class_name.to_string(),
+            substitution: conversion.substitution.clone(),
             trait_name: conversion.trait_name.to_string(),
         });
     }
@@ -609,22 +649,24 @@ impl TypeChecker {
     /// independent of where its value flows. A call through a receiver whose
     /// arguments are still parameters agrees with every conversion. Either can
     /// pin a slot nothing reaches at run time; neither leaves one reached
-    /// unpinned.
+    /// unpinned. Each site carries the conversion and the call ([`SlotRead`]),
+    /// so the bodies the program reaches are followed through the slot only
+    /// at the types the two still agree at.
     pub(super) fn sites_reached_through_trait_slots(&self) -> Vec<PinningSite> {
         let mut sites = Vec::new();
         for conversion in &self.trait_conversions {
             for call in &self.trait_method_calls {
-                let agrees = conversion.reached.iter().any(|(name, arguments)| {
-                    *name == call.trait_name && Self::arguments_agree(arguments, &call.arguments)
-                });
-                if agrees {
-                    let reason =
-                        call.reached_by_conversion(&conversion.instance, &conversion.trait_name);
-                    sites.extend(conversion.sites.iter().map(|site| PinningSite {
-                        reached_because: Some(reason.clone()),
-                        ..site.for_method(&call.method)
-                    }));
+                if !conversion.is_read_by(call) {
+                    continue;
                 }
+                let reason =
+                    call.reached_by_conversion(&conversion.instance, &conversion.trait_name);
+                let read = Rc::new(conversion.read_by(call));
+                sites.extend(conversion.sites.iter().map(|site| PinningSite {
+                    reached_because: Some(reason.clone()),
+                    through_slot: Some(Rc::clone(&read)),
+                    ..site.for_method(&call.method)
+                }));
             }
         }
         sites
@@ -1050,6 +1092,7 @@ fn derived_site(
         span: parent.span,
         caller_parameters: parent.caller_parameters.clone(),
         reached_because: parent.reached_because.clone(),
+        through_slot: parent.through_slot.clone(),
     }
 }
 

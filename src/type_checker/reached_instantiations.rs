@@ -20,16 +20,23 @@
 //! over every instantiation the program builds, whichever body builds it
 //! ([`TypeChecker::ownership_instantiations`]).
 //!
-//! The record is the type checker's own and lowering never reads it: the
-//! sites followed here include those a trait slot reaches, which lowering
-//! compiles only as far as the program's calls go, so listing them for
-//! lowering would have it compile, or refuse, instances it never reaches.
-//! Lowering finds every instantiation it compiles itself.
-// TODO: two functions now answer which instantiations a program builds,
-// this record and lowering's own worklist. They can disagree: an instance
-// recorded here that lowering never builds makes ownership stricter than
-// the program needs. Lowering should read one answer, with its trait-slot
-// withholding rule decided here, so the set equals what is compiled.
+//! A site a trait slot reaches ([`SlotRead`]) is followed only where
+//! lowering compiles the slot's body: where the call through the trait still
+//! agrees with the converted trait's arguments once the body writing the
+//! conversion is reached at concrete types, and where the body's obligations
+//! hold at the instance, as lowering withholds a body only a slot names
+//! otherwise. So a conversion `Impl<T>` to `Maker<T>` inside a generic
+//! function reached at `Handle`, beside calls through `Maker<int>` alone,
+//! records nothing `Impl<Handle>.make` would build.
+// TODO: two functions still answer which instantiations a program builds,
+// this record and lowering's own worklist, which finds every instance it
+// compiles from the bodies it lowers and never reads this one. They still
+// disagree where a call through a trait is written inside a generic body:
+// its receiver is recorded with the body's parameters open, so it agrees
+// with every conversion here, while lowering reads it at the types the body
+// is compiled at. And lowering reads a call whose receiver is not a bare
+// local as reaching every instance, so it compiles slot bodies this record
+// does not follow. Lowering should read one answer decided here.
 //!
 //! A body calling itself at a type built around its own parameter reaches a
 //! larger type on every step, and one doing so at two types reaches twice as
@@ -40,10 +47,12 @@
 //! any were: a value is lent where it could have been moved, never the
 //! reverse.
 
+use super::compiled_instances::CompiledInstance;
 use super::context::Context;
 use super::instantiation_requirements::{
-    parameters_spelled, spells_a_type, GenericBodyId, Pin, PinningSite,
+    parameters_spelled, spells_a_type, GenericBodyId, Pin, PinningSite, SlotRead,
 };
+use super::used_methods::reads_converted_slot;
 use super::utils::add_instantiation;
 use super::TypeChecker;
 use crate::ast::types::{Type, TypeKind};
@@ -69,6 +78,10 @@ pub(crate) struct BuiltClass {
     /// The body's parameters `arguments` spell.
     parameters: Vec<String>,
 }
+
+/// Whether lowering compiles a slot's body at an instance, by the class, the
+/// method and the instance's type.
+type SlotVerdicts = HashMap<(String, String, TypeKind), bool>;
 
 /// A generic body the program reaches, with the type each of its parameters
 /// is bound to there.
@@ -122,8 +135,13 @@ impl TypeChecker {
 
     /// Record every class instantiation a body the program reaches through
     /// `sites` builds, at the types that body is reached at, in
-    /// [`TypeChecker::reached_class_instantiations`].
-    pub(super) fn record_reached_instantiations(&mut self, sites: &[PinningSite]) {
+    /// [`TypeChecker::reached_class_instantiations`]. `context` is the
+    /// program's global scope, which a slot's obligations are answered in.
+    pub(super) fn record_reached_instantiations(
+        &mut self,
+        sites: &[PinningSite],
+        context: &Context,
+    ) {
         let built = std::mem::take(&mut self.classes_built_in_bodies);
         let mut written_in: HashMap<&GenericBodyId, Vec<&PinningSite>> = HashMap::new();
         for site in sites {
@@ -131,10 +149,11 @@ impl TypeChecker {
                 written_in.entry(caller).or_default().push(site);
             }
         }
+        let mut verdicts = SlotVerdicts::new();
         let no_bound = HashMap::new();
         let mut pending: Vec<ReachedBody> = (sites.iter())
             .filter(|site| site.caller_parameters.is_empty())
-            .filter_map(|site| self.reached_through(site, &no_bound))
+            .filter_map(|site| self.reached_through(site, &no_bound, context, &mut verdicts))
             .collect();
         let mut seen = HashSet::new();
         while let Some(reached) = pending.pop() {
@@ -147,8 +166,10 @@ impl TypeChecker {
             for class in built.get(&reached.body).into_iter().flatten() {
                 self.record_built_at(class, &reached.bound);
             }
-            let written = written_in.get(&reached.body).into_iter().flatten();
-            pending.extend(written.filter_map(|site| self.reached_through(site, &reached.bound)));
+            for site in written_in.get(&reached.body).into_iter().flatten() {
+                let next = self.reached_through(site, &reached.bound, context, &mut verdicts);
+                pending.extend(next);
+            }
         }
         self.classes_built_in_bodies = built;
         self.resource_types.take();
@@ -157,11 +178,14 @@ impl TypeChecker {
     /// The body `site` pins, reached at its pins restated at `bound`, the
     /// types the body writing the site is reached at. `None` when a pin
     /// spells a parameter `bound` leaves open, or is built past
-    /// [`MAX_FOLLOWED_TYPE_SIZE`].
+    /// [`MAX_FOLLOWED_TYPE_SIZE`], and when the site is a trait slot lowering
+    /// does not compile at `bound` ([`Self::compiles_slot_at`]).
     fn reached_through(
-        &self,
+        &mut self,
         site: &PinningSite,
         bound: &HashMap<String, Type>,
+        context: &Context,
+        verdicts: &mut SlotVerdicts,
     ) -> Option<ReachedBody> {
         if !(site.caller_parameters.iter()).all(|parameter| bound.contains_key(parameter)) {
             return None;
@@ -177,10 +201,69 @@ impl TypeChecker {
             }
             restated.insert(parameter.clone(), ty);
         }
+        if let Some(read) = &site.through_slot {
+            if !self.compiles_slot_at(read, bound, context, verdicts) {
+                return None;
+            }
+        }
         Some(ReachedBody {
             body: site.callee.clone(),
             bound: restated,
         })
+    }
+
+    /// Whether lowering compiles the body of the slot `read` names, in a
+    /// body reached at `bound`: the call through the trait still agrees with
+    /// the converted trait's arguments restated at `bound`, and the method's
+    /// obligations hold at the instance restated there. Lowering fills a slot
+    /// only for a call whose receiver the instance stands behind, and
+    /// withholds a body only a slot names where its obligations fail.
+    fn compiles_slot_at(
+        &mut self,
+        read: &SlotRead,
+        bound: &HashMap<String, Type>,
+        context: &Context,
+        verdicts: &mut SlotVerdicts,
+    ) -> bool {
+        let converted: Vec<(String, Vec<Option<Type>>)> = (read.converted.iter())
+            .map(|(name, arguments)| (name.clone(), self.restated_arguments(arguments, bound)))
+            .collect();
+        let (called_trait, called) = &read.called;
+        if !reads_converted_slot(&converted, (called_trait, called)) {
+            return false;
+        }
+        let receiver = self.substitute_type(&read.instance, bound);
+        let key = (
+            read.class_name.clone(),
+            read.method.clone(),
+            receiver.kind.clone(),
+        );
+        if let Some(&accepted) = verdicts.get(&key) {
+            return accepted;
+        }
+        let instance = CompiledInstance {
+            class_name: read.class_name.clone(),
+            method: read.method.clone(),
+            substitution: (read.substitution.iter())
+                .map(|(parameter, ty)| (parameter.clone(), self.substitute_type(ty, bound)))
+                .collect(),
+            span: receiver.span,
+            receiver,
+        };
+        let accepted = self.instance_refusals_in(&instance, context).is_empty();
+        verdicts.insert(key, accepted);
+        accepted
+    }
+
+    /// `arguments`, each restated at `bound`.
+    fn restated_arguments(
+        &self,
+        arguments: &[Option<Type>],
+        bound: &HashMap<String, Type>,
+    ) -> Vec<Option<Type>> {
+        (arguments.iter())
+            .map(|argument| (argument.as_ref()).map(|ty| self.substitute_type(ty, bound)))
+            .collect()
     }
 
     /// Record `class`, built in a body reached at `bound`, at the types

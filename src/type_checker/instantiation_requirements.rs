@@ -45,6 +45,7 @@ use crate::error::diagnostic::RelatedNote;
 use crate::error::syntax::Span;
 use crate::type_checker::diagnostics::spelled;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// The declaration a requirement was recorded against: the type that declares
 /// the method, or the [`free_function_owner`] of the module declaring a plain
@@ -354,6 +355,35 @@ pub(crate) struct PinningSite {
     /// this one while answering reads a type argument as one of these
     /// parameters, and so hands its requirement on to `caller`'s own sites.
     pub(super) caller_parameters: Vec<String>,
+    /// The conversion and the call through a trait that make the site a
+    /// vtable slot the program reads, when that is how the program reaches
+    /// `callee`; shared by every site derived from it.
+    pub(super) through_slot: Option<Rc<SlotRead>>,
+}
+
+/// A vtable slot read by a call through a trait, as the site pinning the
+/// slot's body records it, spelled in the parameters of the body writing
+/// the conversion. Once that body is reached at concrete types the slot is
+/// read there only if the call's receiver still agrees with the converted
+/// trait's arguments, and its body is compiled there only if its
+/// obligations hold at the instance
+/// ([`super::reached_instantiations`]).
+#[derive(Debug)]
+pub(crate) struct SlotRead {
+    /// The converted instance's class.
+    pub(super) class_name: String,
+    /// What the instance pins its class's parameters to.
+    pub(super) substitution: HashMap<String, Type>,
+    /// The converted instance's own type.
+    pub(super) instance: Type,
+    /// The method the call reads the slot of.
+    pub(super) method: String,
+    /// The trait converted to and each trait above it, with the arguments
+    /// the conversion pins each one's parameters to.
+    pub(super) converted: Vec<(String, Vec<Option<Type>>)>,
+    /// The trait the call goes through and the arguments its receiver
+    /// spells.
+    pub(super) called: (String, Vec<Option<Type>>),
 }
 
 impl PinningSite {
@@ -1051,6 +1081,7 @@ impl TypeChecker {
             span,
             caller_parameters,
             reached_because: None,
+            through_slot: None,
         })
     }
 
@@ -1132,7 +1163,7 @@ impl TypeChecker {
             self.answer_pinning_site(stated, site, context);
         }
         self.instantiation_requirements = requirements;
-        self.record_reached_instantiations(&sites);
+        self.record_reached_instantiations(&sites, context);
     }
 
     /// Answer every obligation the body `site` pins has stated.
@@ -1764,6 +1795,7 @@ mod tests {
             span: Span::new(0, 0),
             caller_parameters: Vec::new(),
             reached_because: None,
+            through_slot: None,
         }
     }
 

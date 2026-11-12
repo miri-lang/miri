@@ -117,3 +117,49 @@ fn test_a_class_built_in_a_generic_function_no_one_calls_is_recorded_at_no_type(
         "no call binds T, so no concrete Box is recorded"
     );
 }
+
+const NESTING_SEQ: &str = r#"
+use system.collections.list
+
+trait Seq<T>
+    fn size() int
+    fn nested() Seq<List<T>>
+
+class Vec<T> implements Seq<T>
+    items List<T>
+    fn init(items List<T>)
+        self.items = items
+    fn size() int
+        return self.items.length()
+    fn nested() Seq<List<T>>
+        let outer = List<List<T>>()
+        outer.push(self.items)
+        return Vec<List<T>>(outer)
+
+fn main()
+    let s Seq<String> = Vec<String>(List(["a"]))
+    let n1 = s.nested()
+    let n2 = n1.nested()
+    let n3 = n2.nested()
+    println(f"{n3.size()}")
+"#;
+
+/// A slot body is followed only at an instance some call through the trait
+/// reads it at: `nested` is called through `Seq<String>` up to
+/// `Seq<List<List<String>>>`, so the `Vec` it builds stops three `List`s
+/// deep, where the calls stop, rather than growing to the bound on followed
+/// types.
+#[test]
+fn test_a_class_built_in_a_slot_body_is_recorded_only_as_deep_as_calls_read_the_slot() {
+    let inst = ownership_instantiations(NESTING_SEQ);
+    let deepest = (inst.get("Vec").into_iter().flatten())
+        .filter_map(|tuple| tuple.first())
+        .map(|ty| format!("{:?}", ty.kind).matches("Custom(\"List\"").count())
+        .max();
+    assert_eq!(
+        deepest,
+        Some(3),
+        "recorded Vec instances: {:?}",
+        inst.get("Vec")
+    );
+}
