@@ -32,7 +32,7 @@ use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::function_analysis::ModuleId;
 use super::operators::{is_ordering_op, missing_ordering_at_instantiation_message};
 use super::type_mismatch::{MismatchExtras, TypeSides};
-use super::used_methods::held_value;
+use super::used_methods::{held_value, CallWriter};
 use super::TypeChecker;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::type_arguments::TypeArgKind;
@@ -384,6 +384,8 @@ pub(crate) struct SlotRead {
     /// The trait the call goes through and the arguments its receiver
     /// spells.
     pub(super) called: (String, Vec<Option<Type>>),
+    /// The body the call is written in.
+    pub(super) writer: CallWriter,
 }
 
 impl PinningSite {

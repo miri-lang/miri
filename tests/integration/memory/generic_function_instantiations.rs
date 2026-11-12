@@ -380,3 +380,101 @@ fn main()
     ));
     assert_compiler_error(&program, "MER_OWN_003");
 }
+
+/// A call through a trait written in a generic function nothing calls reads
+/// no slot: its receiver `Maker<T>` is never bound to a type, so the
+/// `Impl<Handle>` built in `as_maker` never runs its `make`, and the trait
+/// above `Box` stays plain.
+#[test]
+fn a_trait_call_in_a_generic_function_nothing_calls_leaves_the_trait_plain() {
+    assert_heap_guard_output(
+        &with_shelving(&format!(
+            "{MAKER}\n{}",
+            r#"
+fn never_called<T>(m Maker<T>) int
+    return m.make()
+
+fn main()
+    let unused = as_maker(Handle(7))
+    let s Shelving = Box<int>(6)
+    keep_shelving(s)
+    keep_shelving(s)
+    println("end")
+"#
+        )),
+        "kept\nleaving keep\nkept\nleaving keep\nend\nclosed 7",
+    );
+}
+
+/// A call through a trait written in a generic function reads the slot only
+/// at the types that function is called at: called at `int` alone, its
+/// `Maker<T>` is a `Maker<int>`, which the `Impl<Handle>` never stands
+/// behind, so the trait above `Box` stays plain.
+#[test]
+fn a_trait_call_in_a_generic_function_called_at_a_plain_type_leaves_the_trait_plain() {
+    assert_heap_guard_output(
+        &with_shelving(&format!(
+            "{MAKER}\n{}",
+            r#"
+fn make_through<T>(m Maker<T>) int
+    return m.make()
+
+fn main()
+    let unused = as_maker(Handle(7))
+    let m = as_maker(3)
+    println(f"{make_through(m)}")
+    let s Shelving = Box<int>(6)
+    keep_shelving(s)
+    keep_shelving(s)
+    println("end")
+"#
+        )),
+        "1\nkept\nleaving keep\nkept\nleaving keep\nend\nclosed 7",
+    );
+}
+
+/// A call through a trait written in a closure belongs to the body the
+/// closure is written in, so a closure in `main` reads the `Impl<Handle>`
+/// slot, builds the `Box<Handle>`, and the trait above it is a resource.
+#[test]
+fn a_trait_call_in_a_closure_in_main_makes_the_trait_a_resource() {
+    let program = with_shelving(&format!(
+        "{MAKER}\n{}",
+        r#"
+fn main()
+    let h = as_maker(Handle(7))
+    let run = fn() int: h.make()
+    println(f"{run()}")
+    let s Shelving = Box<int>(6)
+    keep_shelving(s)
+    keep_shelving(s)
+"#
+    ));
+    assert_compiler_error(&program, "MER_OWN_003");
+}
+
+/// A call through a field reads the slot at the field's declared trait
+/// arguments: `holder.m` is a `Maker<int>`, which the `Impl<Handle>` never
+/// stands behind, so the trait above `Box` stays plain.
+#[test]
+fn a_trait_call_through_a_field_reads_the_slot_at_the_fields_type() {
+    assert_heap_guard_output(
+        &with_shelving(&format!(
+            "{MAKER}\n{}",
+            r#"
+struct MakerHolder
+    m Maker<int>
+
+fn main()
+    let unused = as_maker(Handle(7))
+    let holder = MakerHolder(m: as_maker(3))
+    println(f"{holder.m.make()}")
+    let s Shelving = Box<int>(6)
+    keep_shelving(s)
+    keep_shelving(s)
+    println("end")
+"#
+        )),
+        "1\nkept\nleaving keep\nkept\nleaving keep\nend\nclosed 7",
+    );
+}

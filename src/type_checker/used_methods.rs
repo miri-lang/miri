@@ -26,8 +26,8 @@
 use super::context::{resolve_method_source, Context, TypeDefinition};
 use super::expressions::calls::type_arg_is_concrete;
 use super::instantiation_requirements::{
-    spells_a_type, written_type, GenericBodyId, InstantiationRequirements, Obligation, Pin,
-    PinningSite, ReachedBecause, SlotRead, SELF_PIN,
+    parameters_spelled, spells_a_type, written_type, GenericBodyId, InstantiationRequirements,
+    Obligation, Pin, PinningSite, ReachedBecause, SlotRead, SELF_PIN,
 };
 use super::trait_self::self_trait_name;
 use super::{ProtocolWalk, TypeChecker};
@@ -84,12 +84,30 @@ struct InstanceConversion<'c> {
 /// receiver holds.
 #[derive(Debug)]
 pub(crate) struct TraitMethodCall {
+    /// The body the call is written in, and the parameters of it the
+    /// receiver's trait arguments spell.
+    writer: CallWriter,
     trait_name: String,
     method: String,
     arguments: Vec<Option<Type>>,
     /// Where the first such call is written, when it is in the program's own
     /// source rather than a module it imports.
     span: Option<Span>,
+}
+
+/// The body a call through a trait is written in, with the parameters of
+/// that body its receiver's trait arguments spell. A closure's call is
+/// written in the body the closure is. A call spelling none is read as
+/// written, as a site pinning concrete types is followed wherever it is
+/// written; one spelling some is read at each set of types the program
+/// reaches its body at, restated there.
+#[derive(Debug, Clone)]
+pub(crate) struct CallWriter {
+    /// The body the call is written in, `None` when it is outside every body
+    /// or written where no body is known.
+    pub(super) body: Option<GenericBodyId>,
+    /// The body's own parameters the receiver's trait arguments spell.
+    pub(super) parameters: Vec<String>,
 }
 
 impl TraitConversion {
@@ -109,6 +127,7 @@ impl TraitConversion {
             method: call.method.clone(),
             converted: self.reached.clone(),
             called: (call.trait_name.clone(), call.arguments.clone()),
+            writer: call.writer.clone(),
         }
     }
 }
@@ -264,8 +283,8 @@ impl TypeChecker {
             let TypeKind::Custom(_, arguments) = &walk.iterator.kind else {
                 return;
             };
-            let arguments = arguments.as_deref();
-            self.record_trait_method_call(ITERATOR_TRAIT_NAME, NEXT_METHOD_NAME, arguments, span);
+            let called = (ITERATOR_TRAIT_NAME, NEXT_METHOD_NAME);
+            self.record_trait_method_call_in(called, arguments.as_deref(), span, context);
             return;
         };
         self.record_iterator_instantiation(&class_name, &walk.iterator);
@@ -607,7 +626,27 @@ impl TypeChecker {
     }
 
     /// Record a call to `method` through a receiver of the trait or class
-    /// `trait_name` at `type_args`, written at `span`.
+    /// `trait_name` at `type_args`, written at `span` in the body `context`
+    /// is checking. `type_args` are the receiver's own, whatever place holds
+    /// it: a field or an element is read at the type it is declared with.
+    pub(crate) fn record_trait_method_call_in(
+        &mut self,
+        (trait_name, method): (&str, &str),
+        type_args: Option<&[TypeArgument]>,
+        span: Span,
+        context: &Context,
+    ) {
+        let arguments = self.instance_arguments(trait_name, type_args);
+        let writer = CallWriter {
+            body: self.current_body(context),
+            parameters: parameters_spelled(arguments.iter().flatten(), context),
+        };
+        self.record_call_through_trait(writer, (trait_name, method), arguments, span);
+    }
+
+    /// Record a call to `method` through a receiver of the trait or class
+    /// `trait_name` at `type_args`, written at `span` where no body is known,
+    /// so it is read as written.
     pub(crate) fn record_trait_method_call(
         &mut self,
         trait_name: &str,
@@ -615,21 +654,41 @@ impl TypeChecker {
         type_args: Option<&[TypeArgument]>,
         span: Span,
     ) {
+        let arguments = self.instance_arguments(trait_name, type_args);
+        let writer = CallWriter {
+            body: None,
+            parameters: Vec::new(),
+        };
+        self.record_call_through_trait(writer, (trait_name, method), arguments, span);
+    }
+
+    /// Record a call through a trait, once per body, trait, method and
+    /// receiver arguments.
+    fn record_call_through_trait(
+        &mut self,
+        writer: CallWriter,
+        (trait_name, method): (&str, &str),
+        arguments: Vec<Option<Type>>,
+        span: Span,
+    ) {
         if self.suppress_diagnostics {
             return;
         }
-        let arguments = self.instance_arguments(trait_name, type_args);
         let span = self
             .modules
             .current_source_override
             .is_none()
             .then_some(span);
         let recorded = self.trait_method_calls.iter_mut().find(|call| {
-            call.trait_name == trait_name && call.method == method && call.arguments == arguments
+            call.writer.body == writer.body
+                && call.trait_name == trait_name
+                && call.method == method
+                && call.arguments == arguments
         });
         match recorded {
             Some(call) => call.span = call.span.or(span),
             None => self.trait_method_calls.push(TraitMethodCall {
+                writer,
                 trait_name: trait_name.to_string(),
                 method: method.to_string(),
                 arguments,
@@ -649,9 +708,10 @@ impl TypeChecker {
     /// independent of where its value flows. A call through a receiver whose
     /// arguments are still parameters agrees with every conversion. Either can
     /// pin a slot nothing reaches at run time; neither leaves one reached
-    /// unpinned. Each site carries the conversion and the call ([`SlotRead`]),
-    /// so the bodies the program reaches are followed through the slot only
-    /// at the types the two still agree at.
+    /// unpinned. Each site carries the conversion and the call, with the body
+    /// writing it ([`SlotRead`]), so the bodies the program reaches are
+    /// followed through the slot only at the types the two agree at once each
+    /// is restated at the types its own body is reached at.
     pub(super) fn sites_reached_through_trait_slots(&self) -> Vec<PinningSite> {
         let mut sites = Vec::new();
         for conversion in &self.trait_conversions {
