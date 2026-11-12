@@ -2,100 +2,29 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 //! The shape of a type as instantiation sees it: the constructor it is built
-//! with and the types it is built from, how deep those nest, and which type
-//! parameters it still leaves open.
+//! with and the types it is built from, and which type parameters it still
+//! leaves open.
 //!
-//! Lowering bounds the instantiations a program may need by this shape, and
-//! the drop-instantiation closure the backend reads bounds itself by the same
-//! measure, so a type one side refuses is refused by the other.
+//! How deep a type nests and how many types it is built from, and the bounds
+//! on both, are stated once in [`crate::type_checker::instantiation_limits`]
+//! and read from there by every stage that bounds an instantiation.
 
-use super::{instantiation_argument, written_component_type};
 use crate::ast::type_arguments::{TypeArgKind, TypeArgument, ValueArg};
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::symbol::token::{type_kind_to_mangle_str, MAX_TOKEN_DEPTH};
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::generics::extract_value_generic_kind;
+use crate::type_checker::instantiation_limits::{self, Constructor};
+pub use crate::type_checker::instantiation_limits::{
+    arguments_type_size, deepest_argument_depth, instance_type_depth, MAX_INSTANCE_TYPE_DEPTH,
+    MAX_INSTANCE_TYPE_SIZE,
+};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-/// How many type constructors deep one instance may nest, counting the class
-/// itself: `Vec<List<List<String>>>` is three deep.
-///
-/// Held under the symbol mangler's own depth, so every instance within it has
-/// a per-instantiation name, and a body is never shared across instances
-/// because the mangler ran out of depth.
-pub const MAX_INSTANCE_TYPE_DEPTH: usize = 32;
-
+// Every instance within the depth bound has a per-instantiation name, so a
+// body is never shared across instances because the mangler ran out of depth.
 const _: () = assert!(MAX_INSTANCE_TYPE_DEPTH < MAX_TOKEN_DEPTH);
-
-/// How many types the arguments of one instance may be built from, all told,
-/// each counted once per place it is written: `(int, (int, String))` is five.
-///
-/// The depth bound alone admits a type that doubles on every level, `(T, T)`
-/// inside a body at `T`, until it holds 2^[`MAX_INSTANCE_TYPE_DEPTH`] types;
-/// every instance on the way is lowered, spelled and hashed at its full size,
-/// so such a program would be refused only after exponential work. This bound
-/// is far above any type a program writes, and well below the size at which
-/// lowering one instance becomes slow.
-pub const MAX_INSTANCE_TYPE_SIZE: usize = 1024;
-
-/// How many types `args` are built from, each counted once per place it is
-/// written, stopping one past [`MAX_INSTANCE_TYPE_SIZE`].
-pub fn arguments_type_size<'t>(args: impl IntoIterator<Item = &'t Type>) -> usize {
-    let mut remaining = MAX_INSTANCE_TYPE_SIZE + 1;
-    for arg in args {
-        count_types(arg, &mut remaining);
-    }
-    MAX_INSTANCE_TYPE_SIZE + 1 - remaining
-}
-
-/// Count `ty` and every type it is built from against `remaining`, stopping
-/// once it runs out.
-fn count_types(ty: &Type, remaining: &mut usize) {
-    let Some(rest) = remaining.checked_sub(1) else {
-        return;
-    };
-    *remaining = rest;
-    for part in constructor_parts(ty).1 {
-        count_types(&part, remaining);
-    }
-}
-
-/// How many type constructors deep an instance at `args` nests, counting its
-/// class: one more than its deepest argument. Past
-/// [`MAX_INSTANCE_TYPE_DEPTH`] the count stops one level beyond it, which is
-/// all a caller asking whether the bound is passed needs.
-pub fn instance_type_depth(args: &[Type]) -> usize {
-    1 + deepest_argument_depth(args)
-}
-
-/// How many type constructors deep the deepest of `args` nests, stopping one
-/// level past [`MAX_INSTANCE_TYPE_DEPTH`].
-pub fn deepest_argument_depth<'t>(args: impl IntoIterator<Item = &'t Type>) -> usize {
-    args.into_iter()
-        .map(|arg| type_depth(arg, MAX_INSTANCE_TYPE_DEPTH))
-        .max()
-        .unwrap_or(0)
-}
-
-/// How many type constructors deep `ty` nests, a type built from nothing
-/// counting none, looking no further than `budget` levels down.
-fn type_depth(ty: &Type, budget: usize) -> usize {
-    let parts = constructor_parts(ty).1;
-    if parts.is_empty() {
-        return 0;
-    }
-    match budget.checked_sub(1) {
-        Some(rest) => {
-            1 + parts
-                .iter()
-                .map(|part| type_depth(part, rest))
-                .max()
-                .unwrap_or(0)
-        }
-        None => 1,
-    }
-}
 
 /// Whether `ty` names a type parameter no substitution has bound, anywhere
 /// inside it: a type still open is not yet an instantiation at all.
@@ -141,73 +70,15 @@ fn mentions_type_parameter_within(
 }
 
 /// `ty` as its outermost constructor and the types it is built from, in
-/// order. A value generic's size and every type built from nothing are
-/// leaves, their constructor the token the mangler spells them with. A
-/// built-in constructor is spelled with a leading digit, which no declared
-/// type's name can start with, so a class named `tuple` is never read as one.
+/// order ([`instantiation_limits::constructor_parts`]), a leaf's constructor
+/// spelled as the token the mangler spells it with.
 pub(crate) fn constructor_parts(ty: &Type) -> (Cow<'_, str>, Vec<Type>) {
-    let leaf = || (type_kind_to_mangle_str(&ty.kind), Vec::new());
-    if extract_value_generic_kind(&ty.kind).is_some() {
-        return leaf();
-    }
-    let arguments = |args: &[&TypeArgument]| -> Vec<Type> {
-        args.iter()
-            .filter_map(|arg| instantiation_argument(arg))
-            .collect()
+    let (constructor, parts) = instantiation_limits::constructor_parts(ty);
+    let head = match constructor {
+        Constructor::Named(name) => Cow::Borrowed(name),
+        Constructor::Leaf(kind) => type_kind_to_mangle_str(kind),
     };
-    match &ty.kind {
-        TypeKind::Custom(name, args) => {
-            let args: Vec<&TypeArgument> = args.iter().flatten().collect();
-            (Cow::Borrowed(name.as_str()), arguments(&args))
-        }
-        TypeKind::Generic(name, _) => (Cow::Borrowed(name.as_str()), Vec::new()),
-        TypeKind::Option(inner) => (Cow::Borrowed("0option"), vec![(**inner).clone()]),
-        TypeKind::Linear(inner) => (Cow::Borrowed("0linear"), vec![(**inner).clone()]),
-        TypeKind::Meta(inner) => (Cow::Borrowed("0meta"), vec![(**inner).clone()]),
-        TypeKind::Tuple(elements) => {
-            let elements: Vec<&TypeArgument> = elements.iter().collect();
-            (Cow::Borrowed("0tuple"), arguments(&elements))
-        }
-        TypeKind::OneOf(members) => {
-            let members: Vec<&TypeArgument> = members.iter().collect();
-            (Cow::Borrowed("0oneof"), arguments(&members))
-        }
-        TypeKind::List(element) => (Cow::Borrowed("0list"), arguments(&[element])),
-        TypeKind::Set(element) => (Cow::Borrowed("0set"), arguments(&[element])),
-        TypeKind::Future(element) => (Cow::Borrowed("0future"), arguments(&[element])),
-        TypeKind::Array(element, size) => (Cow::Borrowed("0array"), arguments(&[element, size])),
-        TypeKind::Map(key, value) => (Cow::Borrowed("0map"), arguments(&[key, value])),
-        TypeKind::Result(ok, err) => (Cow::Borrowed("0result"), arguments(&[ok, err])),
-        TypeKind::Function(function) => {
-            let parts = function.params.iter().map(|param| &*param.typ);
-            let parts = parts.chain(function.return_type.as_deref());
-            (
-                Cow::Borrowed("0fn"),
-                parts.filter_map(written_component_type).collect(),
-            )
-        }
-        TypeKind::Int
-        | TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I32
-        | TypeKind::I64
-        | TypeKind::I128
-        | TypeKind::U8
-        | TypeKind::U16
-        | TypeKind::U32
-        | TypeKind::U64
-        | TypeKind::U128
-        | TypeKind::Float
-        | TypeKind::F16
-        | TypeKind::F32
-        | TypeKind::F64
-        | TypeKind::String
-        | TypeKind::Boolean
-        | TypeKind::Identifier
-        | TypeKind::RawPtr
-        | TypeKind::Void
-        | TypeKind::Error => leaf(),
-    }
+    (head, parts)
 }
 
 /// The name of every type parameter `ty` leaves open, anywhere inside it, in

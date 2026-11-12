@@ -62,6 +62,7 @@ mod gpu_buffer_init;
 mod gpu_integer_width;
 mod hidden_types;
 pub(crate) mod hygiene;
+pub mod instantiation_limits;
 pub(crate) mod instantiation_requirements;
 pub(crate) mod int_literals;
 pub(crate) mod iteration_plan;

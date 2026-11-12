@@ -18,6 +18,9 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::type_arguments::{rewritten, TypeArgKind, TypeArgument, ValueArg};
 use crate::ast::types::{Type, TypeKind};
 use crate::type_checker::context::{ClassDefinition, GenericDefinition, TypeDefinition};
+pub(crate) use crate::type_checker::instantiation_limits::{
+    instantiation_argument, written_component_type,
+};
 use std::collections::HashMap;
 
 /// Apply a generic substitution mapping to a type argument, replacing generic
@@ -237,6 +240,8 @@ fn class_field_types(
 ///
 /// A nullable argument (`T` at `int?`) denotes the option it stands for, so it
 /// is folded into `Option` here rather than by every caller.
+// TODO: `ast::type_arguments::argument_type_marked` answers the same question;
+// the callers here should read that one function and this copy be removed.
 pub(crate) fn type_argument(arg: &TypeArgument) -> Option<Type> {
     let TypeArgKind::Type(arg_ty, is_nullable) = &arg.node else {
         return None;
@@ -248,34 +253,10 @@ pub(crate) fn type_argument(arg: &TypeArgument) -> Option<Type> {
     })
 }
 
-/// The type a closure type's parameter or return is written as, a nullable
-/// mark read as the option it denotes; `None` for anything else.
-pub(crate) fn written_component_type(expr: &Expression) -> Option<Type> {
-    let ExpressionKind::Type(ty, nullable) = &expr.node else {
-        return None;
-    };
-    Some(if *nullable {
-        Type::new(TypeKind::Option(ty.clone()), ty.span)
-    } else {
-        (**ty).clone()
-    })
-}
-
 /// Every argument of `args` as the type it denotes (see [`type_argument`]), or
 /// `None` when any of them is a value rather than a type.
 pub(crate) fn type_arguments(args: &[TypeArgument]) -> Option<Vec<Type>> {
     args.iter().map(type_argument).collect()
-}
-
-/// One argument of a generic-class reference as the instantiation registry
-/// records it and every per-instantiation symbol is mangled from: the type
-/// [`type_argument`] reads, or the marker standing for a value generic. `None`
-/// when the argument is neither.
-///
-/// A static call, a vtable and a drop thunk all name an instantiation from
-/// what this answers, so they cannot spell one instantiation two ways.
-pub(crate) fn instantiation_argument(arg: &TypeArgument) -> Option<Type> {
-    type_argument(arg).or_else(|| crate::type_checker::generics::value_generic_slot(arg))
 }
 
 /// The type arguments `arg_exprs` spell for a generic class of `arity`
