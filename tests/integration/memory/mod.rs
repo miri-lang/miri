@@ -22,6 +22,7 @@ pub mod functions;
 pub mod generic_managed_type_arguments;
 pub mod generics;
 pub mod heap_guard;
+pub mod kept_base_class_calls;
 pub mod kept_function_values;
 pub mod kept_receivers;
 pub mod kept_virtual_calls;

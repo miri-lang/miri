@@ -10,8 +10,8 @@
 //! - Error reporting
 
 use super::context::{
-    class_implements_trait, resolve_method_source, ClassDefinition, Context, GenericDefinition,
-    MethodInfo, TypeDefinition,
+    class_implements_trait, class_is_extended, resolve_method_source, ClassDefinition, Context,
+    GenericDefinition, MethodInfo, TypeDefinition,
 };
 use super::TypeChecker;
 use crate::ast::factory::make_type;
@@ -180,20 +180,23 @@ pub fn runs_drop_hook(
 }
 
 /// Whether consuming a value of `kind` hands its reference on: its type runs
-/// a drop hook of its own, or it is held at a trait and is a resource
-/// ([`is_resource`]), a counted block its holder gives up whole. The one
-/// predicate both the consumption check and the owned parameters
-/// ([`super::kept_parameters`]) read. `resources` answers [`is_resource`]
-/// over `type_definitions`.
+/// a drop hook of its own, or it is held at a trait or at a class another
+/// class extends and is a resource ([`is_resource`]), a counted block its
+/// holder gives up whole. The one predicate both the consumption check and
+/// the owned parameters ([`super::kept_parameters`]) read. `resources`
+/// answers [`is_resource`] over `type_definitions`.
 pub(crate) fn hands_on_a_reference(
     kind: &TypeKind,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
     resources: &ResourceTypes,
 ) -> bool {
-    let is_held_at_a_trait = matches!(kind, TypeKind::Custom(name, _)
-        if matches!(type_definitions.get(name), Some(TypeDefinition::Trait(_))));
-    if is_held_at_a_trait {
-        return resources.holds(kind);
+    let is_held_at_a_supertype = || {
+        matches!(kind, TypeKind::Custom(name, _)
+            if matches!(type_definitions.get(name), Some(TypeDefinition::Trait(_)))
+                || class_is_extended(name, type_definitions))
+    };
+    if resources.holds(kind) && is_held_at_a_supertype() {
+        return true;
     }
     runs_drop_hook(kind, type_definitions)
 }
@@ -240,7 +243,8 @@ impl ResourceTypes {
 ///
 /// A value held at a trait is a resource when releasing it may run a hook:
 /// the trait declares one, or some class implementing it is a resource. A
-/// trait no resource implements stays a plain counted value.
+/// trait no resource implements stays a plain counted value. A value held at
+/// a class is likewise a resource when some class extending it is one.
 ///
 /// Resource types are subject to use-after-move tracking inside function bodies.
 /// Managed types (String, List, collections, RC'd classes) are NOT resources.
@@ -298,11 +302,9 @@ fn is_named_resource<'a>(
             .fields
             .iter()
             .any(|(_, ty, _)| is_resource_inner(&ty.kind, type_definitions, visited)),
-        // TODO: a class is not yet a resource when only a subclass of it is,
-        // though a value held at it may be that subclass: a binding typed at
-        // such a base is lent to a vtable slot owning the receiver, so the
-        // subclass's hook runs after the call returns and a second call is
-        // not refused.
+        // A class is a resource when it runs a hook, holds a resource, or is
+        // extended by a class that is one: a value held at it may be that
+        // subclass, and releasing it then reaches the subclass's hook.
         Some(TypeDefinition::Class(def)) => {
             if has_drop_hook(name, type_definitions) {
                 return true;
@@ -310,6 +312,11 @@ fn is_named_resource<'a>(
             def.fields
                 .iter()
                 .any(|(_, fi)| is_resource_inner(&fi.ty.kind, type_definitions, visited))
+                || type_definitions.iter().any(|(subclass, definition)| {
+                    matches!(definition, TypeDefinition::Class(sub)
+                        if sub.base_class.as_deref() == Some(name))
+                        && is_named_resource(subclass, type_definitions, visited)
+                })
         }
         Some(TypeDefinition::Enum(_)) => has_drop_hook(name, type_definitions),
         Some(TypeDefinition::Trait(_)) => {
