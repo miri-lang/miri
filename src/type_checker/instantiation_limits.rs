@@ -354,6 +354,38 @@ pub fn polymorphic_recursion(
     growth: &Growth,
     span: Span,
 ) -> LoweringError {
+    let refusal = growth_refusal(class, args, limit, growth);
+    let error = LoweringError::coded(
+        DiagnosticCode::MirPolymorphicRecursion,
+        refusal.message,
+        span,
+        Some(refusal.help.to_string()),
+    );
+    match refusal.note {
+        Some(note) => error.with_note(note),
+        None => error,
+    }
+}
+
+/// What the refusal of an instance past a bound says, whichever stage
+/// reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrowthRefusal {
+    pub message: String,
+    pub help: &'static str,
+    /// The steps the growth took to the instance, when an earlier instance of
+    /// its class led to it.
+    pub note: Option<String>,
+}
+
+/// What the refusal of an instance of `class` at `args` that passes `limit`
+/// says, explained by how `growth` reached it.
+pub fn growth_refusal(
+    class: &str,
+    args: &[Type],
+    limit: &ExceededLimit,
+    growth: &Growth,
+) -> GrowthRefusal {
     let instance = spelled_instance(class, args, SPELLED_LEVELS);
     let type_growth_help = if growth.through_trait {
         DEPTH_THROUGH_TRAIT_HELP
@@ -380,15 +412,10 @@ pub fn polymorphic_recursion(
             VALUE_HELP,
         ),
     };
-    let error = LoweringError::coded(
-        DiagnosticCode::MirPolymorphicRecursion,
+    GrowthRefusal {
         message,
-        span,
-        Some(help.to_string()),
-    );
-    match growth_note(class, args, limit, growth) {
-        Some(note) => error.with_note(note),
-        None => error,
+        help,
+        note: growth_note(class, args, limit, growth),
     }
 }
 

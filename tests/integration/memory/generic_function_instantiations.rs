@@ -301,8 +301,8 @@ fn main()
 
 /// A generic function that calls itself at a type built around its own
 /// parameter would need an instantiation at every depth. Following its
-/// instantiations stops, and the program is refused where lowering finds the
-/// type growing, rather than compiling forever.
+/// instantiations stops at the first one past the depth one instance may
+/// nest to, and the program is refused there, rather than compiling forever.
 #[test]
 fn a_generic_function_recursing_at_a_growing_type_is_refused_and_ends() {
     assert_compiler_error(
@@ -318,6 +318,85 @@ fn main()
 "#,
         ),
         "grows on every call",
+    );
+}
+
+const PAIRS: &str = r#"
+class P<A, B>
+    public var a A
+    public var b B
+    fn init(a A, b B)
+        self.a = a
+        self.b = b
+
+fn pr<A, B>(a A, b B) P<A, B>
+    return P<A, B>(a, b)
+"#;
+
+/// A balanced tree of `pr` calls `depth` levels deep whose leftmost leaf is a
+/// handle and every other leaf an integer.
+fn pair_tree(depth: usize, leftmost: bool) -> String {
+    match (depth, leftmost) {
+        (0, true) => "Handle(5)".to_string(),
+        (0, false) => "1".to_string(),
+        (_, _) => format!(
+            "pr({}, {})",
+            pair_tree(depth - 1, leftmost),
+            pair_tree(depth - 1, false)
+        ),
+    }
+}
+
+/// A trait value built in a generic function around a type built from 127
+/// types, a handle among them, is a resource like one built around the handle
+/// alone: the second function keeping it is refused at its use.
+#[test]
+fn a_trait_value_built_around_a_large_type_holding_a_resource_handed_twice_is_reported() {
+    let program = with_shelving(&format!(
+        "{SHELVE_ANY}\n{PAIRS}\nfn main()\n    let t = {}\n    let s = shelve_any(t)\n    keep_shelving(s)\n    keep_shelving(s)\n",
+        pair_tree(6, true)
+    ));
+    assert_compiler_error(&program, "MER_OWN_003");
+    assert_compiler_error(&program, ":53:19");
+}
+
+/// `levels` calls of a generic function wrapping its argument once more,
+/// around a handle.
+fn wrapped_handle(levels: usize) -> String {
+    format!("{}Handle(5){}", "wrap(".repeat(levels), ")".repeat(levels))
+}
+
+const WRAP_ANY: &str = r#"
+fn wrap<T>(x T) Wrap<T>
+    return Wrap<T>(x)
+"#;
+
+/// A box around a handle wrapped 31 times nests 32 type constructors deep,
+/// the most one instance may: it compiles, and the keeping function takes
+/// it over.
+#[test]
+fn a_trait_value_built_around_a_type_nested_to_the_depth_bound_is_released_by_the_keeper() {
+    assert_heap_guard_output(
+        &with_shelving(&format!(
+            "{SHELVE_ANY}\n{WRAP_ANY}\nfn main()\n    let s = shelve_any({})\n    keep_shelving(s)\n    println(\"after keep\")\n",
+            wrapped_handle(31)
+        )),
+        "kept\nclosed 5\nleaving keep\nafter keep",
+    );
+}
+
+/// One wrap more, and the box nests past the depth bound: the program is
+/// refused, naming the instance.
+#[test]
+fn a_trait_value_built_around_a_type_nested_past_the_depth_bound_is_refused() {
+    let program = with_shelving(&format!(
+        "{SHELVE_ANY}\n{WRAP_ANY}\nfn main()\n    let s = shelve_any({})\n    keep_shelving(s)\n",
+        wrapped_handle(32)
+    ));
+    assert_compiler_error(&program, "MER_MIR_016");
+    assert_compiler_error(
+        &program,
+        "instantiating `Box<Wrap<Wrap<…>>>` nests its type argument 33 levels deep",
     );
 }
 

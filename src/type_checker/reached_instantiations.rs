@@ -40,15 +40,24 @@
 //!
 //! A body calling itself at a type built around its own parameter reaches a
 //! larger type on every step, and one doing so at two types reaches twice as
-//! many each step. A type built from more than [`MAX_FOLLOWED_TYPE_SIZE`]
-//! types is not followed, and no more than [`MAX_REACHED_BODIES`] bodies are.
-//! Past either bound an instantiation goes unrecorded, and ownership reads
-//! the trait or the copy as the bodies followed show it, as it did before
-//! any were: a value is lent where it could have been moved, never the
-//! reverse.
+//! many each step. The walk applies the bounds lowering compiles within
+//! ([`super::instantiation_limits`]) to every body it reaches and every class
+//! a reached body builds, and refuses the program at the first one past a
+//! bound that a body reached from itself leads to, as polymorphic recursion,
+//! naming the earlier instances of its class that led to it. A type the
+//! program writes past a bound, with no recursion leading to it, is left to
+//! lowering, which refuses it in its own words. The walk follows the most
+//! deeply nested body it has reached first, so a type growing on every call
+//! is refused once one chain of calls passes the depth bound, before the
+//! bodies beside that chain multiply. Nothing else stops it, so ownership is
+//! decided over every instantiation lowering compiles from the bodies
+//! followed.
+
+mod limits;
 
 use super::compiled_instances::CompiledInstance;
-use super::context::Context;
+use super::context::{class_needs_vtable, Context};
+use super::instantiation_limits::deepest_argument_depth;
 use super::instantiation_requirements::{
     parameters_spelled, spells_a_type, GenericBodyId, Pin, PinningSite, SlotRead,
 };
@@ -56,15 +65,11 @@ use super::used_methods::reads_converted_slot;
 use super::utils::add_instantiation;
 use super::TypeChecker;
 use crate::ast::types::{Type, TypeKind};
-use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
-
-/// How many types a type a reached body is bound to may be built from, all
-/// told, before the bodies it reaches are no longer followed.
-pub(crate) const MAX_FOLLOWED_TYPE_SIZE: usize = 64;
-
-/// How many reached bodies are followed, each at one set of types.
-pub(crate) const MAX_REACHED_BODIES: usize = 4096;
+use crate::error::syntax::Span;
+use limits::Refused;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::rc::Rc;
 
 /// The classes each generic body builds from its own parameters, by body.
 pub(crate) type BuiltInBodies = HashMap<GenericBodyId, Vec<BuiltClass>>;
@@ -77,39 +82,37 @@ pub(crate) struct BuiltClass {
     arguments: Vec<Type>,
     /// The body's parameters `arguments` spell.
     parameters: Vec<String>,
+    /// The construction building it.
+    span: Span,
 }
 
 /// Whether lowering compiles a slot's body at an instance, by the class, the
 /// method and the instance's type.
 type SlotVerdicts = HashMap<(String, String, TypeKind), bool>;
 
-/// Each set of types the walk has reached a body at so far, by body.
-type ReachedBindings = HashMap<GenericBodyId, Vec<HashMap<String, Type>>>;
+/// Each step the walk has reached a body at so far, by body.
+type ReachedBindings = HashMap<GenericBodyId, Vec<Rc<Step>>>;
 
-/// A trait-slot site waiting on the call reading its slot, with the types
-/// the body writing the conversion is reached at.
-type WaitingSite<'s> = (&'s PinningSite, HashMap<String, Type>);
+/// How a body was reached: the step whose body wrote the site reaching it,
+/// `None` for a site outside every generic body.
+type Lineage = Option<Rc<Step>>;
 
-/// What the walk over reached bodies knows as it goes.
-#[derive(Default)]
-struct ReachWalk<'s> {
-    /// Whether lowering compiles a slot's body at an instance.
-    verdicts: SlotVerdicts,
-    /// Each set of types each body is reached at so far.
-    reached: ReachedBindings,
-    /// The trait-slot sites whose call reads their slot at no types reached
-    /// so far, by the body writing the call.
-    waiting: HashMap<GenericBodyId, Vec<WaitingSite<'s>>>,
-}
+/// A trait-slot site waiting on the call reading its slot, with the step the
+/// body writing the conversion was reached at.
+type WaitingSite<'s> = (&'s PinningSite, Lineage);
 
 /// A generic body the program reaches, with the type each of its parameters
-/// is bound to there.
-struct ReachedBody {
+/// is bound to there, and how it was reached.
+#[derive(Debug)]
+struct Step {
     body: GenericBodyId,
     bound: HashMap<String, Type>,
+    /// Whether a call through a trait reached the body by reading its slot.
+    through_slot: bool,
+    outer: Lineage,
 }
 
-impl ReachedBody {
+impl Step {
     /// What tells this reached body from another: the body and the kinds of
     /// its bound types, sorted by parameter name.
     fn identity(&self) -> (GenericBodyId, Vec<(String, TypeKind)>) {
@@ -121,13 +124,60 @@ impl ReachedBody {
     }
 }
 
+/// A reached body waiting to be followed. The most deeply nested is followed
+/// first, the one reached first among equally nested ones.
+struct Pending {
+    step: Rc<Step>,
+    depth: usize,
+    order: usize,
+}
+
+impl Ord for Pending {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.depth.cmp(&other.depth)).then_with(|| other.order.cmp(&self.order))
+    }
+}
+
+impl PartialOrd for Pending {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Pending {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for Pending {}
+
+/// What the walk over reached bodies knows as it goes.
+#[derive(Default)]
+struct ReachWalk<'s> {
+    /// Whether lowering compiles a slot's body at an instance.
+    verdicts: SlotVerdicts,
+    /// Each step each body is reached at so far.
+    reached: ReachedBindings,
+    /// The trait-slot sites whose call reads their slot at no types reached
+    /// so far, by the body writing the call.
+    waiting: HashMap<GenericBodyId, Vec<WaitingSite<'s>>>,
+    /// The reached bodies not yet followed.
+    pending: BinaryHeap<Pending>,
+    /// How many bodies have been reached so far.
+    admitted: usize,
+    /// The instances at value arguments found so far, by class.
+    value_instances: HashMap<String, HashSet<Vec<TypeKind>>>,
+}
+
 impl TypeChecker {
     /// Record that the body being checked builds the generic class `class`
-    /// at `arguments`, when they spell that body's own parameters.
+    /// at `arguments`, at `span`, when they spell that body's own parameters.
     pub(crate) fn record_class_built_in_body(
         &mut self,
         class: &str,
         arguments: &[Type],
+        span: Span,
         context: &Context,
     ) {
         let parameters = parameters_spelled(arguments.iter(), context);
@@ -148,20 +198,39 @@ impl TypeChecker {
                 class: class.to_string(),
                 arguments: arguments.to_vec(),
                 parameters,
+                span,
             });
         }
     }
 
     /// Record every class instantiation a body the program reaches through
     /// `sites` builds, at the types that body is reached at, in
-    /// [`TypeChecker::reached_class_instantiations`]. `context` is the
-    /// program's global scope, which a slot's obligations are answered in.
+    /// [`TypeChecker::reached_class_instantiations`], refusing the program
+    /// where one passes a bound of [`super::instantiation_limits`].
+    /// `context` is the program's global scope, which a slot's obligations
+    /// are answered in.
     pub(super) fn record_reached_instantiations(
         &mut self,
         sites: &[PinningSite],
         context: &Context,
     ) {
         let built = std::mem::take(&mut self.classes_built_in_bodies);
+        let refusal = self.walk_reached_bodies(sites, &built, context).err();
+        self.classes_built_in_bodies = built;
+        self.resource_types.take();
+        if let Some(refusal) = refusal {
+            self.diagnostics.push_error(*refusal);
+        }
+    }
+
+    /// Follow every body `sites` reach, deepest first, recording what each
+    /// builds; the refusal of the first instance past a bound, if any.
+    fn walk_reached_bodies(
+        &mut self,
+        sites: &[PinningSite],
+        built: &BuiltInBodies,
+        context: &Context,
+    ) -> Result<(), Refused> {
         let mut written_in: HashMap<&GenericBodyId, Vec<&PinningSite>> = HashMap::new();
         for site in sites {
             if let Some(caller) = &site.caller {
@@ -169,120 +238,132 @@ impl TypeChecker {
             }
         }
         let mut walk = ReachWalk::default();
-        let no_bound = HashMap::new();
-        let mut pending: Vec<ReachedBody> = (sites.iter())
+        for site in sites
+            .iter()
             .filter(|site| site.caller_parameters.is_empty())
-            .filter_map(|site| self.reach_site(site, &no_bound, context, &mut walk))
-            .collect();
+        {
+            self.reach_site(site, &None, context, &mut walk)?;
+        }
         let mut seen = HashSet::new();
-        while let Some(reached) = pending.pop() {
-            if seen.len() == MAX_REACHED_BODIES {
-                break;
-            }
-            if !seen.insert(reached.identity()) {
+        while let Some(Pending { step, .. }) = walk.pending.pop() {
+            if !seen.insert(step.identity()) {
                 continue;
             }
-            for class in built.get(&reached.body).into_iter().flatten() {
-                self.record_built_at(class, &reached.bound);
+            for class in built.get(&step.body).into_iter().flatten() {
+                self.record_built_at(class, &step, context, &mut walk)?;
             }
-            pending.extend(self.resume_waiting_slots(&reached, context, &mut walk));
-            for site in written_in.get(&reached.body).into_iter().flatten() {
-                pending.extend(self.reach_site(site, &reached.bound, context, &mut walk));
+            self.resume_waiting_slots(&step, context, &mut walk)?;
+            let writer = Some(Rc::clone(&step));
+            for site in written_in.get(&step.body).into_iter().flatten() {
+                self.reach_site(site, &writer, context, &mut walk)?;
             }
         }
-        self.classes_built_in_bodies = built;
-        self.resource_types.take();
+        Ok(())
     }
 
-    /// The body `site`, written in a body reached at `bound`, reaches. A
-    /// site a trait slot reaches waits, when the call reading the slot reads
-    /// it at no types reached so far, until the body writing the call is
-    /// reached at types it reads it at ([`Self::resume_waiting_slots`]).
+    /// Follow the body `site`, written in the body `writer` reached, reaches.
+    /// A site a trait slot reaches waits, when the call reading the slot
+    /// reads it at no types reached so far, until the body writing the call
+    /// is reached at types it reads it at ([`Self::resume_waiting_slots`]).
     fn reach_site<'s>(
         &mut self,
         site: &'s PinningSite,
-        bound: &HashMap<String, Type>,
+        writer: &Lineage,
         context: &Context,
         walk: &mut ReachWalk<'s>,
-    ) -> Option<ReachedBody> {
+    ) -> Result<(), Refused> {
         if let Some(read) = &site.through_slot {
+            let no_bound = HashMap::new();
+            let bound = writer.as_ref().map_or(&no_bound, |step| &step.bound);
             if !self.is_slot_read_at(read, bound, &walk.reached) {
-                let writer = &read.writer;
-                if let (Some(body), false) = (&writer.body, writer.parameters.is_empty()) {
+                let call_writer = &read.writer;
+                if let (Some(body), false) = (&call_writer.body, call_writer.parameters.is_empty())
+                {
                     let waiting = walk.waiting.entry(body.clone()).or_default();
-                    waiting.push((site, bound.clone()));
+                    waiting.push((site, writer.clone()));
                 }
-                return None;
+                return Ok(());
             }
         }
-        self.reached_through(site, bound, context, &mut walk.verdicts)
+        self.follow(site, writer, context, walk)
     }
 
-    /// Record `reached` as a set of types its body is reached at, and the
-    /// bodies the sites waiting on a call it writes reach now that the call
-    /// reads their slot at those types.
+    /// Record `step` as a step its body is reached at, and follow the bodies
+    /// the sites waiting on a call it writes reach now that the call reads
+    /// their slot at its types.
     fn resume_waiting_slots<'s>(
         &mut self,
-        reached: &ReachedBody,
+        step: &Rc<Step>,
         context: &Context,
         walk: &mut ReachWalk<'s>,
-    ) -> Vec<ReachedBody> {
-        let bindings = walk.reached.entry(reached.body.clone()).or_default();
-        bindings.push(reached.bound.clone());
-        let Some(waiting) = walk.waiting.remove(&reached.body) else {
-            return Vec::new();
+    ) -> Result<(), Refused> {
+        let steps = walk.reached.entry(step.body.clone()).or_default();
+        steps.push(Rc::clone(step));
+        let Some(waiting) = walk.waiting.remove(&step.body) else {
+            return Ok(());
         };
-        let (resumed, still): (Vec<_>, Vec<_>) = waiting.into_iter().partition(|(site, bound)| {
+        let no_bound = HashMap::new();
+        let (resumed, still): (Vec<_>, Vec<_>) = waiting.into_iter().partition(|(site, writer)| {
+            let bound = writer.as_ref().map_or(&no_bound, |writer| &writer.bound);
             (site.through_slot.as_ref()).is_some_and(|read| {
                 let converted = self.restated_conversion(read, bound);
-                self.is_call_read_at(read, &converted, &reached.bound)
+                self.is_call_read_at(read, &converted, &step.bound)
             })
         });
         if !still.is_empty() {
-            walk.waiting.insert(reached.body.clone(), still);
+            walk.waiting.insert(step.body.clone(), still);
         }
-        (resumed.iter())
-            .filter_map(|(site, bound)| {
-                self.reached_through(site, bound, context, &mut walk.verdicts)
-            })
-            .collect()
+        for (site, writer) in resumed {
+            self.follow(site, &writer, context, walk)?;
+        }
+        Ok(())
     }
 
-    /// The body `site` pins, reached at its pins restated at `bound`, the
-    /// types the body writing the site is reached at. `None` when a pin
-    /// spells a parameter `bound` leaves open, or is built past
-    /// [`MAX_FOLLOWED_TYPE_SIZE`], and when the site is a trait slot whose
-    /// body lowering withholds at `bound` ([`Self::compiles_slot_at`]).
-    fn reached_through(
+    /// Reach the body `site` pins at its pins restated at the types of the
+    /// body `writer` reached, which writes the site. Nothing is reached when
+    /// a pin spells a parameter those types leave open, or when the site is a
+    /// trait slot whose body lowering withholds there
+    /// ([`Self::compiles_slot_at`]).
+    fn follow(
         &mut self,
         site: &PinningSite,
-        bound: &HashMap<String, Type>,
+        writer: &Lineage,
         context: &Context,
-        verdicts: &mut SlotVerdicts,
-    ) -> Option<ReachedBody> {
+        walk: &mut ReachWalk<'_>,
+    ) -> Result<(), Refused> {
+        let no_bound = HashMap::new();
+        let bound = writer.as_ref().map_or(&no_bound, |step| &step.bound);
         if !(site.caller_parameters.iter()).all(|parameter| bound.contains_key(parameter)) {
-            return None;
+            return Ok(());
         }
         let mut restated = HashMap::with_capacity(site.pins.len());
         for (parameter, pin) in &site.pins {
             let ty = match pin {
-                Pin::CallerParameter(name) => bound.get(name)?.clone(),
+                Pin::CallerParameter(name) => match bound.get(name) {
+                    Some(ty) => ty.clone(),
+                    None => return Ok(()),
+                },
                 Pin::Concrete(ty) => self.substitute_type(ty, bound),
             };
-            if !is_within_followed_size(&ty) {
-                return None;
-            }
             restated.insert(parameter.clone(), ty);
         }
         if let Some(read) = &site.through_slot {
-            if !self.compiles_slot_at(read, bound, context, verdicts) {
-                return None;
+            if !self.compiles_slot_at(read, bound, context, &mut walk.verdicts) {
+                return Ok(());
             }
         }
-        Some(ReachedBody {
+        let step = Rc::new(Step {
             body: site.callee.clone(),
             bound: restated,
-        })
+            through_slot: site.through_slot.is_some(),
+            outer: writer.clone(),
+        });
+        self.refuse_body_past_limits(&step, site.span, context, walk)?;
+        walk.admitted += 1;
+        let depth = 1 + deepest_argument_depth(step.bound.values());
+        let order = walk.admitted;
+        walk.pending.push(Pending { step, depth, order });
+        Ok(())
     }
 
     /// Whether the call `read` names reads the slot of the conversion it
@@ -302,11 +383,10 @@ impl TypeChecker {
         if writer.parameters.is_empty() {
             return reads_converted_slot(&converted, (called_trait, called));
         }
-        let bindings = writer.body.as_ref().and_then(|body| reached.get(body));
-        (bindings.into_iter().flatten())
-            .any(|binding| self.is_call_read_at(read, &converted, binding))
+        let steps = writer.body.as_ref().and_then(|body| reached.get(body));
+        (steps.into_iter().flatten())
+            .any(|step| self.is_call_read_at(read, &converted, &step.bound))
     }
-
     /// Whether the call `read` names, written in a body reached at `binding`,
     /// reads a slot of a vtable whose instance stands behind each of
     /// `converted`: its receiver's trait arguments, restated at `binding`,
@@ -385,18 +465,33 @@ impl TypeChecker {
             .collect()
     }
 
-    /// Record `class`, built in a body reached at `bound`, at the types
-    /// `bound` gives its arguments, when it binds every parameter they spell.
-    fn record_built_at(&mut self, class: &BuiltClass, bound: &HashMap<String, Type>) {
+    /// Record `class`, built in the body `step` reached, at the types `step`
+    /// gives its arguments, when it binds every parameter they spell.
+    /// Refuses it past a bound of [`super::instantiation_limits`].
+    fn record_built_at(
+        &mut self,
+        class: &BuiltClass,
+        step: &Rc<Step>,
+        context: &Context,
+        walk: &mut ReachWalk<'_>,
+    ) -> Result<(), Refused> {
+        let bound = &step.bound;
         if !(class.parameters.iter()).all(|parameter| bound.contains_key(parameter)) {
-            return;
+            return Ok(());
         }
         let arguments: Vec<Type> = (class.arguments.iter())
             .map(|ty| self.substitute_type(ty, bound))
             .collect();
-        if !arguments.iter().all(is_within_followed_size) {
-            return;
-        }
+        let builder = Some(Rc::clone(step));
+        let growth = || {
+            if class_needs_vtable(&class.class, self.type_definitions()) {
+                self.growth_through_slots(&class.class, &builder, context)
+            } else {
+                self.growth_through_calls(&class.class, &arguments, &builder, context)
+            }
+        };
+        let within = (class.span, step.as_ref());
+        self.refuse_instance_past_limits(&class.class, &arguments, growth, within, walk)?;
         if let Some(arguments) = self.instantiation_arguments(&arguments) {
             add_instantiation(
                 &mut self.reached_class_instantiations,
@@ -404,19 +499,11 @@ impl TypeChecker {
                 arguments,
             );
         }
+        Ok(())
     }
 }
 
 /// Whether `kind` is a parameter left open, or a type that failed to check.
 fn is_open_kind(kind: &TypeKind) -> bool {
     matches!(kind, TypeKind::Generic(..) | TypeKind::Error)
-}
-
-/// Whether `ty` is built from at most [`MAX_FOLLOWED_TYPE_SIZE`] types.
-fn is_within_followed_size(ty: &Type) -> bool {
-    let counted = Cell::new(0usize);
-    !spells_a_type(&ty.kind, &|_| {
-        counted.set(counted.get() + 1);
-        counted.get() > MAX_FOLLOWED_TYPE_SIZE
-    })
 }

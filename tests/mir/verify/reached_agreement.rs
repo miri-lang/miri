@@ -91,20 +91,21 @@ fn gaps_in(result: &PipelineResult) -> Vec<AgreementGap> {
     )
 }
 
-/// A tree past the size the type checker follows is built in a generic
-/// function and kept behind a trait twice: lowering compiles the box around
-/// it, which the type checker never decided ownership over.
+/// A tree of 127 types built in a generic function and kept behind a trait
+/// is followed like a small one: the box lowering compiles around it is one
+/// the type checker decided ownership over, so nothing about it is reported.
 #[test]
-fn an_instance_past_the_followed_size_is_reported() {
-    let result = lowered(&keeping(&tree(6, true), 2));
+fn an_instance_around_a_large_type_is_not_reported() {
+    let result = lowered(&keeping(&tree(6, true), 1));
+    assert!(
+        (result.type_checker.ownership_instantiations()).contains_key("Box"),
+        "the type checker decided ownership over the box"
+    );
     let gaps = gaps_in(&result);
-    let boxed = gaps
-        .iter()
-        .find(|gap| gap.class == "Box")
-        .unwrap_or_else(|| panic!("the box around the deep tree is reported: {gaps:?}"));
-    assert!(boxed.is_resource, "the box holds the handle: {boxed:?}");
-    let message = boxed.to_string();
-    assert!(message.contains("ownership was decided over"), "{message}");
+    assert!(
+        !gaps.iter().any(|gap| gap.class == "Box"),
+        "the box around the large tree is not reported: {gaps:?}"
+    );
 }
 
 /// A box built around a handle in a generic function is an instance both the
