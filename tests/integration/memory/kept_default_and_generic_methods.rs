@@ -625,3 +625,231 @@ fn main()
     assert_compiler_error(&program, "MER_OWN_003");
     assert_compiler_error(&program, "compiled at `Handle`");
 }
+
+const CLOSURE_TRAY: &str = r#"
+struct Keep
+    f fn() int
+
+trait Tray
+    fn ident() int
+    fn stash() int
+        let _k = Keep(f: fn() int: self.ident())
+        println("stashed")
+        return self.ident()
+
+class Plain implements Tray
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn ident() int
+        return self.id
+"#;
+
+/// A default keeping a closure over its receiver and then reading the
+/// receiver compiles where every class inheriting it is a plain value, even
+/// when a class implementing the trait runs a hook but overrides the
+/// default: each copy's closure holds a funded copy.
+#[test]
+fn a_default_capturing_its_receiver_then_reading_it_compiles_where_no_inheritor_is_a_resource() {
+    assert_heap_guard_output(
+        &format!(
+            "{CLOSURE_TRAY}\n{}",
+            r#"
+class Sealed implements Tray
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn ident() int
+        return self.id
+    fn stash() int
+        return self.id
+    fn drop(self)
+        println(f"closed sealed {self.id}")
+
+fn main()
+    let p = Plain(3)
+    println(f"{p.stash()}")
+    println(f"{p.stash()}")
+    let s = Sealed(9)
+    println(f"{s.stash()}")
+    println("end")
+"#
+        ),
+        "stashed\n3\nstashed\n3\n9\nend\nclosed sealed 9",
+    );
+}
+
+/// The same default is refused once a class inheriting it runs a hook: the
+/// copy compiled for that class hands its receiver to the closure it keeps.
+#[test]
+fn a_default_capturing_its_receiver_then_reading_it_is_refused_where_an_inheritor_is_a_resource() {
+    let program = format!(
+        "{CLOSURE_TRAY}\n{}",
+        r#"
+class Lidded implements Tray
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn ident() int
+        return self.id
+    fn drop(self)
+        println(f"closed lidded {self.id}")
+
+fn main()
+    let p = Plain(1)
+    println(f"{p.stash()}")
+"#
+    );
+    assert_compiler_error(&program, "MER_OWN_003");
+    assert_compiler_error(&program, "compiled at `Lidded`");
+}
+
+/// A default capturing its receiver in a kept closure and not reading it
+/// again hands it to the closure in a class running a hook, so the hook runs
+/// where the closure's holder ends.
+#[test]
+fn a_default_capturing_its_receiver_once_hands_it_to_the_closure_at_a_resource() {
+    assert_heap_guard_output(
+        r#"
+struct Keep
+    f fn() int
+
+trait Tray
+    fn ident() int
+    fn stash() int
+        let _k = Keep(f: fn() int: self.ident())
+        println("stashed")
+        return 7
+
+class Plain implements Tray
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn ident() int
+        return self.id
+
+class Lidded implements Tray
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn ident() int
+        return self.id
+    fn drop(self)
+        println(f"closed lidded {self.id}")
+
+fn main()
+    let l = Lidded(7)
+    println(f"{l.stash()}")
+    let p = Plain(1)
+    println(f"{p.stash()}")
+    println("end")
+"#,
+        "stashed\nclosed lidded 7\n7\nstashed\n7\nend",
+    );
+}
+
+const CLOSURE_HOLDER: &str = r#"
+struct Keep
+    f fn() int
+
+class Holder<T>
+    public var tag int
+    fn init(tag int)
+        self.tag = tag
+    fn count(_x T) int
+        return self.tag
+    fn keep(x T) int
+        let _k = Keep(f: fn() int: self.count(x))
+        println("held in a closure")
+        return self.count(x)
+"#;
+
+/// A generic class's method capturing its parameter in a kept closure and
+/// then reading it compiles where the program instantiates the class only at
+/// plain types.
+#[test]
+fn a_method_capturing_a_type_parameter_then_reading_it_compiles_at_a_plain_instantiation() {
+    assert_heap_guard_output(
+        &with_handle(&format!(
+            "{CLOSURE_HOLDER}\n{}",
+            r#"
+fn main()
+    let n = Holder<int>(2)
+    println(f"{n.keep(5)}")
+"#
+        )),
+        "held in a closure\n2",
+    );
+}
+
+/// The same method is refused once the program instantiates the class at a
+/// resource: that copy hands the parameter to the closure it keeps.
+#[test]
+fn a_method_capturing_a_type_parameter_then_reading_it_is_refused_at_a_resource_instantiation() {
+    let program = with_handle(&format!(
+        "{CLOSURE_HOLDER}\n{}",
+        r#"
+fn main()
+    let n = Holder<int>(2)
+    println(f"{n.keep(5)}")
+    let h = Holder<Handle>(1)
+    println(f"{h.keep(Handle(1))}")
+"#
+    ));
+    assert_compiler_error(&program, "MER_OWN_003");
+    assert_compiler_error(&program, "compiled at `Handle`");
+}
+
+/// A copy built only inside a generic function's body is refused alike.
+#[test]
+fn a_method_capturing_a_type_parameter_then_reading_it_is_refused_at_a_copy_built_in_a_generic_function(
+) {
+    let program = with_handle(&format!(
+        "{CLOSURE_HOLDER}\n{}",
+        r#"
+fn f<T>(x T) int
+    let h = Holder<T>(7)
+    return h.keep(x)
+
+fn main()
+    println(f"{f(Handle(1))}")
+    println("end")
+"#
+    ));
+    assert_compiler_error(&program, "MER_OWN_003");
+    assert_compiler_error(&program, "compiled at `Handle`");
+}
+
+/// A method capturing its parameter in a kept closure and not reading it
+/// again hands it to the closure at a resource instantiation, so the hook
+/// runs where the closure's holder ends.
+#[test]
+fn a_method_capturing_a_type_parameter_once_hands_it_to_the_closure_at_a_resource_instantiation() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+struct Keep
+    f fn() int
+
+class Holder<T>
+    public var tag int
+    fn init(tag int)
+        self.tag = tag
+    fn count(_x T) int
+        return self.tag
+    fn keep(x T) int
+        let _k = Keep(f: fn() int: self.count(x))
+        println("held in a closure")
+        return self.tag
+
+fn main()
+    let n = Holder<int>(2)
+    println(f"{n.keep(5)}")
+    let h = Holder<Handle>(1)
+    println(f"{h.keep(Handle(1))}")
+    println("end")
+"#,
+        ),
+        "held in a closure\n2\nheld in a closure\nclosed 1\n1\nend",
+    );
+}

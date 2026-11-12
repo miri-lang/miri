@@ -469,9 +469,7 @@ fn end_taken_captures(
     };
     let taken = ctx
         .type_checker
-        .consumed_arguments
-        .captured_by(expr)
-        .to_vec();
+        .captures_taken_in_copy(expr, |site| ctx.recorded_type(site));
     for cap in captures {
         if taken.iter().any(|name| **name == *cap.name) {
             super::super::variable::end_consumed_binding(ctx, cap.outer_local, closure.span);

@@ -601,11 +601,31 @@ impl TypeChecker {
         if self.consumed_arguments.consumes(expr) {
             return true;
         }
+        self.consumed_arguments.consumes_if_handed_on(expr) && self.hands_on_in_copy(copy_type)
+    }
+
+    /// The bindings the kept closure `lambda` takes over in the copy of its
+    /// body being lowered: each resource it captures, and each value of an
+    /// open type it captures where the copy reads it as one, `copy_type_of`
+    /// giving the type the copy reads an expression at
+    /// ([`use_after_move::ConsumedArguments::captured_by`]).
+    pub fn captures_taken_in_copy(
+        &self,
+        lambda: &Expression,
+        copy_type_of: impl Fn(usize) -> Option<Type>,
+    ) -> Vec<String> {
+        (self.consumed_arguments).captured_by(lambda, |site| {
+            self.hands_on_in_copy(copy_type_of(site).as_ref())
+        })
+    }
+
+    /// Whether consuming a value a copy reads at `copy_type` hands its
+    /// reference on there ([`open_consumption::hands_on_at_copy`]).
+    fn hands_on_in_copy(&self, copy_type: Option<&Type>) -> bool {
         let definitions = &self.type_table.global_type_definitions;
-        self.consumed_arguments.consumes_if_handed_on(expr)
-            && copy_type.is_some_and(|ty| {
-                open_consumption::hands_on_at_copy(&ty.kind, definitions, self.resource_types())
-            })
+        copy_type.is_some_and(|ty| {
+            open_consumption::hands_on_at_copy(&ty.kind, definitions, self.resource_types())
+        })
     }
 
     /// Which positions the vtable slot of `selector` numbered under `root`

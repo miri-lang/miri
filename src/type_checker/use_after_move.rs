@@ -103,7 +103,18 @@ pub struct ConsumedArguments {
     /// moved.
     open_expressions_used_after: HashSet<usize>,
     /// The bindings each kept closure takes over, by the closure's expression.
-    captures: HashMap<usize, Vec<String>>,
+    captures: HashMap<usize, Vec<TakenCapture>>,
+}
+
+/// A binding a kept closure takes over from the scope creating it.
+#[derive(Debug)]
+struct TakenCapture {
+    name: String,
+    /// The open site the closure's body first reads it at, when its type is
+    /// open in a body compiled per copy: taken over only at the copies
+    /// reading it as a resource, as a store of it is
+    /// ([`ConsumedArguments::consumes_if_handed_on`]).
+    open_site: Option<usize>,
 }
 
 impl ConsumedArguments {
@@ -116,14 +127,33 @@ impl ConsumedArguments {
     /// consumes at each copy of the body reading it as a resource
     /// ([`super::open_consumption::hands_on_at_copy`]).
     pub fn consumes_if_handed_on(&self, argument: &Expression) -> bool {
-        self.open_expressions.contains(&argument.id)
-            && !self.open_expressions_used_after.contains(&argument.id)
+        self.open_expressions.contains(&argument.id) && self.moves_at_open_site(argument.id)
+    }
+
+    /// Whether the open site `site` hands its value on at a copy reading it
+    /// as a resource: no path reaches a use of the binding from it.
+    fn moves_at_open_site(&self, site: usize) -> bool {
+        !self.open_expressions_used_after.contains(&site)
     }
 
     /// The bindings the closure `lambda` creates takes over from the scope
-    /// creating it: the resources it captures, when it is kept.
-    pub fn captured_by(&self, lambda: &Expression) -> &[String] {
-        self.captures.get(&lambda.id).map_or(&[], Vec::as_slice)
+    /// creating it, when it is kept: each resource it captures, and each
+    /// value of an open type it captures at an open site that hands it on
+    /// at this copy, `hands_on_at_site` reading the site at the copy's type.
+    pub fn captured_by(
+        &self,
+        lambda: &Expression,
+        hands_on_at_site: impl Fn(usize) -> bool,
+    ) -> Vec<String> {
+        let taken = self.captures.get(&lambda.id).into_iter().flatten();
+        taken
+            .filter(|capture| {
+                capture
+                    .open_site
+                    .is_none_or(|site| self.moves_at_open_site(site) && hands_on_at_site(site))
+            })
+            .map(|capture| capture.name.clone())
+            .collect()
     }
 
     /// Add every argument `other` records.
@@ -358,14 +388,20 @@ pub struct UseAfterMoveChecker<'a> {
     open_refusals: Vec<OpenRefusal>,
 }
 
-/// A resource a closure captures.
+/// A resource a closure captures, or a value whose type is open in a body
+/// compiled per copy.
 struct Capture {
     name: String,
     /// Where the closure's body first reads it.
     span: Span,
+    /// The expression that first read is.
+    expression: usize,
     /// Whether taking it over hands its reference on (see
     /// `hands_on_its_reference`).
     hands_on: bool,
+    /// The open parameter its type is, when it is a value of an open type
+    /// ([`OpenBody::parameter_of`]).
+    open: Option<String>,
 }
 
 /// What one closure captures from the scope that creates it.
@@ -1056,7 +1092,8 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// Records `name` as a resource the innermost closure captures, when the
     /// closure's body reads it from the scope that creates the closure.
     fn note_capture(&mut self, name: &str, expr: &Expression) {
-        let is_resource = self.is_resource_expr(expr);
+        let open = self.open_parameter(expr);
+        let is_resource = open.is_some() || self.is_resource_expr(expr);
         let hands_on = self.hands_on_its_reference(expr);
         let Some(closure) = self.closures.last_mut() else {
             return;
@@ -1066,7 +1103,9 @@ impl<'a> UseAfterMoveChecker<'a> {
             closure.resources.push(Capture {
                 name: name.to_string(),
                 span: expr.span,
+                expression: expr.id,
                 hands_on,
+                open,
             });
         }
     }
@@ -1074,7 +1113,9 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// A kept closure holds what it captures, so creating it consumes each
     /// captured resource; capturing one already consumed is a use of it.
     /// Records each one the closure `lambda` takes over for lowering, which
-    /// ends the binding where the closure is created.
+    /// ends the binding where the closure is created. A value of an open type
+    /// is consumed at an open site, the read the capture is first made at,
+    /// and so taken over only at the copies reading it as a resource.
     fn consume_captures(&mut self, lambda: usize, captured: &[Capture], consumed: &mut Consumed) {
         for capture in captured {
             if self.gives_away_a_capture(&capture.name, capture.span) {
@@ -1084,15 +1125,16 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.report_use_after_consume(&capture.name, capture.span, consumed);
                 continue;
             }
-            // TODO: a capture of a value whose type is open in a shared body (a
-            // default's `self`, a `T` parameter) is consumed here for every copy
-            // of the body, so a default keeping a closure over `self` and then
-            // reading `self` is refused even where no inheriting class is a
-            // resource. Routing it through the open-site record, as a store
-            // is, would refuse it only at the copies where the value is one.
-            if capture.hands_on {
+            let open = (capture.open.clone()).map(|parameter| OpenSite {
+                parameter,
+                expression: capture.expression,
+            });
+            if capture.hands_on || open.is_some() {
                 let taken = self.consumed_arguments.captures.entry(lambda).or_default();
-                taken.push(capture.name.clone());
+                taken.push(TakenCapture {
+                    name: capture.name.clone(),
+                    open_site: open.as_ref().map(|site| site.expression),
+                });
             }
             consumed.insert(
                 capture.name.clone(),
@@ -1100,7 +1142,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                     by_fn: "a closure that captures it".to_string(),
                     at_span: capture.span,
                     chain: vec![],
-                    open: None,
+                    open,
                 },
             );
         }

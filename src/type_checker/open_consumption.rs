@@ -11,9 +11,11 @@
 //! therefore decided per copy, from one record the consumption check
 //! ([`super::use_after_move`]) makes once on the shared body:
 //!
-//! - each site that would consume the value were it a resource
-//!   ([`super::use_after_move::ConsumedArguments::consumes_if_handed_on`]),
-//!   which MIR lowering moves at a copy whose type hands the reference on
+//! - each site that would consume the value were it a resource, a store
+//!   ([`super::use_after_move::ConsumedArguments::consumes_if_handed_on`])
+//!   or a kept closure's capture
+//!   ([`super::use_after_move::ConsumedArguments::captured_by`]), which MIR
+//!   lowering moves at a copy whose type hands the reference on
 //!   ([`hands_on_at_copy`]) and copies, funded, at any other;
 //! - each use after such a site ([`OpenRefusal`]), refused for the program
 //!   when some copy the type checker knows reads the value at a type handing
