@@ -389,6 +389,12 @@ impl Pipeline {
         Self::push_lowered_body(sink.bodies, sink.symbols, call.symbol, body)
     }
 
+    // TODO: the polymorphic-recursion refusal bounds nesting depth only.
+    // Functions recursing into each other at two growing types (`f<T>` calling
+    // `g(Box<T>(x))`, `g<T>` calling `f(Wrap<T>(x))`) stay shallow while their
+    // count doubles each round, so this worklist grows without end. A cap on
+    // the total instantiations, refused with the same diagnostic, and a hashed
+    // dedup instead of the symbol scan would end it.
     /// Queue every generic function and method instantiation `bodies` call
     /// that has no body yet, in call order.
     ///

@@ -75,6 +75,7 @@ pub use iteration_plan::{IterationPlan, PositionalAccess, ProtocolWalk};
 pub(crate) use operators::{named_class, ValueOrdering, ValueStepping};
 pub mod open_consumption;
 pub(crate) mod pattern_coverage;
+mod reached_instantiations;
 mod reference_cycles;
 pub mod reference_sharing;
 pub mod resource_types;
@@ -260,6 +261,14 @@ pub struct TypeChecker {
     /// specialized body per instantiation without re-walking the AST. Tuples are
     /// deduplicated by their type kinds (source spans are ignored).
     pub generic_class_instantiations: HashMap<String, Vec<Vec<Type>>>,
+    /// The generic classes each generic body builds from its own parameters;
+    /// see [`reached_instantiations`].
+    pub(crate) classes_built_in_bodies: reached_instantiations::BuiltInBodies,
+    /// Those classes at every type the program reaches the body building
+    /// them at, which ownership is decided over beside
+    /// `generic_class_instantiations` and lowering never reads; see
+    /// [`reached_instantiations`].
+    pub(crate) reached_class_instantiations: utils::Instantiations,
     /// Expression ids of integer literals that appear directly under a unary
     /// negation. `i64::MIN` can only be written as `-9223372036854775808`, whose
     /// bare operand (2^63) is one past `i64::MAX`; that magnitude is in range
@@ -360,8 +369,9 @@ pub struct TypeChecker {
     /// copying it.
     pub(crate) shared_type_definitions: OnceCell<Rc<HashMap<String, TypeDefinition>>>,
     /// Which named types are resources, decided once over the settled
-    /// definitions and dropped with [`Self::shared_type_definitions`].
-    pub(crate) resource_types: OnceCell<utils::ResourceTypes>,
+    /// definitions and dropped with [`Self::shared_type_definitions`], with
+    /// the generic class instantiations they were decided over.
+    pub(crate) resource_types: OnceCell<(utils::Instantiations, utils::ResourceTypes)>,
 }
 
 impl Default for TypeChecker {
@@ -408,6 +418,8 @@ impl TypeChecker {
             script_main: None,
             gpu_buffer_inits: HashMap::new(),
             generic_class_instantiations: HashMap::new(),
+            classes_built_in_bodies: HashMap::new(),
+            reached_class_instantiations: HashMap::new(),
             negated_int_literals: HashSet::new(),
             deferred_int_literal_ranges: Vec::new(),
             deferred_gpu_int_literal_ranges: Vec::new(),
@@ -711,15 +723,35 @@ impl TypeChecker {
 
     /// The types that are resources ([`utils::ResourceTypes`]), decided the
     /// first time a stage asks and again after any definition changes. The
-    /// first stage to ask runs once the bodies are checked, so the generic
-    /// class instantiations a trait's or a base's answer reads are every one
-    /// the program's bodies build.
+    /// first stage to ask runs once the bodies are checked and the bodies
+    /// they reach followed ([`reached_instantiations`]), so the generic class
+    /// instantiations a trait's or a base's answer reads are every one the
+    /// program's bodies build, whichever body builds it.
     pub(crate) fn resource_types(&self) -> &utils::ResourceTypes {
+        &self.decided_resource_types().1
+    }
+
+    /// The generic class instantiations every ownership decision read
+    /// whether a type is a resource over: those the program's bodies build,
+    /// a generic body's at each type the program reaches it at
+    /// ([`reached_instantiations`]). Lowering adds instantiations it derives
+    /// to [`Self::generic_class_instantiations`] afterwards, so a check
+    /// rebuilding those answers reads this set to agree with them.
+    pub fn ownership_instantiations(&self) -> &utils::Instantiations {
+        &self.decided_resource_types().0
+    }
+
+    fn decided_resource_types(&self) -> &(utils::Instantiations, utils::ResourceTypes) {
         self.resource_types.get_or_init(|| {
-            utils::ResourceTypes::of(
-                &self.type_table.global_type_definitions,
-                &self.generic_class_instantiations,
-            )
+            let mut instantiations = self.generic_class_instantiations.clone();
+            for (class, tuples) in &self.reached_class_instantiations {
+                for arguments in tuples {
+                    utils::add_instantiation(&mut instantiations, class, arguments.clone());
+                }
+            }
+            let resources =
+                utils::ResourceTypes::of(&self.type_table.global_type_definitions, &instantiations);
+            (instantiations, resources)
         })
     }
 
@@ -993,7 +1025,7 @@ impl TypeChecker {
         let copies = open_consumption::Copies {
             type_definitions: &self.type_table.global_type_definitions,
             resources: self.resource_types(),
-            instantiations: &self.generic_class_instantiations,
+            instantiations: self.ownership_instantiations(),
         };
         let refusals = open_consumption::refusals_at_copies(findings.open_refusals, &copies);
         self.diagnostics.extend_errors(refusals);

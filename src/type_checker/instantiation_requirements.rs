@@ -505,7 +505,10 @@ fn parameter_in_scope<'k>(kind: &'k TypeKind, context: &Context) -> Option<&'k s
 
 /// The in-scope generic parameters `types` spell, each named once, in the
 /// order they are first spelled.
-fn parameters_spelled<'t>(types: impl Iterator<Item = &'t Type>, context: &Context) -> Vec<String> {
+pub(super) fn parameters_spelled<'t>(
+    types: impl Iterator<Item = &'t Type>,
+    context: &Context,
+) -> Vec<String> {
     let spelled = std::cell::RefCell::new(Vec::<String>::new());
     for ty in types {
         spells_a_type(&ty.kind, &|kind| {
@@ -882,7 +885,7 @@ impl TypeChecker {
 
     /// The body identifier for the declaration currently being checked, or
     /// `None` outside a function body.
-    fn current_body(&self, context: &Context) -> Option<GenericBodyId> {
+    pub(super) fn current_body(&self, context: &Context) -> Option<GenericBodyId> {
         let function = context.current_function.clone()?;
         let owner = context.current_class.clone().unwrap_or_else(|| {
             free_function_owner(&ModuleId::checked_as(&self.modules.current_module))
@@ -1107,7 +1110,10 @@ impl TypeChecker {
     /// `context` carries the program's global scope. An obligation is answered
     /// only once every type in it is concrete — a parameter pinned to another
     /// parameter is handed on instead — so nothing named there is body-local,
-    /// and the global scope is the whole scope the answer needs.
+    /// and the global scope is the whole scope the answer needs. The settled
+    /// sites then record the class instantiations each body they reach
+    /// builds at the types it is reached at ([`super::reached_instantiations`]),
+    /// before any stage asks which types are resources.
     pub(crate) fn answer_pinning_sites(&mut self, context: &Context) {
         let mut sites = std::mem::take(&mut self.pinning_sites);
         sites.extend(self.sites_reached_through_trait_slots());
@@ -1126,6 +1132,7 @@ impl TypeChecker {
             self.answer_pinning_site(stated, site, context);
         }
         self.instantiation_requirements = requirements;
+        self.record_reached_instantiations(&sites);
     }
 
     /// Answer every obligation the body `site` pins has stated.

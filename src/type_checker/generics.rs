@@ -909,6 +909,10 @@ impl TypeChecker {
         })))
     }
 
+    // TODO: resolving a written type nested N deep (`Wrap<Wrap<...<Handle>>>`)
+    // takes time exponential in N through this validation and the argument
+    // resolution that calls it: each level resolves its argument more than
+    // once. Resolving each written argument once would make it linear.
     /// Validates that provided generic arguments satisfy their constraints.
     ///
     /// Returns whether as many arguments were written as there are

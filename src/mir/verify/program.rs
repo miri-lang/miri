@@ -95,7 +95,9 @@ fn harmless_calls_after_rc(
 /// already naming the function it was found in. `facts` are those of
 /// `bodies`, in order; a body whose ownership facts no longer hold at its
 /// generation is a fault of the compiler, reported as [`StaleFact`].
-/// `instantiations` are the program's generic class instantiations.
+/// `instantiations` are the generic class instantiations the type checker
+/// decided ownership over, every one the program's bodies build, which the
+/// checks rebuild whether a trait or an extended class is a resource from.
 pub fn verify_program(
     definitions: &TypeDefinitions,
     instantiations: &Instantiations,

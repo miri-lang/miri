@@ -30,14 +30,19 @@ use std::collections::{BTreeSet, HashMap};
 
 /// The program's generic class instantiations: the argument tuples each
 /// generic class is built at, by class name.
-// TODO: an instantiation built only inside a generic function body
-// (`fn f<T>(x T) Shelving: return Box<T>(x)` called at a resource) is recorded
-// here at the bare parameter, not at the concrete argument, because generic
-// functions are instantiated during lowering. A trait or base whose only
-// resource instantiation is built that way reads as plain, so a second
-// handing to a keeper is accepted and the hook runs late (memory-safe, once).
-// Recording generic-function instantiations before ownership is decided fixes it.
 pub type Instantiations = HashMap<String, Vec<Vec<Type>>>;
+
+/// Add `class` built at `arguments` to `instantiations`, unless a tuple of
+/// the same kinds is listed already (spans aside).
+pub fn add_instantiation(instantiations: &mut Instantiations, class: &str, arguments: Vec<Type>) {
+    let tuples = instantiations.entry(class.to_string()).or_default();
+    let is_listed = tuples
+        .iter()
+        .any(|listed| (listed.iter().map(|ty| &ty.kind)).eq(arguments.iter().map(|ty| &ty.kind)));
+    if !is_listed {
+        tuples.push(arguments);
+    }
+}
 
 /// What the answers are decided over: the type table and the program's
 /// generic class instantiations.

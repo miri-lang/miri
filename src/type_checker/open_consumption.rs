@@ -20,11 +20,11 @@
 //!   its reference on ([`refusals_at_copies`]), and accepted otherwise.
 //!
 //! The copies the type checker knows are the classes inheriting a default
-//! and the instantiations of a generic class the program builds. A copy
-//! built only inside a generic function's body is one it does not know, so
-//! a site some path reaches a use from never moves, at any copy: the copy
-//! the type checker cannot refuse keeps a funded copy rather than reading a
-//! value it moved.
+//! and the instantiations of a generic class the program builds, a generic
+//! body's own included at each type the program reaches it at
+//! ([`super::reached_instantiations`]). A site some path reaches a use from
+//! still never moves at a copy the type checker does not know: such a copy
+//! keeps a funded copy rather than reading a value it moved.
 
 use std::collections::{HashMap, HashSet};
 

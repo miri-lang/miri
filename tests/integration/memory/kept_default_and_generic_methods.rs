@@ -465,13 +465,54 @@ fn main()
     assert_compiler_error(&program, "compiled at `Handle`");
 }
 
-/// A copy built only inside a generic function's body is one the type
-/// checker never sees, so a method storing its parameter twice must not
-/// move it at the first store there: every copy keeps a funded copy, and the
-/// hook runs once, where the caller's value ends.
+/// A copy built only inside a generic function's body is a copy the type
+/// checker knows too: `f` called at `Handle` builds `Holder<Handle>`, so a
+/// method storing its parameter twice is refused there, naming that copy, as
+/// it is at a `Holder<Handle>` the program builds directly.
 #[test]
-fn a_method_storing_a_type_parameter_twice_keeps_funded_copies_at_a_copy_built_in_a_generic_function(
-) {
+fn a_method_storing_a_type_parameter_twice_is_refused_at_a_copy_built_in_a_generic_function() {
+    let program = with_handle(&format!(
+        "{TWICE_HOLDER}\n{}",
+        r#"
+fn f<T>(x T) int
+    let h = Holder<T>(7)
+    return h.keep(x)
+
+fn main()
+    println(f"{f(Handle(1))}")
+    println("end")
+"#
+    ));
+    assert_compiler_error(&program, "MER_OWN_003");
+    assert_compiler_error(&program, "compiled at `Handle`");
+}
+
+/// The copy is known however many generic functions it is built through:
+/// `g` calls `f` at its own parameter, and `g` is called at `Handle`.
+#[test]
+fn a_method_storing_a_type_parameter_twice_is_refused_at_a_copy_built_two_generic_calls_deep() {
+    let program = with_handle(&format!(
+        "{TWICE_HOLDER}\n{}",
+        r#"
+fn f<T>(x T) int
+    let h = Holder<T>(7)
+    return h.keep(x)
+
+fn g<T>(x T) int
+    return f(x)
+
+fn main()
+    println(f"{g(Handle(1))}")
+"#
+    ));
+    assert_compiler_error(&program, "MER_OWN_003");
+    assert_compiler_error(&program, "compiled at `Handle`");
+}
+
+/// A generic function building the copy only at a plain type leaves the
+/// method storing its parameter twice accepted.
+#[test]
+fn a_method_storing_a_type_parameter_twice_compiles_at_a_plain_copy_built_in_a_generic_function() {
     assert_heap_guard_output(
         &with_handle(&format!(
             "{TWICE_HOLDER}\n{}",
@@ -481,11 +522,10 @@ fn f<T>(x T) int
     return h.keep(x)
 
 fn main()
-    println(f"{f(Handle(1))}")
-    println("end")
+    println(f"{f(5)}")
 "#
         )),
-        "held twice\nclosed 1\n7\nend",
+        "held twice\n7",
     );
 }
 
@@ -523,15 +563,14 @@ fn main()
 }
 
 /// A method storing its parameter and then returning it, at a copy built
-/// only inside a generic function's body, keeps a funded copy at the store:
-/// the value it returns is the one the caller handed in, and its hook runs
-/// once, where the caller's binding ends.
+/// only inside a generic function's body, is refused there: the copy at
+/// `Handle` consumes the parameter at the store, so the return reads a value
+/// already handed on.
 #[test]
-fn a_method_storing_a_type_parameter_then_returning_it_keeps_a_funded_copy_at_a_copy_built_in_a_generic_function(
+fn a_method_storing_a_type_parameter_then_returning_it_is_refused_at_a_copy_built_in_a_generic_function(
 ) {
-    assert_heap_guard_output(
-        &with_handle(
-            r#"
+    let program = with_handle(
+        r#"
 struct Cell<T>
     item T?
 
@@ -551,19 +590,18 @@ fn main()
     println(f"{r.id}")
     println("end")
 "#,
-        ),
-        "holder\n4\nend\nclosed 4",
     );
+    assert_compiler_error(&program, "MER_OWN_003");
+    assert_compiler_error(&program, "compiled at `Handle`");
 }
 
 /// A method storing its parameter in a loop, at a copy built only inside a
-/// generic function's body, keeps a funded copy at each store.
+/// generic function's body, is refused there: the copy at `Handle` consumes
+/// the parameter on the first pass.
 #[test]
-fn a_method_storing_a_type_parameter_in_a_loop_keeps_funded_copies_at_a_copy_built_in_a_generic_function(
-) {
-    assert_heap_guard_output(
-        &with_handle(
-            r#"
+fn a_method_storing_a_type_parameter_in_a_loop_is_refused_at_a_copy_built_in_a_generic_function() {
+    let program = with_handle(
+        r#"
 struct Cell<T>
     item T?
 
@@ -583,7 +621,7 @@ fn main()
     println(f"{f(Handle(6))}")
     println("end")
 "#,
-        ),
-        "holder\nclosed 6\n2\nend",
     );
+    assert_compiler_error(&program, "MER_OWN_003");
+    assert_compiler_error(&program, "compiled at `Handle`");
 }

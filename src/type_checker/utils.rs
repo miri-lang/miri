@@ -201,7 +201,7 @@ pub(crate) fn hands_on_a_reference(
     runs_drop_hook(kind, type_definitions)
 }
 
-pub use super::resource_types::{Instantiations, ResourceTypes};
+pub use super::resource_types::{add_instantiation, Instantiations, ResourceTypes};
 
 /// Whether `Array<T, N>()` can hand back storage for an element of type `kind`.
 ///
@@ -1591,27 +1591,22 @@ impl TypeChecker {
     /// A tuple containing an unresolved (`Error`) argument is not recorded, so
     /// the registry only ever holds concrete instantiations.
     pub(crate) fn record_generic_class_instantiation(&mut self, name: &str, args: Vec<Type>) {
+        if let Some(args) = self.instantiation_arguments(&args) {
+            add_instantiation(&mut self.generic_class_instantiations, name, args);
+        }
+    }
+
+    /// `args` as an instantiation lists them, each component qualified with
+    /// the module declaring it; `None` when one is unresolved (`Error`).
+    pub(crate) fn instantiation_arguments(&self, args: &[Type]) -> Option<Vec<Type>> {
         if args.iter().any(|ty| ty.kind == TypeKind::Error) {
-            return;
+            return None;
         }
-        let args: Vec<Type> = args
-            .iter()
-            .map(|ty| self.qualified_components(ty))
-            .collect();
-        let tuples = self
-            .generic_class_instantiations
-            .entry(name.to_string())
-            .or_default();
-        let already_recorded = tuples.iter().any(|existing| {
-            existing.len() == args.len()
-                && existing
-                    .iter()
-                    .zip(&args)
-                    .all(|(lhs, rhs)| lhs.kind == rhs.kind)
-        });
-        if !already_recorded {
-            tuples.push(args);
-        }
+        Some(
+            args.iter()
+                .map(|ty| self.qualified_components(ty))
+                .collect(),
+        )
     }
 
     /// A type argument naming the resolved type `ty`, written nowhere in the

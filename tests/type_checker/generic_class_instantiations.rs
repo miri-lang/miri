@@ -61,3 +61,59 @@ fn test_non_generic_class_is_not_recorded() {
         "a class with no generics is not a monomorphization target"
     );
 }
+
+const HANDLE: &str = "class Handle\n    var id int\n    fn init(id int)\n        self.id = id\n\n";
+
+/// The kinds `class` is recorded at, each tuple's first argument.
+fn first_argument_kinds(inst: &HashMap<String, Vec<Vec<Type>>>, class: &str) -> Vec<TypeKind> {
+    (inst.get(class).into_iter().flatten())
+        .filter_map(|tuple| tuple.first())
+        .map(|ty| ty.kind.clone())
+        .collect()
+}
+
+/// The instantiations ownership is decided over, a generic body's included
+/// at each type the program reaches it at.
+fn ownership_instantiations(source: &str) -> HashMap<String, Vec<Vec<Type>>> {
+    type_checker_result(source)
+        .type_checker
+        .ownership_instantiations()
+        .clone()
+}
+
+fn handle_kind() -> TypeKind {
+    TypeKind::Custom("Handle".to_string(), None)
+}
+
+#[test]
+fn test_a_class_built_in_a_generic_function_is_recorded_at_the_type_the_call_binds() {
+    let inst = ownership_instantiations(&format!(
+        "{HANDLE}{BOX}fn wrap<T>(x T) Box<T>\n    return Box<T>(i: x)\n\nfn main()\n    let b = wrap(Handle(1))\n    b.unwrap()\n"
+    ));
+    assert!(
+        first_argument_kinds(&inst, "Box").contains(&handle_kind()),
+        "Box<Handle> recorded where wrap is called at Handle"
+    );
+}
+
+#[test]
+fn test_a_class_built_two_generic_calls_deep_is_recorded_at_the_outer_binding() {
+    let inst = ownership_instantiations(&format!(
+        "{HANDLE}{BOX}fn wrap<T>(x T) Box<T>\n    return Box<T>(i: x)\n\nfn through<U>(x U) Box<U>\n    return wrap(x)\n\nfn main()\n    let b = through(Handle(1))\n    b.unwrap()\n"
+    ));
+    assert!(
+        first_argument_kinds(&inst, "Box").contains(&handle_kind()),
+        "Box<Handle> recorded where through is called at Handle"
+    );
+}
+
+#[test]
+fn test_a_class_built_in_a_generic_function_no_one_calls_is_recorded_at_no_type() {
+    let inst = ownership_instantiations(&format!(
+        "{HANDLE}{BOX}fn wrap<T>(x T) Box<T>\n    return Box<T>(i: x)\n\nfn main()\n    let h = Handle(1)\n    h.id\n"
+    ));
+    assert!(
+        !first_argument_kinds(&inst, "Box").contains(&handle_kind()),
+        "no call binds T, so no concrete Box is recorded"
+    );
+}
