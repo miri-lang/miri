@@ -1594,8 +1594,14 @@ impl Pipeline {
         // that hold whatever it spelled run on the backend's bodies instead.
         if let Some(mode) = verify_mode {
             let definitions = result.type_checker.type_definitions();
-            let mut report =
-                mir::verify::verify_program(definitions, &bodies, &facts, program_violations)?;
+            let instantiations = &result.type_checker.generic_class_instantiations;
+            let mut report = mir::verify::verify_program(
+                definitions,
+                instantiations,
+                &bodies,
+                &facts,
+                program_violations,
+            )?;
             report.add_slot_violations(mir::verify::verify_vtable_slots(&result.vtable_fills));
             Self::fail_or_warn(&report, &mode)?;
         }

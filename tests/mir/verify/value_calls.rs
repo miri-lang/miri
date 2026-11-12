@@ -13,6 +13,7 @@ use miri::mir::{
 };
 use miri::pipeline::Pipeline;
 use miri::type_checker::context::TypeDefinition;
+use miri::type_checker::utils::Instantiations;
 use std::collections::HashMap;
 
 const VALUES: &str = r#"
@@ -73,7 +74,7 @@ fn violations_in(
     bodies: &[(String, Body)],
     definitions: &HashMap<String, TypeDefinition>,
 ) -> Vec<(String, VerificationViolation)> {
-    verify_value_calls(bodies, definitions)
+    verify_value_calls(bodies, definitions, &Instantiations::new())
 }
 
 /// Asserts `found` is exactly `count` violations, each in a body whose name

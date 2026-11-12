@@ -47,8 +47,8 @@
 //! - **Resource-bounded generics** (`T extends ResourceClass` where the bound
 //!   class itself defines `fn drop`) inherit the strict-consume rule from
 //!   the bound; no escape analysis applies.  This bifurcation is implemented
-//!   by [`super::utils::is_resource`], which descends into a generic
-//!   parameter's constraint when classifying it.
+//!   by [`super::utils::ResourceTypes::holds`], which descends into a
+//!   generic parameter's constraint when classifying it.
 //!
 //! No per-monomorphization re-analysis is required.  Monomorphization
 //! specialises *types*, not the call graph; escape rules are structural, so a
@@ -75,7 +75,7 @@ use crate::runtime_effects::RuntimeEffects;
 use super::context::{class_implements_trait, resolve_method_source, MethodSource, TypeDefinition};
 use super::function_analysis::{DeclaredFunction, ModuleId};
 use super::statements::returns::collect_tail_statements;
-use super::utils::{is_auto_copy, is_resource};
+use super::utils::{is_auto_copy, Instantiations, ResourceTypes};
 use super::TypeChecker;
 
 /// Zero-based index of a parameter in a function's parameter list.
@@ -339,12 +339,14 @@ pub fn analyze_return_value(
     type_definitions: &HashMap<String, TypeDefinition>,
     escape_summaries: &HashMap<FunctionId, EscapeSummary>,
 ) -> ReturnFlow {
+    let resources = ResourceTypes::of(type_definitions, &Instantiations::new());
     let analyzer = ReturnFlowAnalyzer {
         params,
         locals: &HashMap::new(),
         callees: &HashMap::new(),
         types,
         type_definitions,
+        resources: &resources,
         escape_summaries,
         keeping: Keeping::Returned,
         at: None,
@@ -372,6 +374,8 @@ struct ReturnFlowAnalyzer<'a> {
     callees: &'a HashMap<usize, DeclaredFunction>,
     types: &'a HashMap<usize, Type>,
     type_definitions: &'a HashMap<String, TypeDefinition>,
+    /// The types that are resources, decided over `type_definitions`.
+    resources: &'a ResourceTypes,
     escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
     /// What keeps a parameter found in the value classified.
     keeping: Keeping,
@@ -888,7 +892,7 @@ impl<'a> ReturnFlowAnalyzer<'a> {
             Some(ty) => {
                 matches!(ty.kind, TypeKind::Function(_))
                     || !is_auto_copy(&ty.kind, self.type_definitions)
-                    || is_resource(&ty.kind, self.type_definitions)
+                    || self.resources.holds(&ty.kind)
             }
             None => false,
         }
@@ -1683,6 +1687,9 @@ pub(crate) struct ProgramFacts<'a> {
     pub(crate) types: &'a HashMap<usize, Type>,
     /// Every type the program and its modules declare.
     pub(crate) type_defs: &'a HashMap<String, TypeDefinition>,
+    /// The types that are resources, decided over `type_defs` at the
+    /// program's instantiations.
+    pub(crate) resources: &'a ResourceTypes,
     /// The function each free-function callee resolved to, by callee id.
     pub(crate) callees: &'a HashMap<usize, DeclaredFunction>,
     /// The module each top-level function declaration is made in, by
@@ -1764,6 +1771,7 @@ impl<'a> EscapeWalk<'a> {
             callees: self.facts.callees,
             types: self.facts.types,
             type_definitions: self.facts.type_defs,
+            resources: self.facts.resources,
             escape_summaries: self.summaries,
             keeping,
             at: span.filter(|_| self.located),

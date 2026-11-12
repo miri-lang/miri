@@ -20,6 +20,7 @@ pub mod field_index_write;
 pub mod field_projections;
 pub mod functions;
 pub mod generic_managed_type_arguments;
+pub mod generic_resource_instantiations;
 pub mod generics;
 pub mod heap_guard;
 pub mod kept_base_class_calls;

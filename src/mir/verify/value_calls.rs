@@ -37,7 +37,7 @@ use crate::mir::{
     TerminatorKind,
 };
 use crate::type_checker::context::TypeDefinition;
-use crate::type_checker::utils::{hands_on_a_reference, ResourceTypes};
+use crate::type_checker::utils::{hands_on_a_reference, Instantiations, ResourceTypes};
 
 /// The local a closure body's environment arrives in: its first parameter.
 const ENVIRONMENT: Local = Local(1);
@@ -63,11 +63,14 @@ impl Table<'_> {
 /// a runtime closure slot unadapted; and every closure body whose signature
 /// owns other parameters than its convention: none for an adapter a runtime
 /// slot calls, its type's for any other. Each violation names its body.
+/// `instantiations` are the program's generic class instantiations, which
+/// decide whether a trait or an extended class is a resource.
 pub fn verify_value_calls(
     bodies: &[(String, Body)],
     definitions: &HashMap<String, TypeDefinition>,
+    instantiations: &Instantiations,
 ) -> Vec<(String, VerificationViolation)> {
-    let resources = ResourceTypes::of(definitions);
+    let resources = ResourceTypes::of(definitions, instantiations);
     let table = Table {
         definitions,
         resources: &resources,

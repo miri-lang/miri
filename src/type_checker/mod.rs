@@ -76,6 +76,7 @@ pub(crate) use operators::{named_class, ValueOrdering, ValueStepping};
 pub(crate) mod pattern_coverage;
 mod reference_cycles;
 pub mod reference_sharing;
+pub mod resource_types;
 pub(crate) mod runtime_settled;
 pub mod slot_conventions;
 mod source_arithmetic;
@@ -645,12 +646,18 @@ impl TypeChecker {
         self.resource_types.take();
     }
 
-    /// The named types that are resources ([`utils::ResourceTypes`]),
-    /// decided the first time a stage asks and again after any definition
-    /// changes.
+    /// The types that are resources ([`utils::ResourceTypes`]), decided the
+    /// first time a stage asks and again after any definition changes. The
+    /// first stage to ask runs once the bodies are checked, so the generic
+    /// class instantiations a trait's or a base's answer reads are every one
+    /// the program's bodies build.
     pub(crate) fn resource_types(&self) -> &utils::ResourceTypes {
-        self.resource_types
-            .get_or_init(|| utils::ResourceTypes::of(&self.type_table.global_type_definitions))
+        self.resource_types.get_or_init(|| {
+            utils::ResourceTypes::of(
+                &self.type_table.global_type_definitions,
+                &self.generic_class_instantiations,
+            )
+        })
     }
 
     /// Returns the global scope (function/variable declarations).
@@ -891,6 +898,7 @@ impl TypeChecker {
         let facts = escape_analysis::ProgramFacts {
             types: &self.type_table.types,
             type_defs: &self.type_table.global_type_definitions,
+            resources: self.resource_types(),
             callees: &self.fn_analysis.declared_callees,
             modules: &self.fn_analysis.declaring_modules,
         };

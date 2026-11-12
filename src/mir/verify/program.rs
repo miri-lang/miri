@@ -10,6 +10,7 @@ use crate::ast::BuiltinCollectionKind;
 use crate::mir::facts::{ProgramFacts, StaleFact};
 use crate::mir::symbol::Symbol;
 use crate::type_checker::context::{ClassDefinition, TypeDefinition};
+use crate::type_checker::utils::Instantiations;
 
 /// The type table the verifiers read declarations from.
 type TypeDefinitions = HashMap<String, TypeDefinition>;
@@ -94,8 +95,10 @@ fn harmless_calls_after_rc(
 /// already naming the function it was found in. `facts` are those of
 /// `bodies`, in order; a body whose ownership facts no longer hold at its
 /// generation is a fault of the compiler, reported as [`StaleFact`].
+/// `instantiations` are the program's generic class instantiations.
 pub fn verify_program(
     definitions: &TypeDefinitions,
+    instantiations: &Instantiations,
     bodies: &[(String, crate::mir::Body)],
     facts: &ProgramFacts,
     program_violations: Vec<(Symbol, super::VerificationViolation)>,
@@ -112,7 +115,11 @@ pub fn verify_program(
         .map(|(symbol, v)| format!("  fn {}: {}", symbol, v))
         .collect();
     let mut after_rc = verify_program_after_rc(definitions, bodies);
-    after_rc.extend(super::verify_value_calls(bodies, definitions));
+    after_rc.extend(super::verify_value_calls(
+        bodies,
+        definitions,
+        instantiations,
+    ));
     functions_with_violations += after_rc
         .iter()
         .map(|(name, _)| name)

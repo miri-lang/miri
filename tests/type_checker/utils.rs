@@ -11,10 +11,11 @@ use miri::lexer::Lexer;
 use miri::parser::Parser;
 use miri::pipeline::{Pipeline, PipelineResult};
 use miri::type_checker::context::{
-    ClassDefinition, FieldInfo, MethodInfo, StructDefinition, TraitDefinition, TypeDefinition,
+    ClassDefinition, FieldInfo, GenericDefinition, MethodInfo, StructDefinition, TraitDefinition,
+    TypeDefinition,
 };
 use miri::type_checker::utils::{
-    has_drop_hook, is_residency_gated_buffer, is_resource, ResourceTypes,
+    has_drop_hook, is_residency_gated_buffer, Instantiations, ResourceTypes,
 };
 use miri::type_checker::TypeChecker;
 use std::collections::{BTreeMap, HashMap};
@@ -410,6 +411,12 @@ fn class_implementing_trait_with_drop(is_abstract: bool) -> HashMap<String, Type
     ])
 }
 
+/// Whether a value of `kind` is a resource over `defs`, with no generic
+/// class instantiated.
+fn is_resource(kind: &TypeKind, defs: &HashMap<String, TypeDefinition>) -> bool {
+    ResourceTypes::of(defs, &Instantiations::new()).holds(kind)
+}
+
 #[test]
 fn trait_default_drop_is_the_hook_of_an_implementing_class() {
     let defs = class_implementing_trait_with_drop(false);
@@ -430,17 +437,93 @@ fn trait_implemented_by(has_drop: bool) -> HashMap<String, TypeDefinition> {
     ])
 }
 
-/// A trait is a resource when a class implementing it is one, and the
-/// decided names answer what the walk over the definitions answers.
+/// A trait is a resource when a class implementing it is one.
 #[test]
-fn a_trait_a_resource_implements_is_a_resource_and_the_decided_names_agree() {
+fn a_trait_a_resource_implements_is_a_resource() {
     let held_at_the_trait = TypeKind::Custom("T".to_string(), None);
     for has_drop in [true, false] {
         let defs = trait_implemented_by(has_drop);
-        let resources = ResourceTypes::of(&defs);
         assert_eq!(is_resource(&held_at_the_trait, &defs), has_drop);
-        assert_eq!(resources.holds(&held_at_the_trait), has_drop);
     }
+}
+
+/// `name` at the arguments `args`.
+fn instance(name: &str, args: Vec<Type>) -> TypeKind {
+    TypeKind::Custom(
+        name.to_string(),
+        Some(args.into_iter().map(type_argument).collect()),
+    )
+}
+
+fn named(name: &str) -> Type {
+    make_type(TypeKind::Custom(name.to_string(), None))
+}
+
+/// A hook-running class `Handle`, a generic class `Wrap<P>` holding a `P`
+/// that implements the trait `T`, and the trait.
+fn generic_wrapper() -> HashMap<String, TypeDefinition> {
+    let TypeDefinition::Class(mut wrap) = class_def(false) else {
+        unreachable!("class_def builds a class");
+    };
+    wrap.name = "Wrap".to_string();
+    wrap.generics = Some(vec![GenericDefinition::unbounded("P")]);
+    wrap.traits = vec!["T".to_string()];
+    wrap.fields = vec![(
+        "item".to_string(),
+        FieldInfo {
+            ty: named("P"),
+            mutable: true,
+            visibility: miri::ast::common::MemberVisibility::Public,
+            initializer: None,
+        },
+    )];
+    HashMap::from([
+        ("Handle".to_string(), class_def(true)),
+        ("Wrap".to_string(), TypeDefinition::Class(wrap)),
+        ("T".to_string(), trait_def()),
+    ])
+}
+
+/// A generic class is a resource at an instantiation whose field reaches a
+/// hook, however deep, and no other.
+#[test]
+fn a_generic_class_is_a_resource_per_instantiation() {
+    let defs = generic_wrapper();
+    let resources = ResourceTypes::of(&defs, &Instantiations::new());
+    let wrap_handle = instance("Wrap", vec![named("Handle")]);
+    assert!(resources.holds(&wrap_handle));
+    assert!(!resources.holds(&instance("Wrap", vec![make_type(TypeKind::Int)])));
+    assert!(resources.holds(&instance("Wrap", vec![make_type(wrap_handle)])));
+    assert!(!resources.holds(&TypeKind::Custom("Wrap".to_string(), None)));
+}
+
+/// A trait a generic class implements is a resource exactly when the
+/// program builds that class at an instantiation that is one.
+#[test]
+fn a_trait_is_a_resource_at_the_instantiations_the_program_builds() {
+    let defs = generic_wrapper();
+    let held_at_the_trait = TypeKind::Custom("T".to_string(), None);
+    let built_at = |arg: Type| Instantiations::from([("Wrap".to_string(), vec![vec![arg]])]);
+    let plain = ResourceTypes::of(&defs, &built_at(make_type(TypeKind::Int)));
+    assert!(!plain.holds(&held_at_the_trait));
+    let resource = ResourceTypes::of(&defs, &built_at(named("Handle")));
+    assert!(resource.holds(&held_at_the_trait));
+}
+
+/// A class extending a generic base at a resource holds the base's field at
+/// that resource.
+#[test]
+fn a_class_extending_a_generic_base_at_a_resource_is_a_resource() {
+    let mut defs = generic_wrapper();
+    let TypeDefinition::Class(mut sub) = class_def(false) else {
+        unreachable!("class_def builds a class");
+    };
+    sub.name = "Sub".to_string();
+    sub.base_class = Some("Wrap".to_string());
+    sub.base_class_args = Some(vec![named("Handle")]);
+    defs.insert("Sub".to_string(), TypeDefinition::Class(sub));
+    let resources = ResourceTypes::of(&defs, &Instantiations::new());
+    assert!(resources.holds(&TypeKind::Custom("Sub".to_string(), None)));
 }
 
 #[test]
