@@ -32,15 +32,15 @@
 use crate::ast::common::Parameter;
 use crate::ast::expression::Expression;
 use crate::ast::statement::RECEIVER_PARAM_NAME;
-use crate::ast::types::{FunctionTypeData, TypeKind};
+use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::variable::{self, ConsumedRead};
 use crate::mir::{
-    ArgMode, EndCause, Local, Operand, Place, Rvalue, Statement as MirStatement,
-    StatementKind as MirStatementKind,
+    ArgMode, Body, CallFlags, EndCause, Local, Operand, Place, Rvalue, Statement as MirStatement,
+    StatementKind as MirStatementKind, Terminator, TerminatorKind, RETURN_LOCAL,
 };
 use crate::type_checker::context::MethodInfo;
 use crate::type_checker::TypeChecker;
@@ -137,6 +137,24 @@ pub(crate) fn record_and_bind_value_parameters<'p>(
         .chain(convention.iter().copied())
         .collect();
     let owned = (params.zip(convention)).map(|((name, span), &is_kept)| (name, span, is_kept));
+    bind_owned_parameters(ctx, kept_params, owned, span)
+}
+
+/// Records on the signature of a forwarding body the parameters it owns,
+/// `kept_params`, one per parameter in the order a call passes them, and
+/// binds each owned one of `params` at the body's entry to a local of its
+/// own. Returns, for each parameter, the local an owned one was bound to.
+pub(crate) fn record_and_bind_owned_parameters<'p>(
+    ctx: &mut LoweringContext,
+    kept_params: Vec<bool>,
+    params: impl ExactSizeIterator<Item = (&'p str, Span)>,
+    span: Span,
+) -> Result<(KeptParameterBindings, Vec<Option<Local>>), LoweringError> {
+    if params.len() != kept_params.len() {
+        return Err(mismatched_owned_parameters(span));
+    }
+    let owned =
+        (params.zip(kept_params.clone())).map(|((name, span), is_kept)| (name, span, is_kept));
     bind_owned_parameters(ctx, kept_params, owned, span)
 }
 
@@ -350,6 +368,48 @@ pub(crate) fn value_convention_in(ctx: &LoweringContext, function: &FunctionType
     ctx.type_checker.function_value_convention(function)
 }
 
+/// The positions a call through the vtable slot of `selector` numbered under
+/// `root` hands over: those the slot owns
+/// ([`crate::type_checker::slot_conventions::SlotConventions`]), at the types
+/// the call passes its operands at, `operand_types`, in operand order with
+/// the receiver first. Empty when the slot owns none.
+pub(crate) fn slot_call_convention<'t>(
+    ctx: &LoweringContext,
+    (root, selector): (&str, &str),
+    operand_types: impl Iterator<Item = &'t Type>,
+) -> Vec<bool> {
+    slot_convention_at(
+        (ctx.type_checker, &ctx.body),
+        (root, selector),
+        operand_types,
+    )
+}
+
+/// The positions the vtable slot of `selector` numbered under `root` owns,
+/// read at `operand_types`, one per position in operand order: a position
+/// whose operand is no counted value — a generic trait's parameter at a
+/// scalar type — is lent, on both sides of the call alike. Empty when it owns
+/// none there, and in a GPU body, which holds no counts. `body` is the body
+/// the types are read in: the caller's, or the body the slot is filled with.
+pub(crate) fn slot_convention_at<'t>(
+    (type_checker, body): (&TypeChecker, &Body),
+    (root, selector): (&str, &str),
+    operand_types: impl Iterator<Item = &'t Type>,
+) -> Vec<bool> {
+    let convention = type_checker.slot_convention(root, selector);
+    if body.is_gpu() || !convention.contains(&true) {
+        return Vec::new();
+    }
+    let owned: Vec<bool> = (convention.iter().zip(operand_types))
+        .map(|(&is_owned, ty)| is_owned && body.is_counted(&ty.kind))
+        .collect();
+    if owned.contains(&true) {
+        owned
+    } else {
+        Vec::new()
+    }
+}
+
 /// The bindings and temporaries a call took over, which it ends after it
 /// returns ([`end_handed_over`]).
 #[derive(Default)]
@@ -413,11 +473,12 @@ fn handed_over_local(
     consumed: &[(usize, Local)],
     arg: &Operand,
 ) -> Option<Local> {
-    // TODO: a field read, an element read or an `out` parameter handed to a
-    // keeper is copied and funded with a retain, so the value has two
-    // holders until the call's new owner ends: reading a resource out of a
-    // field is not yet a borrow that cannot be stored, and an `out`
-    // parameter handed to a keeper is not yet refused.
+    // TODO: an argument the caller cannot give up — a field read, an element
+    // read, a lent or `out` parameter — is copied and funded with a retain
+    // at an owned position, so the value has two holders until the later of
+    // the callee's new owner and the caller's binding ends, and its hook runs
+    // there: reading a resource out of a place the caller does not own is
+    // not yet a borrow that cannot be stored.
     let local = whole_local_copied(arg)?;
     let is_own_binding = variable::is_own_binding(ctx, local);
     let is_consumed = consumed.iter().any(|&(_, read)| read == local);
@@ -521,6 +582,59 @@ pub(crate) fn hand_over_owned_locals(
         moved,
         consumed: Vec::new(),
     })
+}
+
+/// The call a forwarding body makes to the body it adapts: a function value's
+/// forwarding thunk, or the adapter a vtable slot reaches a body through.
+pub(crate) struct ForwardedCall<'k> {
+    pub func: Operand,
+    /// The arguments, each the parameter the forwarding body was passed or
+    /// the local it bound an owned one to.
+    pub args: Vec<Operand>,
+    pub arg_modes: Vec<ArgMode>,
+    /// Which parameters the target owns, in operand order; empty when it
+    /// owns none.
+    pub target_kept: &'k [bool],
+    /// The local each parameter the forwarding body owns was bound to.
+    pub owned_locals: &'k [Option<Local>],
+}
+
+/// Calls the target of a forwarding body into its return local, handing the
+/// target, by `move`, each parameter it keeps ([`hand_over_owned_locals`]),
+/// and ends, once it returns, what the target took; lowering continues after
+/// the call. Every owned local the target did not take ends where the
+/// forwarding body's owned locals do, releasing what the body was handed and
+/// its target did not keep.
+pub(crate) fn emit_forwarded_call(
+    ctx: &mut LoweringContext,
+    call: ForwardedCall<'_>,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let ForwardedCall {
+        func,
+        mut args,
+        mut arg_modes,
+        target_kept,
+        owned_locals,
+    } = call;
+    let handed =
+        hand_over_owned_locals(target_kept, owned_locals, (&mut args, &mut arg_modes), span)?;
+    let after_call = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func,
+            args,
+            arg_modes,
+            arg_handles: Vec::new(),
+            flags: CallFlags::default(),
+            destination: Place::new(RETURN_LOCAL),
+            target: Some(after_call),
+        },
+        span,
+    ));
+    ctx.set_current_block(after_call);
+    end_handed_over(ctx, &handed, span);
+    Ok(())
 }
 
 /// Whether `local` is a counted temporary lowering the call's arguments made

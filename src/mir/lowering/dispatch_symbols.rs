@@ -25,16 +25,15 @@ use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{Type, CLONE_METHOD_NAME};
 use crate::mir::symbol::Symbol;
 use crate::type_checker::context::{
-    class_ancestry, resolve_method_source, trait_lineage, ClassDefinition, MethodInfo,
-    MethodSource, TraitDefinition, TypeDefinition,
+    class_ancestry, resolve_method_source, MethodSource, TypeDefinition,
 };
+use crate::type_checker::slot_conventions::SlotConventions;
 use crate::type_checker::utils::has_drop_hook;
-use crate::type_checker::vtable_selectors::{
-    dispatched_method_names, overridden_method_names, takes_vtable_slot,
-};
+pub use crate::type_checker::vtable_selectors::collect_vtable_methods;
+use crate::type_checker::vtable_selectors::{class_fills, trait_hierarchy};
 use crate::type_checker::TypeChecker;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 pub(crate) use crate::mir::dispatch::constructed_class;
 pub use crate::mir::dispatch::{
@@ -139,23 +138,10 @@ fn defaulted_method_names<'td>(
     traits: impl Iterator<Item = &'td String>,
 ) -> BTreeSet<&'td str> {
     trait_hierarchy(type_defs, traits.map(String::as_str))
-        .flat_map(|trait_def| trait_def.methods.iter())
+        .flat_map(|(_, trait_def)| trait_def.methods.iter())
         .filter(|(_, method)| !method.is_abstract)
         .map(|(name, _)| name.as_str())
         .collect()
-}
-
-/// Every trait `roots` name and every parent trait they extend, by
-/// [`trait_lineage`]. A trait two roots share is listed once per root, which
-/// no caller here — each asks for a set or for any match — can tell apart.
-fn trait_hierarchy<'td, 'n>(
-    type_defs: &'td HashMap<String, TypeDefinition>,
-    roots: impl Iterator<Item = &'n str>,
-) -> impl Iterator<Item = &'td TraitDefinition> {
-    let traits: Vec<&'td TraitDefinition> = roots
-        .flat_map(|root| trait_lineage(type_defs, root).map(|(_, trait_def)| trait_def))
-        .collect();
-    traits.into_iter()
 }
 
 /// The slots of an instance's vtable. They name what a static call on the
@@ -174,6 +160,27 @@ impl VtableInstance {
             .collect()
     }
 
+    /// Every method this vtable stands for ([`class_fills`]), with the
+    /// symbol its slots name when they are filled and the number of every
+    /// slot of `layout` it fills with that body: one per hierarchy the class
+    /// reaches the method through.
+    pub fn filled_slots<'td>(
+        &self,
+        layout: &VtableLayout,
+        type_checker: &'td TypeChecker,
+    ) -> Vec<(&'td str, Option<Symbol>, Vec<usize>)> {
+        let type_defs = type_checker.type_definitions();
+        let is_overridden = |method: &str| type_checker.slot_conventions.is_overridden(method);
+        (class_fills(self.class(), type_defs, &is_overridden).into_iter())
+            .map(|(method, roots)| {
+                let slots = (roots.into_iter())
+                    .filter_map(|root| layout.slot(root, method))
+                    .collect();
+                (method, self.slot_target(method, type_defs), slots)
+            })
+            .collect()
+    }
+
     /// The symbol this vtable's slot for `method_name` names: the body a
     /// static call on the instantiation names where one is compiled per
     /// instantiation, else what [`resolve_vtable_method`] resolves for the
@@ -189,121 +196,21 @@ impl VtableInstance {
     }
 }
 
-/// The method names of `class_name`'s filled vtable slots: every method its
-/// abstract ancestors declare, every method a trait in its chain requires and
-/// every method its chain declares that some class overrides, constructors and
-/// statics aside, sorted by name.
-///
-/// Where each lands in the vtable is [`VtableLayout::slot`]'s to say.
-pub fn collect_vtable_methods<'td>(
-    class_name: &str,
-    type_defs: &'td HashMap<String, TypeDefinition>,
-) -> Vec<&'td str> {
-    let chain: Vec<&ClassDefinition> = class_ancestry(class_name, type_defs)
-        .map(|(_, class)| class)
-        .collect();
-    let abstract_methods = chain
-        .iter()
-        .filter(|class| class.is_abstract)
-        .flat_map(|class| dispatched_method_names(&class.methods));
-    let traits = chain
-        .iter()
-        .flat_map(|class| class.traits.iter().map(String::as_str));
-    let trait_methods = trait_hierarchy(type_defs, traits)
-        .flat_map(|trait_def| dispatched_method_names(&trait_def.methods));
-    let overridden: BTreeSet<&str> = overridden_method_names(type_defs).collect();
-    let overridden_in_chain = chain
-        .iter()
-        .flat_map(|class| dispatched_method_names(&class.methods))
-        .filter(|method| overridden.contains(method));
-    let methods: BTreeSet<&str> = abstract_methods
-        .chain(trait_methods)
-        .chain(overridden_in_chain)
-        .collect();
-    methods.into_iter().collect()
-}
-
 /// The slot of `layout` a call to `method_name` through a `receiver` — a
 /// trait, an abstract class, or a class a subclass overrides the method
-/// below — reads, or `None` when the receiver dispatches no such method and
-/// the call is static.
-pub fn vtable_slot_index(
+/// below — reads, with the root of the hierarchy numbering it, or `None`
+/// when the receiver dispatches no such method and the call is static. Which
+/// hierarchy's slot that is, the type checker decides once for the program
+/// ([`SlotConventions::dispatched_root`]): the one lookup both a call's slot
+/// number and its convention are read from.
+pub fn vtable_slot_index<'c>(
     layout: &VtableLayout,
+    conventions: &'c SlotConventions,
     receiver: &str,
     method_name: &str,
-    type_defs: &HashMap<String, TypeDefinition>,
-) -> Option<usize> {
-    dispatches_through_vtable(receiver, method_name, type_defs)
-        .then(|| layout.slot(method_name))
-        .flatten()
-}
-
-/// Whether `receiver` reaches `method_name` through its vtable: a trait whose
-/// hierarchy declares it, an abstract class whose abstract ancestors or whose
-/// chain's traits do, or a class some subclass of which overrides it.
-fn dispatches_through_vtable(
-    receiver: &str,
-    method_name: &str,
-    type_defs: &HashMap<String, TypeDefinition>,
-) -> bool {
-    match type_defs.get(receiver) {
-        Some(TypeDefinition::Trait(_)) => {
-            traits_dispatch(type_defs, std::iter::once(receiver), method_name)
-        }
-        Some(TypeDefinition::Class(class)) if class.is_abstract => {
-            class_ancestry(receiver, type_defs).any(|(_, class)| {
-                (class.is_abstract && declares_dispatched(&class.methods, method_name))
-                    || traits_dispatch(
-                        type_defs,
-                        class.traits.iter().map(String::as_str),
-                        method_name,
-                    )
-            }) || overridden_below(receiver, method_name, type_defs)
-        }
-        Some(TypeDefinition::Class(_)) => overridden_below(receiver, method_name, type_defs),
-        Some(
-            TypeDefinition::Struct(_)
-            | TypeDefinition::Enum(_)
-            | TypeDefinition::Generic(_)
-            | TypeDefinition::Alias(_),
-        )
-        | None => false,
-    }
-}
-
-/// Whether a class that extends `receiver`, directly or further down, declares
-/// `method_name` as one a vtable slot stands for: a call on a `receiver` may
-/// then reach that class's body, so it reads the vtable. A method nothing
-/// below the receiver overrides is called statically.
-fn overridden_below(
-    receiver: &str,
-    method_name: &str,
-    type_defs: &HashMap<String, TypeDefinition>,
-) -> bool {
-    type_defs.iter().any(|(name, definition)| {
-        let TypeDefinition::Class(class) = definition else {
-            return false;
-        };
-        name != receiver
-            && declares_dispatched(&class.methods, method_name)
-            && class_ancestry(name, type_defs).any(|(ancestor, _)| ancestor == receiver)
-    })
-}
-
-/// Whether a trait `roots` names, or a parent trait of one, declares
-/// `method_name` as one a vtable slot stands for.
-fn traits_dispatch<'n>(
-    type_defs: &HashMap<String, TypeDefinition>,
-    roots: impl Iterator<Item = &'n str>,
-    method_name: &str,
-) -> bool {
-    trait_hierarchy(type_defs, roots)
-        .any(|trait_def| declares_dispatched(&trait_def.methods, method_name))
-}
-
-/// Whether `methods` declares `method_name` as one a vtable slot stands for.
-fn declares_dispatched(methods: &BTreeMap<String, MethodInfo>, method_name: &str) -> bool {
-    methods.get(method_name).is_some_and(takes_vtable_slot)
+) -> Option<(usize, &'c str)> {
+    let root = conventions.dispatched_root(receiver, method_name)?;
+    Some((layout.slot(root, method_name)?, root))
 }
 
 /// The symbol the slot for `method_name` names in `class_name`'s vtable where

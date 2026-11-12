@@ -8,6 +8,9 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Local(pub usize);
 
+/// The local every body returns its result in, `_0`.
+pub const RETURN_LOCAL: Local = Local(0);
+
 impl fmt::Display for Local {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "_{}", self.0)

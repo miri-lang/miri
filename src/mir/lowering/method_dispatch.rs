@@ -13,8 +13,8 @@ use crate::mir::representation::{written_type_arguments, Representation};
 use crate::mir::symbol::Symbol;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
 use crate::type_checker::context::{
-    class_ancestry, class_needs_vtable, inherited_trait_requirement, resolve_method_source,
-    trait_lineage, GenericDefinition, MethodInfo, MethodSource, TypeDefinition,
+    class_ancestry, inherited_trait_requirement, resolve_method_source, trait_lineage,
+    GenericDefinition, MethodInfo, MethodSource, TypeDefinition,
 };
 use crate::type_checker::runtime_settled::hands_a_parameter_derived_value;
 use crate::type_checker::utils::tuple_class_arguments;
@@ -25,7 +25,8 @@ use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
 use super::expression::unshare::{lent_parameter_write, TemporaryRoot};
 use super::generic_method_calls::{bound_by_position, GenericMethodSite};
 use super::kept_parameters::{
-    hand_over_kept_arguments, refuse_lending_to_a_keeper, release_after_kept_call, KeptCall,
+    hand_over_kept_arguments, refuse_lending_to_a_keeper, release_after_kept_call,
+    slot_call_convention, KeptCall,
 };
 use super::written_receiver::{lower_pending_receiver, Receiver};
 use super::{apply_generic_sub, LoweringContext};
@@ -224,40 +225,63 @@ fn resolve_in_trait_hierarchy(
 }
 
 /// A method call's operands, lowered: the receiver, the arguments and the
-/// allocator, how many arguments were written, and the first local lowering
-/// them made.
+/// allocator, and how many arguments were written.
 pub(super) struct LoweredMethodCall {
     pub args: Vec<Operand>,
     pub written_count: usize,
-    pub arg_watermark: usize,
 }
 
-/// Emit a virtual method call through a vtable slot.
-#[allow(clippy::too_many_arguments)]
+/// A method call dispatched through a vtable slot: the slot, its operands
+/// lowered, the positions its slot owns, and the local its receiver operand
+/// reads.
+pub(super) struct VirtualMethodCall<'a> {
+    pub slot: usize,
+    pub call: LoweredMethodCall,
+    /// The positions the slot owns, the receiver at 0, read at the types the
+    /// call passes ([`slot_call_convention`]); none for a slot owning none.
+    pub handover: KeptCall<'a>,
+    pub method_info: &'a MethodInfo,
+    /// The type each parameter is passed at.
+    pub arg_types: &'a [Type],
+    /// The local the receiver operand reads, when it reads one.
+    pub receiver_temp: Option<Local>,
+}
+
+/// Emit a call through a vtable slot.
+///
+/// The operands at the positions the slot owns are handed over as a direct
+/// call to a function owning them hands them ([`hand_over_kept_arguments`]),
+/// whichever body answers: the slot hands at least as much as any body
+/// filling it keeps, and a body keeping less is reached through an adapter
+/// that releases the rest. Every temporary the call did not take over is
+/// released after it.
 pub(super) fn emit_virtual_method_call(
     ctx: &mut LoweringContext,
-    vtable_slot: usize,
-    call: LoweredMethodCall,
-    method_info: &MethodInfo,
-    arg_types: &[Type],
+    call: VirtualMethodCall<'_>,
     destination: &Place,
-    op: &Operand,
-    obj_temp_local: Option<Local>,
-    obj_watermark: usize,
     span: Span,
-) -> Result<Option<Operand>, LoweringError> {
-    let LoweredMethodCall {
-        args: call_args,
-        written_count,
-        arg_watermark,
+) -> Result<(), LoweringError> {
+    let VirtualMethodCall {
+        slot,
+        call,
+        handover,
+        method_info,
+        arg_types,
+        receiver_temp,
     } = call;
-    let arg_modes =
+    let LoweredMethodCall {
+        args: mut call_args,
+        written_count,
+    } = call;
+    let mut arg_modes =
         super::dispatch::build_method_arg_modes(method_info, written_count, call_args.len());
+    let handed = hand_over_kept_arguments(ctx, &handover, &mut call_args, &mut arg_modes)?;
+    let arg_locals = super::dispatch::operand_locals(call_args.get(1..).unwrap_or_default());
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::VirtualCall {
-            vtable_slot,
-            args: call_args.clone(),
+            vtable_slot: slot,
+            args: call_args,
             arg_modes,
             param_types: arg_types
                 .iter()
@@ -269,17 +293,11 @@ pub(super) fn emit_virtual_method_call(
         span,
     ));
     ctx.set_current_block(target_bb);
-    if let Some(local) = obj_temp_local {
-        ctx.emit_temp_drop(local, obj_watermark, span);
+    if let Some(local) = receiver_temp.filter(|local| !handed.moved.contains(local)) {
+        ctx.emit_temp_drop(local, handover.arg_watermark, span);
     }
-    super::dispatch::emit_method_arg_drops(
-        ctx,
-        &call_args[1..],
-        arg_watermark,
-        destination.local,
-        span,
-    );
-    Ok(Some(op.clone()))
+    release_after_kept_call(ctx, &handover, &arg_locals, &handed, span);
+    Ok(())
 }
 
 /// The operands a method call passes: its receiver, its arguments and the
@@ -343,7 +361,6 @@ pub(super) fn emit_static_method_call(
     let LoweredMethodCall {
         args: mut call_args,
         written_count,
-        arg_watermark: _,
     } = call;
     let mut arg_modes =
         super::dispatch::build_method_arg_modes(method_info, written_count, call_args.len());
@@ -409,23 +426,20 @@ pub(crate) fn emit_held_receiver_method_call(
     let lowered = LoweredMethodCall {
         args,
         written_count,
-        arg_watermark,
     };
-    let result = Operand::Copy(destination.clone());
-    if let Some(slot) = dispatch_slot(ctx, class_name, method_name) {
-        emit_virtual_method_call(
-            ctx,
+    if let Some((slot, root)) = dispatch_slot(ctx, class_name, method_name) {
+        let operand_types = std::iter::once(receiver_ty).chain(&arg_types);
+        let convention = slot_call_convention(ctx, (root, method_name), operand_types);
+        refuse_lending_to_an_owning_slot(&convention, (class_name, method_name), span)?;
+        let virtual_call = VirtualMethodCall {
             slot,
-            lowered,
-            &method,
-            &arg_types,
-            destination,
-            &result,
-            None,
-            arg_watermark,
-            span,
-        )?;
-        return Ok(());
+            call: lowered,
+            handover: KeptCall::lending(span, (arg_watermark, destination.local)),
+            method_info: &method,
+            arg_types: &arg_types,
+            receiver_temp: None,
+        };
+        return emit_virtual_method_call(ctx, virtual_call, destination, span);
     }
     let (symbol, _) = operator_method_callee(ctx, receiver_ty, &owner, method_name, &method);
     refuse_lending_to_a_keeper(ctx, (&owner, method_name), span)?;
@@ -439,18 +453,43 @@ pub(crate) fn emit_held_receiver_method_call(
     emit_static_method_call(ctx, static_call, destination, span)
 }
 
-/// The vtable slot a call of `method_name` on a `class_name` receiver goes
-/// through, or `None` when the call names one body directly.
-fn dispatch_slot(ctx: &LoweringContext, class_name: &str, method_name: &str) -> Option<usize> {
-    if !dispatches_virtually(ctx, class_name) {
-        return None;
+/// Refuses a call the compiler makes where the program wrote none — one that
+/// lends every operand — through a vtable slot owning a position, which
+/// every body filling it would release though no caller handed it one.
+///
+/// The type checker keeps no parameter of a method the compiler calls so
+/// ([`crate::ast::implicit_methods::is_called_without_a_written_call`]), so
+/// no slot of one owns any; this holds each such call site to that.
+fn refuse_lending_to_an_owning_slot(
+    convention: &[bool],
+    (receiver, method): (&str, &str),
+    span: Span,
+) -> Result<(), LoweringError> {
+    if !convention.contains(&true) {
+        return Ok(());
     }
-    vtable_slot_index(
-        &ctx.vtable_layout(),
-        class_name,
-        method_name,
-        ctx.type_checker.type_definitions(),
-    )
+    let message = format!(
+        "the compiler calls `{receiver}.{method}` through a vtable slot owning a parameter, \
+         lending it"
+    );
+    Err(LoweringError::internal(
+        crate::diagnostics::DiagnosticCode::MirValidationFailed,
+        message,
+        span,
+    ))
+}
+
+/// The vtable slot a call of `method_name` on a `class_name` receiver goes
+/// through, with the root of the hierarchy numbering it, or `None` when the
+/// call names one body directly ([`vtable_slot_index`]); the convention
+/// ([`slot_call_convention`]) is read from the same root.
+fn dispatch_slot<'t>(
+    ctx: &LoweringContext<'t>,
+    class_name: &str,
+    method_name: &str,
+) -> Option<(usize, &'t str)> {
+    let conventions = &ctx.type_checker.slot_conventions;
+    vtable_slot_index(&ctx.vtable_layout(), conventions, class_name, method_name)
 }
 
 /// The internal error raised when the compiler is asked to call a method the
@@ -720,31 +759,33 @@ fn emit_method_call(
     (self_op, obj_temp_local, obj_watermark): (Receiver<'_>, Option<Local>, usize),
     (destination, op, arg_types): (&Place, &Operand, &[Type]),
 ) -> Result<Option<Operand>, LoweringError> {
-    let arg_watermark = ctx.body.local_decls.len();
     let call = LoweredMethodCall {
         args: method_call_args(ctx, self_op, m.args, m.method_info, arg_types)?,
         written_count: m.args.written.len(),
-        arg_watermark,
     };
-    if should_use_virtual_dispatch(ctx, m.obj, m.class_name) {
-        if let Some(slot) = vtable_slot_index(
-            &ctx.vtable_layout(),
-            m.class_name,
-            m.method_name,
-            ctx.type_checker.type_definitions(),
-        ) {
-            return emit_virtual_method_call(
-                ctx,
+    let is_super = matches!(&m.obj.node, ExpressionKind::Super);
+    if !is_super {
+        if let Some((slot, root)) = dispatch_slot(ctx, m.class_name, m.method_name) {
+            let operand_types = std::iter::once(m.obj_ty).chain(arg_types);
+            let convention = slot_call_convention(ctx, (root, m.method_name), operand_types);
+            let handover = KeptCall {
+                span: m.method_expr.span,
+                receiver: Some(m.obj),
+                kept: &convention,
+                args: m.args.written,
+                arg_watermark: obj_watermark,
+                destination: destination.local,
+            };
+            let virtual_call = VirtualMethodCall {
                 slot,
                 call,
-                m.method_info,
+                handover: handover.checked_against_method(m.method_info)?,
+                method_info: m.method_info,
                 arg_types,
-                destination,
-                op,
-                obj_temp_local,
-                obj_watermark,
-                *m.span,
-            );
+                receiver_temp: obj_temp_local,
+            };
+            emit_virtual_method_call(ctx, virtual_call, destination, *m.span)?;
+            return Ok(Some(op.clone()));
         }
     }
     let symbol = if m.method_info.declares_type_parameters() {
@@ -1564,23 +1605,6 @@ fn lower_method_receiver(
         }
     }
     super::sequencing::lower_operand(ctx, obj)
-}
-
-/// True when a call on a receiver of this static type may go through the
-/// vtable: a trait-typed receiver, or a class whose instances carry one.
-/// Whether the method itself is dispatched — declared by a trait or abstract
-/// class, or overridden below the receiver — is the slot lookup's to say.
-/// `super` calls always dispatch statically.
-fn should_use_virtual_dispatch(ctx: &LoweringContext, obj: &Expression, class_name: &str) -> bool {
-    !matches!(&obj.node, ExpressionKind::Super) && dispatches_virtually(ctx, class_name)
-}
-
-/// Whether a call on a receiver of type `class_name` goes through its
-/// vtable: the receiver is a trait, or a class some subclass may override.
-fn dispatches_virtually(ctx: &LoweringContext, class_name: &str) -> bool {
-    let defs = &ctx.type_checker.type_definitions();
-    let is_trait = matches!(defs.get(class_name), Some(TypeDefinition::Trait(_)));
-    is_trait || class_needs_vtable(class_name, defs)
 }
 
 /// Lowers the receiver `obj` of a write ([`lower_pending_receiver`]), hands it

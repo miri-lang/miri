@@ -12,6 +12,8 @@ use miri::mir::lowering::dispatch_symbols::{
 use miri::type_checker::context::{
     inherited_trait_default, resolve_method_source, MethodSource, TraitDefault, TypeDefinition,
 };
+use miri::type_checker::kept_parameters::KeptParameters;
+use miri::type_checker::slot_conventions::decide_slot_conventions;
 use std::collections::HashMap;
 
 use miri::ast::types::{Type, TypeKind};
@@ -292,7 +294,19 @@ fn static_method() -> MethodInfo {
 
 /// The slot a call through `receiver` reads under the layout `defs` gives.
 fn slot_of(receiver: &str, method: &str, defs: &HashMap<String, TypeDefinition>) -> Option<usize> {
-    vtable_slot_index(&VtableLayout::of(defs), receiver, method, defs)
+    slot_in(&VtableLayout::of(defs), receiver, method, defs)
+}
+
+/// The slot of `layout` a call through `receiver` reads, by the dispatch the
+/// type checker decides for `defs`.
+fn slot_in(
+    layout: &VtableLayout,
+    receiver: &str,
+    method: &str,
+    defs: &HashMap<String, TypeDefinition>,
+) -> Option<usize> {
+    let conventions = decide_slot_conventions(defs, &KeptParameters::default());
+    vtable_slot_index(layout, &conventions, receiver, method).map(|(slot, _)| slot)
 }
 
 /// `trait A` requires `zeta`, `trait B` requires `alpha`, and `class C`
@@ -323,11 +337,13 @@ fn two_traits_one_class() -> HashMap<String, TypeDefinition> {
     ])
 }
 
+/// Slots are numbered by the trait at the top of each hierarchy, then by
+/// method name.
 #[test]
-fn vtable_slot_index_numbers_a_trait_method_across_every_trait() {
+fn vtable_slot_index_numbers_each_trait_method_under_its_own_trait() {
     let defs = two_traits_one_class();
-    assert_eq!(slot_of("A", "zeta", &defs), Some(2));
-    assert_eq!(slot_of("B", "alpha", &defs), Some(1));
+    assert_eq!(slot_of("A", "zeta", &defs), Some(1));
+    assert_eq!(slot_of("B", "alpha", &defs), Some(2));
 }
 
 #[test]
@@ -338,8 +354,8 @@ fn vtable_slot_index_agrees_with_the_slot_the_layout_fills() {
     for method in collect_vtable_methods("C", &defs) {
         let receiver = if method == "zeta" { "A" } else { "B" };
         assert_eq!(
-            vtable_slot_index(&layout, receiver, method, &defs),
-            layout.slot(method)
+            slot_in(&layout, receiver, method, &defs),
+            layout.slot(receiver, method)
         );
     }
 }
@@ -351,7 +367,11 @@ fn vtable_layout_reserves_the_drop_slot_before_every_method() {
     let layout = VtableLayout::of(&defs);
     assert_eq!(miri::mir::dispatch::DROP_SLOT, 0);
     for method in collect_vtable_methods("C", &defs) {
-        assert_ne!(layout.slot(method), Some(miri::mir::dispatch::DROP_SLOT));
+        let receiver = if method == "zeta" { "A" } else { "B" };
+        assert_ne!(
+            layout.slot(receiver, method),
+            Some(miri::mir::dispatch::DROP_SLOT)
+        );
     }
 }
 
@@ -378,7 +398,7 @@ fn vtable_layout_gives_statics_and_constructors_no_slot() {
     let defs = make_defs([("Base".to_string(), TypeDefinition::Class(base))]);
     let layout = VtableLayout::of(&defs);
     assert_eq!(layout.slot_count(), 2);
-    assert_eq!(layout.slot("apex"), None);
+    assert_eq!(layout.slot("Base", "apex"), None);
     assert_eq!(slot_of("Base", "area", &defs), Some(1));
     assert_eq!(slot_of("Base", "apex", &defs), None);
 }
@@ -407,8 +427,8 @@ fn vtable_layout_counts_an_abstract_receivers_inherited_trait_methods() {
         ("Plain".to_string(), TypeDefinition::Class(plain)),
     ]);
     assert_eq!(VtableLayout::of(&defs).slot_count(), 4);
-    assert_eq!(slot_of("Base", "greet", &defs), Some(1));
-    assert_eq!(slot_of("Base", "shout", &defs), Some(3));
+    assert_eq!(slot_of("Base", "greet", &defs), Some(2));
+    assert_eq!(slot_of("Base", "shout", &defs), Some(1));
 }
 
 fn generic(mut class_def: ClassDefinition, param: &str) -> ClassDefinition {
@@ -755,8 +775,8 @@ fn concrete_chain() -> HashMap<String, TypeDefinition> {
 fn vtable_layout_gives_an_overridden_concrete_method_a_slot() {
     let defs = concrete_chain();
     let layout = VtableLayout::of(&defs);
-    assert_eq!(layout.slot("m"), Some(1));
-    assert_eq!(layout.slot("keep"), None);
+    assert_eq!(layout.slot("Base", "m"), Some(1));
+    assert_eq!(layout.slot("Base", "keep"), None);
     assert_eq!(layout.slot_count(), 2);
 }
 

@@ -10,7 +10,8 @@
 //! - Error reporting
 
 use super::context::{
-    resolve_method_source, ClassDefinition, Context, GenericDefinition, MethodInfo, TypeDefinition,
+    class_implements_trait, resolve_method_source, ClassDefinition, Context, GenericDefinition,
+    MethodInfo, TypeDefinition,
 };
 use super::TypeChecker;
 use crate::ast::factory::make_type;
@@ -179,20 +180,67 @@ pub fn runs_drop_hook(
 }
 
 /// Whether consuming a value of `kind` hands its reference on: its type runs
-/// a drop hook of its own, rather than reaching the value through a trait,
-/// which shares it. The one predicate both the consumption check and the
-/// owned parameters ([`super::kept_parameters`]) read.
+/// a drop hook of its own, or it is held at a trait and is a resource
+/// ([`is_resource`]), a counted block its holder gives up whole. The one
+/// predicate both the consumption check and the owned parameters
+/// ([`super::kept_parameters`]) read. `resources` answers [`is_resource`]
+/// over `type_definitions`.
 pub(crate) fn hands_on_a_reference(
     kind: &TypeKind,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+    resources: &ResourceTypes,
 ) -> bool {
-    let held_at_a_trait = matches!(kind, TypeKind::Custom(name, _)
-        if trait_declares_drop_hook(name, type_definitions));
-    !held_at_a_trait && runs_drop_hook(kind, type_definitions)
+    let is_held_at_a_trait = matches!(kind, TypeKind::Custom(name, _)
+        if matches!(type_definitions.get(name), Some(TypeDefinition::Trait(_))));
+    if is_held_at_a_trait {
+        return resources.holds(kind);
+    }
+    runs_drop_hook(kind, type_definitions)
+}
+
+/// The named types that are resources ([`is_resource`]), decided once over a
+/// settled type table, so asking about a value is a lookup: a trait's answer
+/// otherwise walks every class implementing it.
+#[derive(Debug, Default)]
+pub struct ResourceTypes {
+    names: std::collections::HashSet<String>,
+}
+
+impl ResourceTypes {
+    /// Every type `type_definitions` declares that is a resource.
+    pub fn of(type_definitions: &std::collections::HashMap<String, TypeDefinition>) -> Self {
+        let names = (type_definitions.keys())
+            .filter(|name| {
+                is_named_resource(
+                    name,
+                    type_definitions,
+                    &mut std::collections::HashSet::new(),
+                )
+            })
+            .cloned()
+            .collect();
+        Self { names }
+    }
+
+    /// Whether a value of `kind` is a resource: [`is_resource`] read off the
+    /// decided names.
+    pub fn holds(&self, kind: &TypeKind) -> bool {
+        if let TypeKind::Custom(name, _) = kind {
+            return self.names.contains(name);
+        }
+        if let TypeKind::Generic(_, bounds) = kind {
+            return bounds.entail(|bound| self.holds(&bound.ty.kind));
+        }
+        false
+    }
 }
 
 /// Determines whether a type is a resource — i.e., it defines `fn drop(self)` or
 /// transitively contains a field whose type is a resource.
+///
+/// A value held at a trait is a resource when releasing it may run a hook:
+/// the trait declares one, or some class implementing it is a resource. A
+/// trait no resource implements stays a plain counted value.
 ///
 /// Resource types are subject to use-after-move tracking inside function bodies.
 /// Managed types (String, List, collections, RC'd classes) are NOT resources.
@@ -225,34 +273,54 @@ fn is_resource_inner<'a>(
     visited: &mut std::collections::HashSet<&'a str>,
 ) -> bool {
     match kind {
-        TypeKind::Custom(name, _) => {
-            if !visited.insert(name.as_str()) {
-                return false;
-            }
-            match type_definitions.get(name) {
-                // A struct is a resource when a field it holds is one.
-                Some(TypeDefinition::Struct(def)) => def
-                    .fields
-                    .iter()
-                    .any(|(_, ty, _)| is_resource_inner(&ty.kind, type_definitions, visited)),
-                Some(TypeDefinition::Class(def)) => {
-                    if has_drop_hook(name, type_definitions) {
-                        return true;
-                    }
-                    def.fields
-                        .iter()
-                        .any(|(_, fi)| is_resource_inner(&fi.ty.kind, type_definitions, visited))
-                }
-                Some(TypeDefinition::Enum(_)) => has_drop_hook(name, type_definitions),
-                _ => false,
-            }
-        }
+        TypeKind::Custom(name, _) => is_named_resource(name, type_definitions, visited),
         // A generic parameter is a resource iff one of its bounds is a
         // resource. No bound (or non-resource bounds) → managed-typed unknown.
         TypeKind::Generic(_, bounds) => {
             bounds.entail(|bound| is_resource_inner(&bound.ty.kind, type_definitions, visited))
         }
         _ => false,
+    }
+}
+
+/// [`is_resource`] for the type named `name`.
+fn is_named_resource<'a>(
+    name: &'a str,
+    type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<&'a str>,
+) -> bool {
+    if !visited.insert(name) {
+        return false;
+    }
+    match type_definitions.get(name) {
+        // A struct is a resource when a field it holds is one.
+        Some(TypeDefinition::Struct(def)) => def
+            .fields
+            .iter()
+            .any(|(_, ty, _)| is_resource_inner(&ty.kind, type_definitions, visited)),
+        // TODO: a class is not yet a resource when only a subclass of it is,
+        // though a value held at it may be that subclass: a binding typed at
+        // such a base is lent to a vtable slot owning the receiver, so the
+        // subclass's hook runs after the call returns and a second call is
+        // not refused.
+        Some(TypeDefinition::Class(def)) => {
+            if has_drop_hook(name, type_definitions) {
+                return true;
+            }
+            def.fields
+                .iter()
+                .any(|(_, fi)| is_resource_inner(&fi.ty.kind, type_definitions, visited))
+        }
+        Some(TypeDefinition::Enum(_)) => has_drop_hook(name, type_definitions),
+        Some(TypeDefinition::Trait(_)) => {
+            trait_declares_drop_hook(name, type_definitions)
+                || type_definitions.iter().any(|(class_name, definition)| {
+                    matches!(definition, TypeDefinition::Class(_))
+                        && class_implements_trait(class_name, name, type_definitions)
+                        && is_named_resource(class_name, type_definitions, visited)
+                })
+        }
+        Some(TypeDefinition::Generic(_) | TypeDefinition::Alias(_)) | None => false,
     }
 }
 

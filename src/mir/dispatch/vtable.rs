@@ -9,7 +9,7 @@ use crate::mir::instantiation::monomorphized_arguments;
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::{AggregateKind, Body, Rvalue, StatementKind};
 use crate::type_checker::context::{class_is_extended, class_needs_vtable, TypeDefinition};
-use crate::type_checker::vtable_selectors::vtable_selectors;
+use crate::type_checker::vtable_selectors::vtable_slots;
 use std::collections::{BTreeMap, HashMap};
 
 /// The vtable one constructed class instance points at: the class, and the
@@ -126,45 +126,75 @@ pub(crate) fn constructed_class(rvalue: &Rvalue) -> Option<&Type> {
 ///
 /// Slot [`DROP_SLOT`] holds the routine that releases an instance of the
 /// vtable's own class, which a value held at a base class or a trait is
-/// released through. Every other slot stands for one method name: the sorted
-/// set of every instance method a trait or an abstract class declares, and of
-/// every one a class overrides from a class it extends, constructors and
-/// statics aside. A concrete method no subclass overrides takes no slot, and
-/// a call to it stays static. Every vtable has one slot per name, filled
-/// where the class gives that method a body and null elsewhere; a class has
-/// one method per name, so a call through any trait or base class it is
-/// reached by finds its own body at the one index the method's name takes.
+/// released through. Every other slot stands for one method of one
+/// hierarchy, named by the trait or class at its top, its root, and the
+/// method: the sorted set the type checker lists
+/// ([`crate::type_checker::vtable_selectors::vtable_slots`]). Two hierarchies
+/// sharing a method name take two slots, and a class implementing both fills
+/// each with its body. A concrete method no subclass overrides takes no slot,
+/// and a call to it stays static. Every vtable has every slot, filled where
+/// the class stands behind the slot's root and null elsewhere.
 ///
-/// The numbering depends on method names alone, which registering a generic
+/// The numbering depends on declarations alone, which registering a generic
 /// instantiation never adds to, so one layout serves a whole compilation.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct VtableLayout {
-    selectors: Vec<Box<str>>,
+    slots: Vec<(Box<str>, Box<str>)>,
 }
 
 impl VtableLayout {
     /// The numbering the traits, abstract classes and overrides of
     /// `type_defs` give.
     pub fn of(type_defs: &HashMap<String, TypeDefinition>) -> Self {
-        let selectors = vtable_selectors(type_defs);
+        let slots = vtable_slots(type_defs);
         Self {
-            selectors: selectors.into_iter().map(Box::from).collect(),
+            slots: (slots.into_iter())
+                .map(|(root, selector)| (Box::from(root), Box::from(selector)))
+                .collect(),
         }
     }
 
     /// The number of slots in every vtable, the drop slot included.
     pub fn slot_count(&self) -> usize {
-        self.selectors.len() + 1
+        self.slots.len() + 1
     }
 
-    /// The slot `method_name` takes, or `None` when no trait or abstract class
-    /// declares it and no class overrides it.
-    pub fn slot(&self, method_name: &str) -> Option<usize> {
-        self.selectors
-            .binary_search_by(|selector| (**selector).cmp(method_name))
+    /// The slot `selector` takes in the hierarchy numbered under `root`, or
+    /// `None` when that hierarchy dispatches no such method.
+    pub fn slot(&self, root: &str, selector: &str) -> Option<usize> {
+        self.slots
+            .binary_search_by(|(slot_root, slot_selector)| {
+                (&**slot_root, &**slot_selector).cmp(&(root, selector))
+            })
             .ok()
             .map(|index| index + 1)
     }
+
+    /// The root and the method of the slot numbered `slot`, or `None` for the
+    /// drop slot and a number past the last slot.
+    pub fn key(&self, slot: usize) -> Option<(&str, &str)> {
+        let (root, selector) = self.slots.get(slot.checked_sub(1)?)?;
+        Some((root, selector))
+    }
+}
+
+/// The positions each slot of `layout` owning one owns, by slot number, as
+/// the type checker decided them
+/// ([`crate::type_checker::slot_conventions::SlotConventions`]): the table
+/// the slot rules of the MIR verifier read.
+pub fn slot_convention_table(
+    layout: &VtableLayout,
+    type_checker: &crate::type_checker::TypeChecker,
+) -> HashMap<usize, Vec<bool>> {
+    (1..layout.slot_count())
+        .filter_map(|slot| {
+            let (root, selector) = layout.key(slot)?;
+            let convention = type_checker.slot_convention(root, selector);
+            convention
+                .contains(&true)
+                .then(|| (slot, convention.to_vec()))
+        })
+        .collect()
 }
 
 /// The vtable slot holding the routine that releases an instance of the
@@ -221,6 +251,21 @@ impl VtableFills {
     /// The symbol of every body some filled slot points at.
     pub fn slot_symbols(&self) -> impl Iterator<Item = &Symbol> {
         self.slots.values().flatten().map(|slot| &slot.symbol)
+    }
+
+    /// Every filled slot of every vtable, to point one at another body: the
+    /// adapter a slot reaches the body it was filled with through.
+    pub fn slots_mut(&mut self) -> impl Iterator<Item = &mut FilledSlot> {
+        self.slots.values_mut().flatten()
+    }
+
+    /// The symbol of every body a filled slot reaches, through an adapter or
+    /// not: what each slot points at, and the body each adapter calls.
+    pub fn reached_symbols(&self) -> impl Iterator<Item = &Symbol> {
+        self.slot_symbols().flat_map(|symbol| {
+            let adapted = symbol.slot_adapter_target().map(|(target, _)| target);
+            std::iter::once(symbol).chain(adapted)
+        })
     }
 }
 

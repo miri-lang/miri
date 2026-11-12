@@ -17,8 +17,8 @@ pub use element_equality::{
 };
 pub(crate) use vtable::constructed_class;
 pub use vtable::{
-    constructed_vtable_symbols, released_by_runtime_class, FilledSlot, VtableFills, VtableInstance,
-    VtableLayout, DROP_SLOT,
+    constructed_vtable_symbols, released_by_runtime_class, slot_convention_table, FilledSlot,
+    VtableFills, VtableInstance, VtableLayout, DROP_SLOT,
 };
 
 pub use crate::type_checker::context::class_needs_vtable;

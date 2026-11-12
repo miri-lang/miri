@@ -359,13 +359,14 @@ impl ReachedVtable {
         tables: DemandTables,
     ) -> Self {
         let type_defs = tables.type_checker.type_definitions();
-        let unfilled: BTreeMap<usize, (String, Symbol)> = instance
-            .slot_targets(type_defs)
-            .into_iter()
-            .filter_map(|(method, target)| {
-                Some((tables.layout.slot(method)?, (method.to_string(), target?)))
-            })
-            .collect();
+        let unfilled: BTreeMap<usize, (String, Symbol)> = (instance
+            .filled_slots(tables.layout, tables.type_checker)
+            .into_iter())
+        .filter_map(|(method, target, slots)| Some((method, target?, slots)))
+        .flat_map(|(method, target, slots)| {
+            (slots.into_iter()).map(move |slot| (slot, (method.to_string(), target.clone())))
+        })
+        .collect();
         let refused = unfilled
             .iter()
             .filter(|(_, (method, _))| {

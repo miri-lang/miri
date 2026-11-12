@@ -186,9 +186,10 @@ impl Fixture {
         }
     }
 
+    /// The slot `method` of the fixture's `Op` trait takes.
     fn slot(&self, method: &str) -> usize {
         self.layout
-            .slot(method)
+            .slot("Op", method)
             .expect("a trait method takes a slot")
     }
 

@@ -77,6 +77,7 @@ pub(crate) mod pattern_coverage;
 mod reference_cycles;
 pub mod reference_sharing;
 pub(crate) mod runtime_settled;
+pub mod slot_conventions;
 mod source_arithmetic;
 pub mod statements;
 pub(crate) mod trait_self;
@@ -205,6 +206,10 @@ pub struct TypeChecker {
     /// The resource parameters each function owns, which both sides of a
     /// call read; see [`kept_parameters::KeptParameters`].
     pub kept_parameters: kept_parameters::KeptParameters,
+    /// The positions each vtable slot owns, which every call through the
+    /// slot and every body filling it read; see
+    /// [`slot_conventions::SlotConventions`].
+    pub slot_conventions: slot_conventions::SlotConventions,
     /// What each declared runtime entry point does to its arguments and its
     /// result, as its `runtime` declaration states.
     pub runtime_effects: crate::runtime_effects::RuntimeEffects,
@@ -352,6 +357,9 @@ pub struct TypeChecker {
     /// every body lowered from one finished check reads one table without
     /// copying it.
     pub(crate) shared_type_definitions: OnceCell<Rc<HashMap<String, TypeDefinition>>>,
+    /// Which named types are resources, decided once over the settled
+    /// definitions and dropped with [`Self::shared_type_definitions`].
+    pub(crate) resource_types: OnceCell<utils::ResourceTypes>,
 }
 
 impl Default for TypeChecker {
@@ -384,6 +392,7 @@ impl TypeChecker {
             held_operands: body_writes::HeldOperands::default(),
             consumed_arguments: use_after_move::ConsumedArguments::default(),
             kept_parameters: kept_parameters::KeptParameters::default(),
+            slot_conventions: slot_conventions::SlotConventions::default(),
             runtime_effects: HashMap::new(),
             call_generic_mappings: HashMap::new(),
             open_generic_calls: call_instantiation::OpenGenericCalls::default(),
@@ -415,6 +424,7 @@ impl TypeChecker {
             type_set_allowed: false,
             type_set_exports: HashMap::new(),
             shared_type_definitions: OnceCell::new(),
+            resource_types: OnceCell::new(),
         }
     }
 
@@ -522,12 +532,20 @@ impl TypeChecker {
         self.kept_parameters.of_method(owner, method)
     }
 
+    /// Which positions the vtable slot of `selector` numbered under `root`
+    /// owns, in operand order, the receiver first; empty when it owns none
+    /// ([`slot_conventions::SlotConventions`]).
+    pub fn slot_convention(&self, root: &str, selector: &str) -> &[bool] {
+        self.slot_conventions.of(root, selector)
+    }
+
     /// Which argument positions a call through a function value of the type
     /// `function` owns ([`kept_parameters::function_value_convention`]).
     pub fn function_value_convention(&self, function: &FunctionTypeData) -> Vec<bool> {
         kept_parameters::function_value_convention(
             function,
             &self.type_table.global_type_definitions,
+            self.resource_types(),
         )
     }
 
@@ -624,6 +642,15 @@ impl TypeChecker {
     /// to any of them makes stale.
     pub(crate) fn invalidate_shared_type_definitions(&mut self) {
         self.shared_type_definitions.take();
+        self.resource_types.take();
+    }
+
+    /// The named types that are resources ([`utils::ResourceTypes`]),
+    /// decided the first time a stage asks and again after any definition
+    /// changes.
+    pub(crate) fn resource_types(&self) -> &utils::ResourceTypes {
+        self.resource_types
+            .get_or_init(|| utils::ResourceTypes::of(&self.type_table.global_type_definitions))
     }
 
     /// Returns the global scope (function/variable declarations).
@@ -779,8 +806,8 @@ impl TypeChecker {
         self.report_deferred_gpu_int_literal_ranges();
         self.answer_pinning_sites(&context);
         self.run_pass_escape_summaries(program, &mut context);
-        self.run_pass_use_after_move(program, &context);
         self.run_pass_kept_parameters(program, &context);
+        self.run_pass_use_after_move(program, &context);
         self.check_hygiene(program);
         self.receiver_writes = body_writes::ReceiverWrites::of(
             top_level_statements(program).chain(&self.imported_statements),
@@ -885,6 +912,8 @@ impl TypeChecker {
             &self.type_table.global_type_definitions,
             &context.escape_summaries,
             &self.fn_analysis.declared_callees,
+            &self.slot_conventions,
+            self.resource_types(),
         )
         .check_program(program);
         self.diagnostics.extend_errors(findings.errors);
@@ -894,7 +923,8 @@ impl TypeChecker {
 
     /// Decides which resource parameters each of the program's own
     /// top-level functions owns ([`kept_parameters`]), from the converged
-    /// escape summaries.
+    /// escape summaries, and then which positions each vtable slot owns
+    /// ([`slot_conventions`]), which the consumption check reads.
     ///
     /// Only the program's bodies are decided: the consumption check walks
     /// those alone, and an owned parameter needs its consumption recorded to
@@ -906,15 +936,16 @@ impl TypeChecker {
             return;
         }
         let type_definitions = &self.type_table.global_type_definitions;
-        let selectors = vtable_selectors::vtable_selectors(type_definitions);
         let facts = kept_parameters::KeepFacts {
             type_definitions,
+            resources: self.resource_types(),
             escape_summaries: &context.escape_summaries,
             modules: &self.fn_analysis.declaring_modules,
-            selectors: &selectors,
         };
         self.kept_parameters =
             kept_parameters::decide_kept_parameters(top_level_statements(program), &facts);
+        self.slot_conventions =
+            slot_conventions::decide_slot_conventions(type_definitions, &self.kept_parameters);
     }
 
     /// Registers every class, trait, struct and enum among `statements` as

@@ -20,9 +20,11 @@ mod lent_arguments;
 mod local_borrows;
 mod moved_out;
 mod optional_representation;
+mod owned_copies;
 mod parameter_writes;
 mod resolved_self;
 mod resource_transfers;
+mod slot_conventions;
 mod stable_collections;
 mod unshared_writes;
 mod value_arguments;
@@ -2873,19 +2875,19 @@ fn a_function_keeping_a_parameter_named_as_a_value_is_reported() {
 }
 
 #[test]
-fn a_function_keeping_a_parameter_filling_a_vtable_slot_is_reported() {
+fn a_function_keeping_a_parameter_called_through_a_runtime_thunk_is_reported() {
     let program = kept_param_program(ArgMode::Owned);
     let facts = ProgramFacts::of(&program);
     let called_directly = verify_owners_are_called_directly(&program, &facts, &HashSet::new());
     assert!(called_directly.is_empty(), "every call to it is a MIR call");
-    let slot = HashSet::from([callee_symbol()]);
-    let found = verify_owners_are_called_directly(&program, &facts, &slot);
-    assert_eq!(found.len(), 1, "a slot lends every argument");
+    let thunk = HashSet::from([callee_symbol()]);
+    let found = verify_owners_are_called_directly(&program, &facts, &thunk);
+    assert_eq!(found.len(), 1, "a runtime thunk lends every argument");
     assert_eq!(found[0].0, callee_symbol());
     let message = &found[0].1.message;
     assert!(
-        message.contains("vtable slot or a runtime thunk"),
-        "the finding names the slot: {message}"
+        message.contains("is called through a runtime thunk"),
+        "the finding names the thunk: {message}"
     );
 }
 

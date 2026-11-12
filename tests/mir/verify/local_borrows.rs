@@ -19,6 +19,7 @@ use miri::ast::types::{Type, TypeKind};
 use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::facts::OwnershipFacts;
 use miri::mir::place::PlaceElem;
+use miri::mir::rc::RcClassifier;
 use miri::mir::symbol::Symbol;
 use miri::mir::verify::{verify_body, verify_local_borrows};
 use miri::mir::{
@@ -26,9 +27,11 @@ use miri::mir::{
     TerminatorKind,
 };
 use miri::runtime_fns::rt;
+use miri::type_checker::context::{ClassDefinition, TypeDefinition};
 use miri::type_checker::ModuleId;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
+use std::rc::Rc;
 
 /// A body with the locals it records as borrowing.
 struct Recorded {
@@ -473,6 +476,65 @@ fn a_borrowed_row_passed_owned_or_to_a_closure_is_refused() {
     assert_refused(&owned, "the row passed owned");
     let closure = row_borrowing_body(call(Operand::Copy(place(4)), vec![lent(3)]));
     assert_refused(&closure, "the row lent to a closure");
+}
+
+/// Locals as in [`row_borrowing_body`], but `_1` is a list of class
+/// instances and `_3` the instance read out of it — a reference by design,
+/// which a callee's writes reach through its own count. `_4` is a second list
+/// of instances.
+fn instance_borrowing_body(call: Terminator) -> Recorded {
+    let instance = Type::new(
+        TypeKind::Custom("Gauge".to_string(), None),
+        miri::error::syntax::Span::new(0, 0),
+    );
+    let list = collection_ty("List", std::slice::from_ref(&instance.kind));
+    let mut recorded = row_borrowing_body(call);
+    recorded.body.local_decls[1].ty = list.clone();
+    recorded.body.local_decls[3].ty = instance;
+    recorded.body.local_decls[4].ty = list;
+    recorded.body.rc_classifier = RcClassifier::new(Rc::new(HashMap::from([(
+        "Gauge".to_string(),
+        TypeDefinition::Class(gauge_class()),
+    )])));
+    recorded
+}
+
+fn gauge_class() -> ClassDefinition {
+    ClassDefinition {
+        name: "Gauge".to_string(),
+        generics: None,
+        base_class: None,
+        base_class_args: None,
+        traits: Vec::new(),
+        trait_args: HashMap::new(),
+        fields: Vec::new(),
+        methods: BTreeMap::new(),
+        module: "test".to_string(),
+        is_abstract: false,
+        runtime_settled_methods: BTreeSet::new(),
+    }
+}
+
+/// A borrowed instance handed over by copy is funded by a retain at the
+/// call, so the borrow holds.
+#[test]
+fn a_borrowed_instance_handed_over_by_copy_holds() {
+    let body = instance_borrowing_body(call(
+        function_named("callee"),
+        vec![(Operand::Copy(place(3)), ArgMode::Owned)],
+    ));
+    assert_held(&body, "the instance handed over by copy");
+}
+
+/// A move hands the callee the caller's own reference, which a borrowed
+/// instance does not hold: the callee's release would free its owner's.
+#[test]
+fn a_borrowed_instance_handed_over_by_move_is_refused() {
+    let body = instance_borrowing_body(call(
+        function_named("callee"),
+        vec![(Operand::Move(place(3)), ArgMode::Owned)],
+    ));
+    assert_refused(&body, "the instance handed over by move");
 }
 
 /// A string is not copied on entry by a callee writing it, so a borrowed

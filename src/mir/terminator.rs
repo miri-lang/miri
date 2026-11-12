@@ -115,6 +115,25 @@ impl Terminator {
         self
     }
 
+    /// The arguments a call or a virtual call passes, with how it passes
+    /// each ([`arg_mode`] reads a position); `None` for any other
+    /// terminator.
+    pub fn passed_arguments(&self) -> Option<(&[Operand], &[ArgMode])> {
+        match &self.kind {
+            TerminatorKind::Call {
+                args, arg_modes, ..
+            }
+            | TerminatorKind::VirtualCall {
+                args, arg_modes, ..
+            } => Some((args, arg_modes)),
+            TerminatorKind::GpuLaunch { .. }
+            | TerminatorKind::Goto { .. }
+            | TerminatorKind::SwitchInt { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable => None,
+        }
+    }
+
     /// Every place this terminator stores a value into: the destination of a
     /// call, a virtual call or a kernel launch, and each `out` argument of a
     /// call.

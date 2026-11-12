@@ -83,6 +83,9 @@ fn write_written_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Res
             StringLiteralPart::Bytes => write!(f, "the bytes of string literal {index}"),
             StringLiteralPart::Object => write!(f, "the object of string literal {index}"),
         },
+        SymbolKind::SlotAdapter { target, .. } => {
+            write!(f, "the vtable slot adapter of {}", target.written())
+        }
     }
 }
 

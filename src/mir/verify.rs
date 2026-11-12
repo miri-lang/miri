@@ -136,10 +136,12 @@ mod local_borrows;
 mod moved_out;
 mod optional_representation;
 mod optional_slots;
+mod owned_copies;
 mod parameter_writes;
 mod program;
 mod resolved_self;
 mod resource_transfers;
+mod slot_conventions;
 mod stable_collections;
 mod unshared_writes;
 mod value_arguments;
@@ -157,10 +159,12 @@ pub use local_borrows::verify_local_borrows;
 pub use moved_out::verify_moved_out;
 pub use optional_representation::{verify_optional_call_layouts, verify_optional_representation};
 pub use optional_slots::verify_optional_slots;
+pub use owned_copies::verify_owned_copies;
 pub use parameter_writes::verify_parameter_writes;
 pub use program::{verify_backend_bodies, verify_program, ProgramReport};
 pub use resolved_self::verify_resolved_self;
 pub use resource_transfers::verify_resource_transfers;
+pub use slot_conventions::{verify_slot_conventions, SlotSpecification};
 pub use stable_collections::verify_stable_collections;
 pub use unshared_writes::verify_unshared_writes;
 pub use value_arguments::verify_value_arguments;
@@ -387,10 +391,11 @@ pub fn verify_owned_argument_modes(
     violations
 }
 
-/// Every function of `program` taking a parameter over that codegen calls
-/// without a MIR call naming it — a filled vtable slot, a runtime thunk —
-/// listed in `synthesized`. Such a call lends every argument, so the
-/// function would release a reference no caller handed it.
+/// Every function of `program` taking a parameter over that a runtime thunk
+/// calls without a MIR call naming it, listed in `synthesized`. Such a call
+/// lends every argument, so the function would release a reference no caller
+/// handed it. A vtable slot hands what it owns instead, which
+/// `slot_conventions::verify_slot_conventions` checks.
 pub fn verify_owners_are_called_directly(
     program: &[(Symbol, Body)],
     facts: &ProgramFacts,
@@ -401,8 +406,8 @@ pub fn verify_owners_are_called_directly(
             synthesized.contains(symbol) && facts.ownership().owned_params.contains(&true)
         })
         .map(|((symbol, body), _)| {
-            let message = "is called through a vtable slot or a runtime thunk, which lends \
-                           every argument, yet takes a parameter over";
+            let message = "is called through a runtime thunk, which lends every argument, \
+                           yet takes a parameter over";
             (symbol.clone(), body_violation(body, message.to_string()))
         })
         .collect()
@@ -579,11 +584,14 @@ fn argument_mode_violation(
 ) -> Option<VerificationViolation> {
     let (func, args, modes, destination) = match kind {
         // A call through a function value follows the convention of the
-        // value's type, which `value_calls::verify_value_calls` checks.
+        // value's type, which `value_calls::verify_value_calls` checks, and
+        // a call through a vtable slot the slot's, which
+        // `slot_conventions::verify_slot_conventions` checks.
         TerminatorKind::Call {
             func: Operand::Copy(_) | Operand::Move(_),
             ..
-        } => return None,
+        }
+        | TerminatorKind::VirtualCall { .. } => return None,
         TerminatorKind::Call {
             func,
             args,
@@ -591,12 +599,6 @@ fn argument_mode_violation(
             destination,
             ..
         } => (Some(func), args, arg_modes, destination),
-        TerminatorKind::VirtualCall {
-            args,
-            arg_modes,
-            destination,
-            ..
-        } => (None, args, arg_modes, destination),
         TerminatorKind::GpuLaunch { .. }
         | TerminatorKind::Goto { .. }
         | TerminatorKind::SwitchInt { .. }
@@ -1438,8 +1440,9 @@ fn apply_terminator(
             arg_modes.as_slice(),
             destination,
         ),
-        // A virtual call resolves its callee through a vtable at runtime, so
-        // nothing static is known about what it takes ownership of.
+        // A virtual call's callee is resolved through a vtable at run time,
+        // and takes over exactly the positions its slot's convention marks
+        // `Owned`.
         TerminatorKind::VirtualCall {
             args,
             arg_modes,

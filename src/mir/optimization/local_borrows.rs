@@ -20,7 +20,9 @@
 //! - **It reads.** `l` is a managed local the body owns, every definition of it
 //!   is a copy RC insertion would retain, it runs no drop hook and holds no device
 //!   buffer, and it is never rebound, released by hand, handed to a runtime
-//!   entry point that keeps it, written through, or passed `out`.
+//!   entry point that keeps it, written through, passed `out`, or handed by
+//!   `move` to a position its callee owns: a move gives the callee the
+//!   caller's own reference, which a borrow does not hold.
 //! - **It is never asked whether it is shared**, unless its type is a reference
 //!   by design — a class, or a trait only classes implement. A borrowed value's
 //!   count is its owner's, so a copy-on-write check on it would answer "not
@@ -434,6 +436,7 @@ fn refused_by_rvalue(rvalue: &Rvalue) -> Vec<Local> {
 }
 
 /// The locals a terminator writes, launches, calls by moving, passes `out`,
+/// hands by `move` to a position its callee owns ([`hands_over_by_move`]),
 /// hands to a runtime entry point that keeps or checks them, or — unless
 /// `is_reference` — hands to any callee not known to only read it, other than
 /// one copying it on entry before a write ([`lends_to_entry_copy`], for a
@@ -467,6 +470,9 @@ fn refused_by_terminator(
     };
     let refused_args = args.iter().enumerate().filter_map(|(position, arg)| {
         let place = arg.place()?;
+        if hands_over_by_move(arg, arg_mode(arg_modes, position)) {
+            return Some(place.local);
+        }
         // A stored element is read whole and retained for the container by
         // the call itself, so it neither keeps nor writes the borrow.
         if arg_mode(arg_modes, position) == ArgMode::Donated {
@@ -488,6 +494,19 @@ fn refused_by_terminator(
         .chain(moved_callee)
         .chain(refused_args)
         .collect()
+}
+
+/// Whether `arg`, passed `mode`, hands its callee the caller's own reference
+/// to a whole local by `move`: at a position the callee owns, or one whose
+/// container keeps it. RC insertion funds only an argument spelled as a copy,
+/// so the local moved must hold a reference of its own.
+fn hands_over_by_move(arg: &Operand, mode: ArgMode) -> bool {
+    let is_whole_move = matches!(arg, Operand::Move(place) if place.projection.is_empty());
+    let is_owned = match mode {
+        ArgMode::Owned | ArgMode::Donated => true,
+        ArgMode::Borrowed | ArgMode::Out => false,
+    };
+    is_whole_move && is_owned
 }
 
 /// Whether `func` is a runtime entry point that only reads the argument at

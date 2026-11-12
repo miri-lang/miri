@@ -412,9 +412,13 @@ pub struct PassContext<'a> {
     pub definitions: &'a HashMap<String, TypeDefinition>,
     /// Which classes run a drop hook when a value of them is released.
     pub hooks: DropHookReach<'a>,
-    /// The bodies called through without a MIR call naming them, such as a
-    /// vtable slot's.
+    /// The bodies a runtime thunk calls without a MIR call naming them,
+    /// lending every argument.
     pub synthesized: HashSet<Symbol>,
+    /// The bodies a vtable slot reaches: each a slot points at, and the body
+    /// each slot adapter calls. Each owns exactly what its slot hands it, so
+    /// no pass adds an owned parameter to one.
+    pub slot_reached: HashSet<Symbol>,
     /// Whether the program's MIR is verified, so a pass reports what it
     /// finds wrong across bodies.
     pub verifying: bool,
@@ -423,15 +427,18 @@ pub struct PassContext<'a> {
 }
 
 impl<'a> PassContext<'a> {
+    /// A context over the program's `definitions`, whose runtime thunks
+    /// call `synthesized` and whose vtable slots reach `slot_reached`.
     pub fn new(
         definitions: &'a HashMap<String, TypeDefinition>,
-        synthesized: HashSet<Symbol>,
+        (synthesized, slot_reached): (HashSet<Symbol>, HashSet<Symbol>),
         verifying: bool,
     ) -> Self {
         PassContext {
             definitions,
             hooks: DropHookReach::new(definitions),
             synthesized,
+            slot_reached,
             verifying,
             violations: Vec::new(),
         }
@@ -669,7 +676,9 @@ pub const MIR_PASSES: &[Step] = &[
 ];
 
 /// Refuses a program reaching a function that keeps a parameter other than
-/// by a direct call, decides which parameters each function takes over,
+/// by a direct call or a vtable slot handing it what it keeps, decides which
+/// parameters each function no runtime thunk or vtable slot reaches takes
+/// over,
 /// then, while verifying, checks every call against the decision and the layouts its
 /// arguments cross bodies in.
 fn decide_owned_parameters(
@@ -679,9 +688,12 @@ fn decide_owned_parameters(
 ) -> Result<(), String> {
     use crate::mir::optimization::owned_params;
     use crate::mir::verify;
-    let synthesized = &context.synthesized;
-    owned_params::refuse_indirectly_reached_keepers(bodies, synthesized)?;
-    owned_params::decide_owned_parameters(bodies, facts, synthesized, &context.hooks);
+    owned_params::refuse_indirectly_reached_keepers(bodies, &context.synthesized)?;
+    let not_called_directly: HashSet<Symbol> =
+        (context.synthesized.iter().chain(&context.slot_reached))
+            .cloned()
+            .collect();
+    owned_params::decide_owned_parameters(bodies, facts, &not_called_directly, &context.hooks);
     if !context.verifying {
         return Ok(());
     }

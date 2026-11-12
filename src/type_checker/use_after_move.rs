@@ -7,7 +7,9 @@
 //! if a consumed variable is subsequently accessed. Only a resource (a value
 //! whose release may run a `drop` hook) is ever consumed, and only by:
 //! - a call whose callee keeps it, as the callee's escape summary says; a
-//!   callee with no summary (a function value) is assumed to keep it;
+//!   callee with no summary (a function value) is assumed to keep it; a call
+//!   through a vtable slot keeps what the slot owns
+//!   ([`super::slot_conventions`]);
 //! - an assignment to another binding, a `return`, or `value.drop()`.
 //!
 //! Every other value is lent to a call and stays the caller's, at the top
@@ -29,7 +31,8 @@ use super::escape_analysis::{
     returned_tails, EscapeNextHop, EscapeSummary, FunctionId,
 };
 use super::function_analysis::DeclaredFunction;
-use super::utils::{hands_on_a_reference, is_resource, runs_drop_hook};
+use super::slot_conventions::SlotConventions;
+use super::utils::{hands_on_a_reference, runs_drop_hook, ResourceTypes};
 use crate::ast::captures::collect_lambda_captures;
 
 /// Why `value.drop()` is refused on a receiver the scope does not own.
@@ -254,6 +257,11 @@ pub struct UseAfterMoveChecker<'a> {
     /// The function each free-function callee resolved to, by callee id: a
     /// free function's summary is its declaration's, never its name's.
     callees: &'a HashMap<usize, DeclaredFunction>,
+    /// The positions each vtable slot owns, which a call through the slot
+    /// consumes.
+    slot_conventions: &'a SlotConventions,
+    /// The named types that are resources, decided once for the program.
+    resources: &'a ResourceTypes,
     errors: Vec<TypeError>,
     warnings: Vec<Diagnostic>,
     /// Names currently bound as parameters or `let`/`var` locals.  Used to
@@ -326,6 +334,8 @@ impl<'a> UseAfterMoveChecker<'a> {
         type_definitions: &'a HashMap<String, TypeDefinition>,
         escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
         callees: &'a HashMap<usize, DeclaredFunction>,
+        slot_conventions: &'a SlotConventions,
+        resources: &'a ResourceTypes,
     ) -> Self {
         Self {
             flow,
@@ -333,6 +343,8 @@ impl<'a> UseAfterMoveChecker<'a> {
             type_definitions,
             escape_summaries,
             callees,
+            slot_conventions,
+            resources,
             errors: vec![],
             warnings: vec![],
             fn_bindings: HashSet::new(),
@@ -459,7 +471,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         let is_resource = self
             .types
             .get(&returned.id)
-            .is_some_and(|ty| is_resource(&ty.kind, self.type_definitions));
+            .is_some_and(|ty| self.resources.holds(&ty.kind));
         if is_resource && !self.gives_away_a_capture(name, returned.span) {
             consumed.insert(
                 name.clone(),
@@ -749,7 +761,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             .iter()
             .filter_map(|decl| {
                 let ty = self.types.get(&decl.initializer.as_ref()?.id)?;
-                if !is_resource(&ty.kind, self.type_definitions) {
+                if !self.resources.holds(&ty.kind) {
                     return None;
                 }
                 let type_name = Self::resource_type_name(&ty.kind)?;
@@ -1366,16 +1378,15 @@ impl<'a> UseAfterMoveChecker<'a> {
     fn is_resource_expr(&self, expr: &Expression) -> bool {
         self.types
             .get(&expr.id)
-            .is_some_and(|ty| is_resource(&ty.kind, self.type_definitions))
+            .is_some_and(|ty| self.resources.holds(&ty.kind))
     }
 
-    /// Whether consuming the binding `expr` names hands its reference on: its
-    /// type runs a drop hook of its own, rather than reaching the value
-    /// through a trait, which shares it.
+    /// Whether consuming the binding `expr` names hands its reference on
+    /// ([`hands_on_a_reference`]).
     fn hands_on_its_reference(&self, expr: &Expression) -> bool {
         self.types
             .get(&expr.id)
-            .is_some_and(|ty| hands_on_a_reference(&ty.kind, self.type_definitions))
+            .is_some_and(|ty| hands_on_a_reference(&ty.kind, self.type_definitions, self.resources))
     }
 
     /// Marks the variable `arg` names consumed by `sink` when it is a resource,
@@ -1542,12 +1553,38 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// unresolved, or no summary is present for the method.
     fn extract_method_summary(&self, callee: &Expression) -> Option<EscapeSummary> {
         let (type_name, method_name) = self.method_call_target(callee)?;
-        method_summary(
+        let summary = method_summary(
             type_name,
             method_name,
             self.escape_summaries,
             self.type_definitions,
-        )
+        );
+        match self.dispatched_slot_convention(callee, type_name, method_name) {
+            Some(convention) => Some(slot_summary(summary.unwrap_or_default(), convention)),
+            None => summary,
+        }
+    }
+
+    /// The positions the vtable slot a method call `callee` reads owns, when
+    /// the call reads one: its receiver, of type `type_name`, dispatches
+    /// `method_name` through a vtable, and is not `super`, which names one
+    /// body.
+    fn dispatched_slot_convention(
+        &self,
+        callee: &Expression,
+        type_name: &str,
+        method_name: &str,
+    ) -> Option<&[bool]> {
+        let ExpressionKind::Member(receiver, _) = &callee.node else {
+            return None;
+        };
+        if matches!(receiver.node, ExpressionKind::Super) {
+            return None;
+        }
+        let root = self
+            .slot_conventions
+            .dispatched_root(type_name, method_name)?;
+        Some(self.slot_conventions.of(root, method_name))
     }
 
     /// The receiver's declared type and the method's name of a method-call
@@ -1564,6 +1601,17 @@ impl<'a> UseAfterMoveChecker<'a> {
         };
         Some((type_name, method_name))
     }
+}
+
+/// `summary` with the parameters it keeps replaced by the positions a vtable
+/// slot owns, `convention`, in operand order with the receiver first: what a
+/// call through the slot consumes, whichever body answers it.
+fn slot_summary(mut summary: EscapeSummary, convention: &[bool]) -> EscapeSummary {
+    summary.direct_escapes = (convention.iter().enumerate())
+        .filter(|(_, is_owned)| **is_owned)
+        .map(|(position, _)| position)
+        .collect();
+    summary
 }
 
 /// Drop from `state` every name in `names`, bound afresh where they are

@@ -352,7 +352,7 @@ fn the_manager_runs_each_step_over_every_body_and_settles_its_facts() {
     ];
     let mut facts = ProgramFacts::of(&bodies);
     let definitions = HashMap::new();
-    let mut context = PassContext::new(&definitions, HashSet::new(), false);
+    let mut context = PassContext::new(&definitions, (HashSet::new(), HashSet::new()), false);
     assert_eq!(manager.run(&mut bodies, &mut facts, &mut context), Ok(()));
     for ((_, body), facts) in bodies.iter().zip(facts.iter()) {
         assert_eq!(body.basic_blocks.len(), 2, "every body was rewritten");

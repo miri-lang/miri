@@ -566,6 +566,9 @@ pub struct PipelineResult {
     /// The slots each vtable fills, settled once lowering has reached every
     /// body; empty until then.
     pub vtable_fills: mir::lowering::vtable_demand::VtableFills,
+    /// The slot numbering lowered virtual calls index by, settled with the
+    /// fills; empty until lowering.
+    pub vtable_layout: mir::dispatch::VtableLayout,
     /// The generic class methods lowering withheld because nothing that runs
     /// reaches them at an instance their obligations fail at; see
     /// `ImpliedMethodVerdicts`.
@@ -942,6 +945,7 @@ impl Pipeline {
             ast,
             type_checker,
             vtable_fills: Default::default(),
+            vtable_layout: Default::default(),
             withheld_methods: Default::default(),
             device_helpers: Default::default(),
         })
@@ -1554,11 +1558,16 @@ impl Pipeline {
 
         let verify_mode = self.verify_mode();
         let definitions = result.type_checker.type_definitions();
-        // A vtable slot is called through without a MIR call naming its body,
-        // so a body some slot points at lends every parameter too.
-        let mut synthesized = mir::lowering::dispatch_symbols::synthesized_references(definitions);
-        synthesized.extend(result.vtable_fills.slot_symbols().cloned());
-        let mut context = PassContext::new(definitions, synthesized, verify_mode.is_some());
+        // A runtime thunk calls its body lending every argument. A vtable
+        // slot is called through without a MIR call naming its body, and
+        // hands each body it reaches exactly what that body owns.
+        let synthesized = mir::lowering::dispatch_symbols::synthesized_references(definitions);
+        let slot_reached = result.vtable_fills.reached_symbols().cloned().collect();
+        let mut context = PassContext::new(
+            definitions,
+            (synthesized, slot_reached),
+            verify_mode.is_some(),
+        );
         let mut facts = ProgramFacts::of(&lowered);
         let manager = PassManager::new(passes::MIR_PASSES)
             .map_err(|order| CompilerError::Internal(order.to_string()))?;
@@ -1568,8 +1577,7 @@ impl Pipeline {
         // every call's argument modes are checked again on the bodies as
         // the passes leave them.
         if verify_mode.is_some() {
-            let modes = mir::verify::verify_owned_argument_modes(&lowered, &facts);
-            program_violations.extend(modes);
+            program_violations.extend(Self::verify_call_modes(&lowered, &facts, result));
         }
 
         let bodies: Vec<(String, mir::Body)> = lowered
@@ -1593,6 +1601,30 @@ impl Pipeline {
         }
 
         Ok((bodies, facts))
+    }
+
+    /// Every call whose argument modes disagree with what its callee owns,
+    /// and every virtual call, filled slot or slot adapter disagreeing with
+    /// its slot's convention.
+    fn verify_call_modes(
+        lowered: &[(Symbol, mir::Body)],
+        facts: &ProgramFacts,
+        result: &PipelineResult,
+    ) -> Vec<(Symbol, mir::verify::VerificationViolation)> {
+        let mut found = mir::verify::verify_owned_argument_modes(lowered, facts);
+        let conventions =
+            mir::dispatch::slot_convention_table(&result.vtable_layout, &result.type_checker);
+        let specification = mir::verify::SlotSpecification {
+            conventions: &conventions,
+            fills: &result.vtable_fills,
+            withheld: &result.withheld_methods,
+        };
+        found.extend(mir::verify::verify_slot_conventions(
+            lowered,
+            facts,
+            &specification,
+        ));
+        found
     }
 
     /// Refuse a lowered body that still spells `Self`, on every build: it has

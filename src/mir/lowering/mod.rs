@@ -40,6 +40,7 @@ pub mod reduce_gpu;
 pub mod requests;
 mod runtime_writes;
 pub(crate) mod sequencing;
+pub mod slot_adapters;
 pub mod statement;
 mod stepped_range;
 pub mod variable;

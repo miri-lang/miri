@@ -16,7 +16,8 @@
 //!   address is taken — through value steps and class fields only;
 //! - the local is never rebound, released, written into a call's result,
 //!   handed to a runtime entry point that keeps it or asks whether it is
-//!   shared, passed `out` or launched over; and unless its
+//!   shared, passed `out`, handed by `move` to a position its callee owns,
+//!   or launched over; and unless its
 //!   type is a reference by design, never written through nor handed to any
 //!   callee but a runtime entry point that only reads it — except that a value
 //!   a write copies (`type_facts::unsharing`) may be lent whole, by copy, to a
@@ -666,7 +667,9 @@ fn terminator_accesses(terminator: &Terminator) -> Vec<(Local, Access)> {
             continue;
         };
         let mode = arg_mode(arg_modes, position);
-        let access = if is_lent_to_entry_copy(func, position, arg, mode) {
+        let access = if gives_its_reference(arg, mode) {
+            Access::Handed
+        } else if is_lent_to_entry_copy(func, position, arg, mode) {
             Access::LentToEntryCopy
         } else {
             argument_access(runtime, position, mode)
@@ -674,6 +677,21 @@ fn terminator_accesses(terminator: &Terminator) -> Vec<(Local, Access)> {
         push_place(&mut accesses, place, access, access);
     }
     accesses
+}
+
+/// Whether `arg`, passed `mode`, gives the callee the caller's own reference
+/// to a whole local: a `move` to a position the callee owns or whose
+/// container keeps the value. Only a copy is funded by a retain, so a borrow,
+/// which holds no reference, cannot be handed over this way.
+fn gives_its_reference(arg: &Operand, mode: ArgMode) -> bool {
+    let Operand::Move(place) = arg else {
+        return false;
+    };
+    let takes_a_reference = match mode {
+        ArgMode::Owned | ArgMode::Donated => true,
+        ArgMode::Borrowed | ArgMode::Out => false,
+    };
+    place.projection.is_empty() && takes_a_reference
 }
 
 /// Whether a call to `func` lends `arg`, at `position` and passed `mode`, as

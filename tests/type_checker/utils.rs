@@ -13,7 +13,9 @@ use miri::pipeline::{Pipeline, PipelineResult};
 use miri::type_checker::context::{
     ClassDefinition, FieldInfo, MethodInfo, StructDefinition, TraitDefinition, TypeDefinition,
 };
-use miri::type_checker::utils::{has_drop_hook, is_residency_gated_buffer, is_resource};
+use miri::type_checker::utils::{
+    has_drop_hook, is_residency_gated_buffer, is_resource, ResourceTypes,
+};
 use miri::type_checker::TypeChecker;
 use std::collections::{BTreeMap, HashMap};
 
@@ -413,6 +415,32 @@ fn trait_default_drop_is_the_hook_of_an_implementing_class() {
     let defs = class_implementing_trait_with_drop(false);
     assert!(has_drop_hook("C", &defs));
     assert!(is_resource(&TypeKind::Custom("C".to_string(), None), &defs));
+}
+
+/// A trait `T` implemented by the class `C`, which runs a drop hook when
+/// `has_drop`.
+fn trait_implemented_by(has_drop: bool) -> HashMap<String, TypeDefinition> {
+    let TypeDefinition::Class(mut class) = class_def(has_drop) else {
+        unreachable!("class_def builds a class");
+    };
+    class.traits = vec!["T".to_string()];
+    HashMap::from([
+        ("C".to_string(), TypeDefinition::Class(class)),
+        ("T".to_string(), trait_def()),
+    ])
+}
+
+/// A trait is a resource when a class implementing it is one, and the
+/// decided names answer what the walk over the definitions answers.
+#[test]
+fn a_trait_a_resource_implements_is_a_resource_and_the_decided_names_agree() {
+    let held_at_the_trait = TypeKind::Custom("T".to_string(), None);
+    for has_drop in [true, false] {
+        let defs = trait_implemented_by(has_drop);
+        let resources = ResourceTypes::of(&defs);
+        assert_eq!(is_resource(&held_at_the_trait, &defs), has_drop);
+        assert_eq!(resources.holds(&held_at_the_trait), has_drop);
+    }
 }
 
 #[test]

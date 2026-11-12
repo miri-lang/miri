@@ -1376,9 +1376,44 @@ impl Pipeline {
             &mut symbols,
             &compilation_ids,
         )?;
+        let layout = reach.vtable_layout;
+        Self::lower_slot_adapters(result, layout, is_release, &mut lowered, &mut symbols)?;
         Self::lower_element_equalities(result, &mut lowered, &mut symbols)?;
 
         Ok(lowered)
+    }
+
+    /// Adapt every slot whose body keeps less than the slot hands
+    /// ([`mir::lowering::slot_adapters`]); keep `layout` as the numbering.
+    fn lower_slot_adapters(
+        result: &mut PipelineResult,
+        layout: mir::dispatch::VtableLayout,
+        is_release: bool,
+        bodies: &mut Vec<LoweredBody>,
+        symbols: &mut SymbolTable,
+    ) -> Result<(), CompilerError> {
+        let targets: std::collections::HashMap<&Symbol, &mir::Body> = (bodies.iter())
+            .map(|lowered| (&lowered.symbol, &lowered.body))
+            .collect();
+        let slot_bodies = mir::lowering::slot_adapters::SlotBodies {
+            layout: &layout,
+            bodies: &targets,
+            withheld: &result.withheld_methods,
+        };
+        let adapters = mir::lowering::slot_adapters::adapt_filled_slots(
+            &result.type_checker,
+            &mut result.vtable_fills,
+            &slot_bodies,
+            (symbols, is_release),
+        )
+        .map_err(CompilerError::Lowering)?;
+        bodies.extend(adapters.into_iter().map(|(symbol, body)| LoweredBody {
+            symbol,
+            body,
+            requests: Default::default(),
+        }));
+        result.vtable_layout = layout;
+        Ok(())
     }
 
     /// Lower the equality each set or map in `bodies` matches its struct,

@@ -24,6 +24,7 @@ pub mod generics;
 pub mod heap_guard;
 pub mod kept_function_values;
 pub mod kept_receivers;
+pub mod kept_virtual_calls;
 pub mod lent_field_arguments;
 pub mod loop_headers_across_calls;
 pub mod loops;

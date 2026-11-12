@@ -37,10 +37,26 @@ use crate::mir::{
     TerminatorKind,
 };
 use crate::type_checker::context::TypeDefinition;
-use crate::type_checker::utils::hands_on_a_reference;
+use crate::type_checker::utils::{hands_on_a_reference, ResourceTypes};
 
 /// The local a closure body's environment arrives in: its first parameter.
 const ENVIRONMENT: Local = Local(1);
+
+/// The type table conventions are read against, with the types that are
+/// resources decided once over it.
+#[derive(Clone, Copy)]
+struct Table<'d> {
+    definitions: &'d HashMap<String, TypeDefinition>,
+    resources: &'d ResourceTypes,
+}
+
+impl Table<'_> {
+    /// Whether consuming a value of `kind` hands its reference on
+    /// ([`hands_on_a_reference`]).
+    fn hands_on(&self, kind: &TypeKind) -> bool {
+        hands_on_a_reference(kind, self.definitions, self.resources)
+    }
+}
 
 /// Every call through a function value among `bodies` whose owned positions
 /// differ from its value's type; every closure owning a parameter handed to
@@ -51,15 +67,20 @@ pub fn verify_value_calls(
     bodies: &[(String, Body)],
     definitions: &HashMap<String, TypeDefinition>,
 ) -> Vec<(String, VerificationViolation)> {
+    let resources = ResourceTypes::of(definitions);
+    let table = Table {
+        definitions,
+        resources: &resources,
+    };
     let host = || bodies.iter().filter(|(_, body)| !body.is_gpu());
     let mut adapters = HashSet::new();
     let mut violations: Vec<(String, VerificationViolation)> = Vec::new();
     for (name, body) in host() {
-        let found = slot_violations(body, definitions, &mut adapters);
+        let found = slot_violations(body, table, &mut adapters);
         violations.extend(found.into_iter().map(|found| (name.clone(), found)));
     }
     for (name, body) in host() {
-        let found = body_violations(body, definitions, &adapters);
+        let found = body_violations(body, table, &adapters);
         violations.extend(found.into_iter().map(|found| (name.clone(), found)));
     }
     violations
@@ -70,7 +91,7 @@ pub fn verify_value_calls(
 /// `adapters`.
 fn slot_violations(
     body: &Body,
-    definitions: &HashMap<String, TypeDefinition>,
+    table: Table<'_>,
     adapters: &mut HashSet<Symbol>,
 ) -> Vec<VerificationViolation> {
     let types = PlaceTypes::of(body);
@@ -94,7 +115,7 @@ fn slot_violations(
             let Some(TypeKind::Function(function)) = types.declared(place).map(|ty| ty.kind) else {
                 continue;
             };
-            if !convention_of(&function, definitions).contains(&true) {
+            if !convention_of(&function, table).contains(&true) {
                 continue;
             }
             match created_closure(data, place) {
@@ -131,10 +152,10 @@ fn created_closure<'b>(block: &'b BasicBlockData, place: &Place) -> Option<&'b S
 /// other parameters than its convention.
 fn body_violations(
     body: &Body,
-    definitions: &HashMap<String, TypeDefinition>,
+    table: Table<'_>,
     adapters: &HashSet<Symbol>,
 ) -> Vec<VerificationViolation> {
-    let own = own_convention(body, definitions);
+    let own = own_convention(body, table);
     let is_adapter =
         (body.captures.closure.as_ref()).is_some_and(|symbol| adapters.contains(symbol));
     let expected_signature = own.as_ref().map(|own| {
@@ -161,7 +182,7 @@ fn body_violations(
         else {
             continue;
         };
-        let expected = called_convention(callee, &types, own.as_deref(), definitions);
+        let expected = called_convention(callee, &types, own.as_deref(), table);
         let mismatch = (0..args.len()).find(|&position| {
             let is_owned = arg_mode(arg_modes, position) == ArgMode::Owned;
             is_owned != expected.get(position).copied().unwrap_or(false)
@@ -175,11 +196,11 @@ fn body_violations(
 
 /// The parameters a closure body owns by its own type, its environment
 /// first and never owned; `None` for a body that is no closure's.
-fn own_convention(body: &Body, definitions: &HashMap<String, TypeDefinition>) -> Option<Vec<bool>> {
+fn own_convention(body: &Body, table: Table<'_>) -> Option<Vec<bool>> {
     body.captures.closure.as_ref()?;
     let owns = |index: usize| {
         let is_out = body.signature.out_params.get(index - 1) == Some(&true);
-        !is_out && hands_on_a_reference(&body.local_decls[index].ty.kind, definitions)
+        !is_out && table.hands_on(&body.local_decls[index].ty.kind)
     };
     Some(
         std::iter::once(false)
@@ -196,7 +217,7 @@ fn called_convention(
     callee: &Place,
     types: &PlaceTypes<'_>,
     own: Option<&[bool]>,
-    definitions: &HashMap<String, TypeDefinition>,
+    table: Table<'_>,
 ) -> Vec<bool> {
     if let (Some(own), true) = (own, *callee == Place::new(ENVIRONMENT)) {
         return own.iter().skip(1).copied().collect();
@@ -207,21 +228,18 @@ fn called_convention(
     let TypeKind::Function(function) = &ty.kind else {
         return Vec::new();
     };
-    convention_of(function, definitions)
+    convention_of(function, table)
 }
 
 /// Each parameter of `function` whose declared type hands its reference on:
 /// not `out`, not optional, and of a type running a drop hook of its own.
-fn convention_of(
-    function: &FunctionTypeData,
-    definitions: &HashMap<String, TypeDefinition>,
-) -> Vec<bool> {
+fn convention_of(function: &FunctionTypeData, table: Table<'_>) -> Vec<bool> {
     (function.params.iter())
         .map(|param| {
             let ExpressionKind::Type(declared, false) = &param.typ.node else {
                 return false;
             };
-            !param.is_out && hands_on_a_reference(&declared.kind, definitions)
+            !param.is_out && table.hands_on(&declared.kind)
         })
         .collect()
 }

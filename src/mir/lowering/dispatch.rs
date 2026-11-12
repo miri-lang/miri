@@ -628,30 +628,6 @@ pub(super) fn build_method_arg_modes_with_offset(
     modes
 }
 
-/// Release the argument temporaries a method call created.
-///
-/// A managed argument built at the call site — a concatenation, another call's
-/// result — lives in a temp that belongs to no scope, and a parameter is a
-/// borrow the callee never releases, so the call site is the only place that
-/// can drop it. Locals below the watermark existed before the arguments were
-/// lowered and belong to their own scope; the destination is the call's result
-/// and outlives it.
-pub(super) fn emit_method_arg_drops(
-    ctx: &mut LoweringContext,
-    args: &[Operand],
-    watermark: usize,
-    dest_local: Local,
-    span: Span,
-) {
-    for op in args {
-        if let Operand::Copy(p) | Operand::Move(p) = op {
-            if p.local != dest_local {
-                ctx.emit_temp_drop(p.local, watermark, span);
-            }
-        }
-    }
-}
-
 /// Lower element_at/get on List, Array, or Tuple.
 fn lower_collection_element_access(
     ctx: &mut LoweringContext,

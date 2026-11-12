@@ -122,11 +122,11 @@ fn main()
 }
 
 /// A method a subclass overrides takes a vtable slot, so whichever body
-/// answers is reached by one calling convention, and that convention lends
-/// the receiver: the caller releases it after the call returns, here after
-/// the overriding body runs on a derived instance.
+/// answers is reached by one calling convention, and that convention owns
+/// the receiver the bodies keep: each body releases it where its shelf ends,
+/// here the overriding body on a derived instance too.
 #[test]
-fn an_overridden_keeper_lends_its_receiver_and_the_caller_releases_it() {
+fn an_overridden_keeper_owns_its_receiver_through_its_slot() {
     assert_heap_guard_output(
         r#"
 struct Shelf
@@ -163,14 +163,14 @@ fn main()
     d.put_on(3)
     println("after derived")
 "#,
-        "on shelf\nleaving put_on\nclosed 1\nafter base\nderived on shelf\nleaving derived put_on\nclosed 2\nafter derived",
+        "on shelf\nclosed 1\nleaving put_on\nafter base\nderived on shelf\nclosed 2\nleaving derived put_on\nafter derived",
     );
 }
 
-/// A method a trait declares takes a vtable slot too, and lends its receiver
-/// for the same reason, even on a class nothing extends.
+/// A method a trait declares takes a vtable slot too, and its slot owns the
+/// receiver its body keeps, even on a class nothing extends.
 #[test]
-fn a_trait_declared_keeper_lends_its_receiver_and_the_caller_releases_it() {
+fn a_trait_declared_keeper_owns_its_receiver_through_its_slot() {
     assert_heap_guard_output(
         r#"
 struct Shelf
@@ -197,7 +197,7 @@ fn main()
     c.stash(3)
     println("after stash")
 "#,
-        "stashed\nleaving stash\nclosed 2\nafter stash",
+        "stashed\nclosed 2\nleaving stash\nafter stash",
     );
 }
 
@@ -581,12 +581,11 @@ fn main()
 }
 
 /// A method that keeps its receiver hands over the receiver it was given, so
-/// a method whose receiver is in turn the caller's lends nothing it does not
-/// own: a trait-declared method lends its receiver, and the call inside it
-/// funds the keeper with a reference of its own, released inside the keeper;
-/// the caller of the trait method still releases its own one after the call.
+/// a trait-declared method that forwards its receiver to a keeper owns it
+/// through its slot and hands it on: the hook runs where the keeper's shelf
+/// ends, as the derived class's own on a derived instance.
 #[test]
-fn a_lent_receiver_handed_to_a_keeper_is_funded_and_its_caller_releases_it() {
+fn a_receiver_relayed_through_a_trait_method_to_a_keeper_is_released_where_the_shelf_ends() {
     assert_heap_guard_output(
         r#"
 struct Shelf
@@ -624,7 +623,7 @@ fn main()
     Derived(2).relay()
     println("after derived")
 "#,
-        "on shelf\nleaving put_on\nleaving relay\nclosed 1\nafter base\non shelf\nleaving put_on\nleaving relay\nclosed derived 2\nafter derived",
+        "on shelf\nclosed 1\nleaving put_on\nleaving relay\nafter base\non shelf\nclosed derived 2\nleaving put_on\nleaving relay\nafter derived",
     );
 }
 
@@ -742,11 +741,11 @@ fn main()
     );
 }
 
-/// A name some trait declares takes a vtable slot in every class, so a
-/// method of that name lends its receiver even in a class that implements no
-/// trait at all.
+/// A slot belongs to one hierarchy, so a method sharing its name with a
+/// trait method in a class implementing no trait keeps its own convention:
+/// it owns the receiver it keeps, released where its shelf ends.
 #[test]
-fn a_keeper_named_like_a_selector_elsewhere_still_lends_its_receiver() {
+fn a_keeper_named_like_a_trait_method_elsewhere_owns_its_receiver() {
     assert_heap_guard_output(
         &with_handle(
             r#"
@@ -781,7 +780,7 @@ fn main()
     println("after")
 "#,
         ),
-        "stored\nleaving store\nclosed locker 1\nafter",
+        "stored\nclosed locker 1\nleaving store\nafter",
     );
 }
 

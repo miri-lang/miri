@@ -38,7 +38,7 @@ use crate::mir::facts::OwnershipFacts;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::{Statement, StatementKind};
-use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
+use crate::mir::terminator::{arg_mode, ArgMode};
 use crate::mir::{Body, Operand, Place, PlaceElem, Rvalue};
 
 /// Inserts reference counting operations for managed types.
@@ -533,8 +533,8 @@ impl RcInsertion {
     }
 }
 
-/// Retain, at the end of the block, each argument its terminating call hands
-/// over by copy: one passed [`ArgMode::Owned`], whose callee releases the
+/// Retain, at the end of the block, each argument its terminating call or
+/// virtual call hands over by copy: one passed [`ArgMode::Owned`], whose callee releases the
 /// reference it is handed, and one passed [`ArgMode::Donated`], which the
 /// container the callee stores it in keeps. Either way the caller pays for one
 /// reference. An argument spelled `move` is a transfer of the caller's own
@@ -563,10 +563,7 @@ fn fund_handed_over_arguments(
     let Some(terminator) = &block.terminator else {
         return Ok(false);
     };
-    let TerminatorKind::Call {
-        args, arg_modes, ..
-    } = &terminator.kind
-    else {
+    let Some((args, arg_modes)) = terminator.passed_arguments() else {
         return Ok(false);
     };
     let before = new_stmts.len();

@@ -150,6 +150,13 @@ pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::
         }
         SymbolKind::KernelDatum { kernel, datum } => write_kernel_datum(f, kernel, *datum),
         SymbolKind::StringLiteral { index, part } => write_string_literal(f, *index, *part),
+        SymbolKind::SlotAdapter { target, owned } => {
+            write!(f, "__owns_{}", Wgsl(target))?;
+            owned.iter().try_for_each(|&is_owned| {
+                f.write_str(ARGUMENT_SEPARATOR)?;
+                f.write_str(super::owned_position_token(is_owned))
+            })
+        }
     }
 }
 

@@ -29,20 +29,17 @@ use crate::mir::rvalue::AggregateKind;
 use crate::mir::symbol::{ClosureKind, Symbol};
 use crate::mir::{
     ArgMode, Body, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue,
-    StatementKind as MirStatementKind, Terminator, TerminatorKind,
+    StatementKind as MirStatementKind, Terminator, TerminatorKind, RETURN_LOCAL,
 };
 
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::kept_parameters::{
-    end_handed_over, hand_over_owned_locals, record_and_bind_value_parameters, value_convention_in,
+    emit_forwarded_call, record_and_bind_value_parameters, value_convention_in, ForwardedCall,
 };
 use crate::mir::lowering::runtime_writes::{copy_forwarded_argument, RuntimeCallee};
 use crate::mir::place_type::PlaceTypes;
-
-/// The local holding a body's return value, by MIR convention.
-const RETURN_LOCAL: Local = Local(0);
 
 /// Lower `name` as a function value when it names a global function, returning
 /// `None` when it names anything else so the caller falls back to its ordinary
@@ -252,31 +249,17 @@ fn build_forwarding_thunk(
         named_in: Some(ctx),
     };
     let adapters = adapt_runtime_slot_closures(&mut thunk_ctx, slot_call, &func, &mut args)?;
-    let mut arg_modes: Vec<ArgMode> = (func_data.params.iter())
+    let arg_modes: Vec<ArgMode> = (func_data.params.iter())
         .map(|param| ArgMode::from_out_flag(param.is_out))
         .collect();
-    let handed = hand_over_owned_locals(
-        target.kept,
-        &owned_locals,
-        (&mut args, &mut arg_modes),
-        span,
-    )?;
-
-    let after_call = thunk_ctx.new_basic_block();
-    thunk_ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func,
-            args,
-            arg_modes,
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(RETURN_LOCAL),
-            target: Some(after_call),
-        },
-        span,
-    ));
-    thunk_ctx.set_current_block(after_call);
-    end_handed_over(&mut thunk_ctx, &handed, span);
+    let forwarded = ForwardedCall {
+        func,
+        args,
+        arg_modes,
+        target_kept: target.kept,
+        owned_locals: &owned_locals,
+    };
+    emit_forwarded_call(&mut thunk_ctx, forwarded, span)?;
     for copy in copies.into_iter().chain(adapters) {
         thunk_ctx.emit_temp_drop(copy, watermark, span);
     }

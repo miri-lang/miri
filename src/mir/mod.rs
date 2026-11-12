@@ -70,7 +70,7 @@ pub use header_reads::StableCollection;
 pub use lambda::{CapturedVar, LambdaInfo};
 pub use module::{Import, ImportItem, ImportKind, ImportSource};
 pub use operand::{Constant, FunctionConstant, Operand};
-pub use place::{Bounds, Local, Place, PlaceElem};
+pub use place::{Bounds, Local, Place, PlaceElem, RETURN_LOCAL};
 pub use proven_indexes::InBounds;
 pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, MathIntrinsic, Rvalue, UnOp};
 pub use statement::{EndCause, HeaderRead, Statement, StatementKind};

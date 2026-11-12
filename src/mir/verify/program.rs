@@ -139,6 +139,7 @@ pub fn verify_program(
         violations.extend(super::verify_value_arguments(body));
         violations.extend(super::verify_moved_out(body));
         violations.extend(super::verify_resource_transfers(body, ownership, &hooks));
+        violations.extend(super::verify_owned_copies(body));
         // TODO: this check runs only under --verify-mir; a normal build does
         // not check that in-place writes land on unshared collections.
         violations.extend(super::verify_unshared_writes(body, ownership));

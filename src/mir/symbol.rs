@@ -166,6 +166,10 @@ const NESTED_FUNCTION_MARKER: &str = "nested";
 /// Marks the adapter a runtime closure slot calls a closure through.
 const SLOT_ADAPTER_MARKER: &str = "adapter";
 
+/// Marks the adapter a vtable slot reaches a body owning fewer parameters
+/// than the slot hands through.
+const OWNING_ADAPTER_MARKER: &str = "owns";
+
 /// Marks the trampoline a runtime function calls a closure through.
 const TRAMPOLINE_MARKER: &str = "trampoline";
 
@@ -317,6 +321,10 @@ enum SymbolKind {
     StringLiteral {
         index: usize,
         part: StringLiteralPart,
+    },
+    SlotAdapter {
+        target: Box<Symbol>,
+        owned: Vec<bool>,
     },
 }
 
@@ -475,6 +483,36 @@ impl Symbol {
         .with_residency(&closure.residency)
     }
 
+    /// The adapter a vtable slot owning the positions `owned`, in operand
+    /// order, reaches the body `target` through when the body owns fewer:
+    /// it takes what the slot hands, calls `target` with the body's own
+    /// convention, and releases what the body did not keep.
+    pub fn slot_adapter(target: &Symbol, owned: &[bool]) -> Self {
+        Self::of(SymbolKind::SlotAdapter {
+            target: Box::new(target.clone()),
+            owned: owned.to_vec(),
+        })
+    }
+
+    /// The body a vtable slot adapter calls, with the positions the adapter
+    /// owns; `None` for any other symbol.
+    pub fn slot_adapter_target(&self) -> Option<(&Symbol, &[bool])> {
+        match &self.kind {
+            SymbolKind::SlotAdapter { target, owned } => Some((target, owned)),
+            SymbolKind::Function { .. }
+            | SymbolKind::Method { .. }
+            | SymbolKind::Vtable { .. }
+            | SymbolKind::Closure { .. }
+            | SymbolKind::GpuKernel { .. }
+            | SymbolKind::Runtime(_)
+            | SymbolKind::Entry
+            | SymbolKind::TypeThunk { .. }
+            | SymbolKind::ClosureTrampoline(_)
+            | SymbolKind::KernelDatum { .. }
+            | SymbolKind::StringLiteral { .. } => None,
+        }
+    }
+
     /// The trampoline a runtime function calls a closure of the shape
     /// `shape` through.
     pub fn closure_trampoline(shape: TrampolineShape) -> Self {
@@ -495,7 +533,8 @@ impl Symbol {
             | SymbolKind::Entry
             | SymbolKind::TypeThunk { .. }
             | SymbolKind::KernelDatum { .. }
-            | SymbolKind::StringLiteral { .. } => None,
+            | SymbolKind::StringLiteral { .. }
+            | SymbolKind::SlotAdapter { .. } => None,
         }
     }
 
@@ -564,6 +603,7 @@ impl Symbol {
                 subject: ThunkSubject::Environment(closure),
                 ..
             } => closure.has_an_unnameable_argument(),
+            SymbolKind::SlotAdapter { target, .. } => target.has_an_unnameable_argument(),
             SymbolKind::TypeThunk {
                 subject: ThunkSubject::Structural(_),
                 ..
@@ -612,7 +652,8 @@ impl Symbol {
             | SymbolKind::TypeThunk { .. }
             | SymbolKind::ClosureTrampoline(_)
             | SymbolKind::KernelDatum { .. }
-            | SymbolKind::StringLiteral { .. } => None,
+            | SymbolKind::StringLiteral { .. }
+            | SymbolKind::SlotAdapter { .. } => None,
         }
     }
 
@@ -635,7 +676,8 @@ impl Symbol {
             | SymbolKind::TypeThunk { .. }
             | SymbolKind::ClosureTrampoline(_)
             | SymbolKind::KernelDatum { .. }
-            | SymbolKind::StringLiteral { .. } => None,
+            | SymbolKind::StringLiteral { .. }
+            | SymbolKind::SlotAdapter { .. } => None,
         }
     }
 
@@ -668,7 +710,19 @@ impl Symbol {
     /// that keeps the type a method, vtable or thunk belongs to private; none
     /// for every other symbol.
     fn module(&self) -> impl Iterator<Item = &str> {
-        let (function_module, type_owner): (&[String], Option<&str>) = match &self.kind {
+        let (function_module, type_owner) = self.module_parts();
+        function_module
+            .iter()
+            .map(String::as_str)
+            .chain(type_owner.into_iter().flat_map(type_identity::module_path))
+    }
+
+    /// The module path a top-level function is declared in, and the type
+    /// whose module keeps a method, vtable or thunk private; an adapter's
+    /// are its target's.
+    fn module_parts(&self) -> (&[String], Option<&str>) {
+        match &self.kind {
+            SymbolKind::SlotAdapter { target, .. } => target.module_parts(),
             SymbolKind::Function { module, .. } => (module.path(), None),
             SymbolKind::Method { owner: name, .. }
             | SymbolKind::Vtable { class: name, .. }
@@ -687,11 +741,7 @@ impl Symbol {
             | SymbolKind::ClosureTrampoline(_)
             | SymbolKind::KernelDatum { .. }
             | SymbolKind::StringLiteral { .. } => (&[], None),
-        };
-        function_module
-            .iter()
-            .map(String::as_str)
-            .chain(type_owner.into_iter().flat_map(type_identity::module_path))
+        }
     }
 
     fn of(kind: SymbolKind) -> Self {
@@ -715,7 +765,8 @@ impl fmt::Display for Symbol {
             | SymbolKind::Vtable { .. }
             | SymbolKind::Closure { .. }
             | SymbolKind::TypeThunk { .. }
-            | SymbolKind::ClosureTrampoline(_) => {
+            | SymbolKind::ClosureTrampoline(_)
+            | SymbolKind::SlotAdapter { .. } => {
                 write_root(f, self.module())?;
                 write_residency(f, &self.residency)?;
                 f.write_char(SEGMENT_SEPARATOR)?;
@@ -765,6 +816,14 @@ fn write_definition(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Resul
             write!(f, "{MARKER}{TRAMPOLINE_MARKER}")?;
             shape.write_tokens(f, "$", ".")
         }
+        SymbolKind::SlotAdapter { target, owned } => {
+            write_definition(f, &target.kind)?;
+            write_marker_segment(f, OWNING_ADAPTER_MARKER)?;
+            write_arguments(
+                f,
+                owned.iter().map(|&is_owned| owned_position_token(is_owned)),
+            )
+        }
         SymbolKind::Runtime(_)
         | SymbolKind::Entry
         | SymbolKind::GpuKernel { .. }
@@ -810,6 +869,16 @@ fn write_closure(
             write!(f, "{SEGMENT_SEPARATOR}{name}")
         }
         ClosureKind::SlotAdapter { position } => write!(f, "{SEGMENT_SEPARATOR}{position}"),
+    }
+}
+
+/// The token an adapter's symbol spells one position with: `1` where it
+/// owns the position, `0` where it lends it.
+pub(super) fn owned_position_token(is_owned: bool) -> &'static str {
+    if is_owned {
+        "1"
+    } else {
+        "0"
     }
 }
 

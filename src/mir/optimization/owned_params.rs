@@ -193,11 +193,13 @@ pub fn reach_of(
 
 /// Refuses a program reaching a function whose signature keeps a parameter
 /// other than through a host call naming it and passing every kept position
-/// [`ArgMode::Owned`]: as a value, from a GPU body, through a vtable slot or
-/// a runtime thunk (`synthesized`), under a symbol with a second body, or by
-/// a call lending a kept position — a method's receiver, a call the
-/// compiler makes where none is written. Such a caller lends the argument,
-/// so the callee would release a reference nobody handed it.
+/// [`ArgMode::Owned`]: as a value, from a GPU body, through a runtime thunk
+/// (`synthesized`), under a symbol with a second body, or by a call lending
+/// a kept position — a method's receiver, a call the compiler makes where
+/// none is written. Such a caller lends the argument, so the callee would
+/// release a reference nobody handed it. A vtable slot hands every body it
+/// reaches what that body keeps, directly or through an adapter, which
+/// `verify/slot_conventions.rs` checks.
 ///
 /// The type checker keeps no parameter of a function it sees reached any of
 /// these ways; this holds that decision to what the lowered program does, on

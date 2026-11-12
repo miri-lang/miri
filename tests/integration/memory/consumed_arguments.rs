@@ -1874,9 +1874,10 @@ fn main()
 }
 
 /// An implementor's method keeping a resource, called through its trait,
-/// lends: the caller releases the resource after the call returns.
+/// owns it through the trait method's slot: the hook runs where the
+/// implementor's new owner ends, before the call returns.
 #[test]
-fn an_implementor_keeping_a_resource_through_a_trait_lends_and_the_caller_releases_after() {
+fn an_implementor_keeping_a_resource_through_a_trait_releases_it_where_the_new_owner_ends() {
     assert_heap_guard_output(
         &with_handle(
             r#"
@@ -1901,7 +1902,7 @@ fn main()
     println("back")
 "#,
         ),
-        "closing\ninside\nleaving\nclosed 1\nback",
+        "closing\ninside\nclosed 1\nleaving\nback",
     );
 }
 
