@@ -139,6 +139,7 @@ mod optional_slots;
 mod owned_copies;
 mod parameter_writes;
 mod program;
+mod reached_agreement;
 mod resolved_self;
 mod resource_transfers;
 mod slot_conventions;
@@ -162,6 +163,9 @@ pub use optional_slots::verify_optional_slots;
 pub use owned_copies::verify_owned_copies;
 pub use parameter_writes::verify_parameter_writes;
 pub use program::{verify_backend_bodies, verify_program, ProgramReport};
+pub use reached_agreement::{
+    verify_reached_agreement, AgreementGap, ReachedInstance, ReachedOrigin,
+};
 pub use resolved_self::verify_resolved_self;
 pub use resource_transfers::verify_resource_transfers;
 pub use slot_conventions::{verify_slot_conventions, SlotSpecification};

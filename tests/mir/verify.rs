@@ -22,6 +22,7 @@ mod moved_out;
 mod optional_representation;
 mod owned_copies;
 mod parameter_writes;
+mod reached_agreement;
 mod resolved_self;
 mod resource_transfers;
 mod slot_conventions;

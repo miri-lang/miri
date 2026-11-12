@@ -556,6 +556,10 @@ impl<T> Reported<T> {
     }
 }
 
+/// The prefix of each line reporting an instance lowering compiled a body for
+/// that ownership was not decided over.
+pub const REACHED_AGREEMENT_WARNING: &str = "warning: reached instance outside the ownership set:";
+
 /// The result of running the frontend pipeline (parsing + type checking).
 #[derive(Debug)]
 pub struct PipelineResult {
@@ -576,6 +580,9 @@ pub struct PipelineResult {
     /// The bodies GPU code reaches as device helpers, whose GPU clones a WGSL
     /// module declares and calls under their WGSL names; empty until lowering.
     pub device_helpers: HashSet<Symbol>,
+    /// Every generic class instance lowering compiled a body for, with what
+    /// made it compile one; empty until lowering.
+    pub reached_instances: Vec<mir::verify::ReachedInstance>,
 }
 
 /// Every lowered body under the name it is emitted as, and the bodies GPU
@@ -948,6 +955,7 @@ impl Pipeline {
             vtable_layout: Default::default(),
             withheld_methods: Default::default(),
             device_helpers: Default::default(),
+            reached_instances: Default::default(),
         })
     }
 
@@ -1604,6 +1612,7 @@ impl Pipeline {
             )?;
             report.add_slot_violations(mir::verify::verify_vtable_slots(&result.vtable_fills));
             Self::fail_or_warn(&report, &mode)?;
+            Self::warn_reached_disagreements(result, &mode)?;
         }
 
         Ok((bodies, facts))
@@ -1631,6 +1640,45 @@ impl Pipeline {
             &specification,
         ));
         found
+    }
+
+    /// Report each instance lowering compiled a body for that ownership was not
+    /// decided over ([`mir::verify::verify_reached_agreement`]). The findings
+    /// never fail the build: they are printed under `warn` mode, and appended,
+    /// with the program they were found in, to the file
+    /// MIRI_REACHED_AGREEMENT_LOG names when it is set.
+    fn warn_reached_disagreements(
+        result: &PipelineResult,
+        mode: &str,
+    ) -> Result<(), CompilerError> {
+        let gaps = mir::verify::verify_reached_agreement(
+            result.type_checker.type_definitions(),
+            result.type_checker.ownership_instantiations(),
+            &result.reached_instances,
+        );
+        if gaps.is_empty() {
+            return Ok(());
+        }
+        let lines: Vec<String> = (gaps.iter())
+            .map(|gap| format!("{REACHED_AGREEMENT_WARNING} {gap}"))
+            .collect();
+        if mode == "warn" {
+            eprintln!("{}", lines.join("\n"));
+        }
+        let Some(log) = std::env::var_os("MIRI_REACHED_AGREEMENT_LOG") else {
+            return Ok(());
+        };
+        let source = result
+            .type_checker
+            .entry_source
+            .as_deref()
+            .unwrap_or_default();
+        // One write per record, so records of programs compiled side by side
+        // do not interleave.
+        let record = format!("{}\n--- program\n{source}\n--- end\n", lines.join("\n"));
+        let mut file = fs::OpenOptions::new().create(true).append(true).open(log)?;
+        std::io::Write::write_all(&mut file, record.as_bytes())?;
+        Ok(())
     }
 
     /// Refuse a lowered body that still spells `Self`, on every build: it has
@@ -1739,6 +1787,16 @@ impl Pipeline {
         // `lower_to_mir` already inserts and elides RC. Running either pass again
         // here would hand tests bodies carrying two of every operation.
         Ok(self.lower_to_mir(&mut pipeline_result, false)?.0)
+    }
+
+    /// The pipeline's state once every body of `source` is lowered, for test
+    /// inspection of what lowering reached.
+    pub fn get_lowered_result(&self, source: &str) -> Result<PipelineResult, CompilerError> {
+        let mut pipeline_result = self.frontend_script(source)?;
+        pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
+        pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
+        self.lower_to_mir(&mut pipeline_result, false)?;
+        Ok(pipeline_result)
     }
 
     /// [`Self::get_mir_bodies_with_rc`], with what the passes recorded about

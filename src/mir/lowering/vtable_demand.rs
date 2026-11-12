@@ -190,6 +190,11 @@ impl VtableDemand {
         self.vtables.keys().map(String::as_str)
     }
 
+    /// The instance of every vtable a reached body builds, in order of symbol.
+    pub fn instances(&self) -> impl Iterator<Item = &VtableInstance> {
+        self.vtables.values().map(|vtable| &vtable.instance)
+    }
+
     /// The filled slots of every vtable a reached body builds.
     pub fn fills(&self) -> VtableFills {
         self.vtables

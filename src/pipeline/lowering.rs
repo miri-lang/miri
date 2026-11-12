@@ -1546,7 +1546,9 @@ impl Pipeline {
             )?;
             if !registered && bodies.len() == first_default {
                 refuse_unnameable_generic_calls(result, reach, bodies, symbols)?;
-                return Self::settle_reached_instances(result, reach, &called, verdicts, symbols);
+                return Self::settle_reached_instances(
+                    result, reach, &called, verdicts, symbols, bodies,
+                );
             }
         }
     }
@@ -1554,13 +1556,15 @@ impl Pipeline {
     /// Settle what lowering the reached methods decided: each method withheld
     /// at an instance is recorded, so codegen fills its vtable slot with the
     /// runtime trap rather than a body; the vtables are what codegen writes,
-    /// and every instance compiled is answered once more.
+    /// every generic class instance compiled among `bodies` is recorded, and
+    /// each is answered once more.
     fn settle_reached_instances(
         result: &mut PipelineResult,
         reach: &ReachTables,
         called: &CalledFunctions,
         verdicts: &ImpliedMethodVerdicts,
         symbols: &SymbolTable,
+        bodies: &[LoweredBody],
     ) -> Result<(), CompilerError> {
         let withheld = verdicts.withheld(symbols);
         // A withheld method keeps its slot: codegen fills it with the runtime
@@ -1569,7 +1573,43 @@ impl Pipeline {
         // jumping through a null slot.
         result.vtable_fills = called.vtables.fills();
         result.withheld_methods = withheld;
+        let mut reached = Self::reached_class_instances(result, reach, called, symbols);
+        reached.extend(generic_copy_instances(
+            result.type_checker.type_definitions(),
+            bodies,
+        ));
+        result.reached_instances = reached;
         Self::refuse_unchecked_compiled_instances(result, reach, symbols)
+    }
+
+    /// The generic class instances lowering compiled a body for in its own
+    /// right: the instance of each vtable a reached body builds, and each
+    /// instance a method of its class was compiled at.
+    fn reached_class_instances(
+        result: &PipelineResult,
+        reach: &ReachTables,
+        called: &CalledFunctions,
+        symbols: &SymbolTable,
+    ) -> Vec<mir::verify::ReachedInstance> {
+        let vtables = called
+            .vtables
+            .instances()
+            .map(|instance| mir::verify::ReachedInstance {
+                class: instance.class().to_string(),
+                args: instance.args().to_vec(),
+                origin: mir::verify::ReachedOrigin::Vtable,
+            });
+        let methods =
+            (Self::claimed_instance_methods(result, reach, symbols).into_iter()).map(|site| {
+                mir::verify::ReachedInstance {
+                    class: site.method.class_name,
+                    args: (site.method.mangle_args.into_iter())
+                        .map(|(_, arg)| arg)
+                        .collect(),
+                    origin: mir::verify::ReachedOrigin::Method(site.method.method_name),
+                }
+            });
+        vtables.chain(methods).collect()
     }
 
     /// Refuse the program where a method was compiled at an instance of its
@@ -1607,10 +1647,8 @@ impl Pipeline {
         reach: &ReachTables,
         symbols: &SymbolTable,
     ) -> Vec<CompiledInstance> {
-        Self::instance_methods(result, reach)
+        Self::claimed_instance_methods(result, reach, symbols)
             .into_iter()
-            .filter(|site| matches!(site.class_stmt.node, StatementKind::Class(_)))
-            .filter(|site| symbols.is_claimed(&site.method.symbol))
             .map(|site| {
                 let receiver = mir::lowering::monomorphized_self_type(
                     &site.method.class_name,
@@ -1620,6 +1658,20 @@ impl Pipeline {
                 );
                 site.method.compiled_at(receiver)
             })
+            .collect()
+    }
+
+    /// Every method of a generic class lowering compiled at an instantiation,
+    /// as the symbol table records it.
+    fn claimed_instance_methods<'r>(
+        result: &'r PipelineResult,
+        reach: &ReachTables,
+        symbols: &SymbolTable,
+    ) -> Vec<InstanceMethodSite<'r>> {
+        Self::instance_methods(result, reach)
+            .into_iter()
+            .filter(|site| matches!(site.class_stmt.node, StatementKind::Class(_)))
+            .filter(|site| symbols.is_claimed(&site.method.symbol))
             .collect()
     }
 
@@ -2561,6 +2613,61 @@ enum ElementBody {
     Equality,
     /// The hash consistent with an element's equality.
     Hash,
+}
+
+/// Every generic class instance a generic copy among `bodies` names: each
+/// type argument of a generic function or method copy that is a generic
+/// class at arguments a body is compiled at, and the class a generic method
+/// copy is compiled under. A copy no body was lowered for is skipped.
+fn generic_copy_instances(
+    definitions: &HashMap<String, TypeDefinition>,
+    bodies: &[LoweredBody],
+) -> Vec<mir::verify::ReachedInstance> {
+    let lowered: HashSet<&Symbol> = bodies.iter().map(|lowered| &lowered.symbol).collect();
+    let requests = bodies.iter().map(|lowered| &lowered.requests);
+    let functions = (requests.clone())
+        .flat_map(|requests| &requests.generic_function_calls)
+        .map(|call| (&call.symbol, &call.type_args, None));
+    let methods = requests
+        .flat_map(|requests| &requests.generic_method_calls)
+        .map(|call| {
+            (
+                &call.symbol,
+                &call.type_args,
+                Some((&call.owner, &call.owner_args)),
+            )
+        });
+    (functions.chain(methods))
+        .filter(|(symbol, _, _)| lowered.contains(symbol))
+        .flat_map(|(symbol, type_args, owner)| {
+            let named =
+                (type_args.iter()).filter_map(move |(_, arg)| class_instance_of(arg, definitions));
+            let owned = (owner.filter(|(_, args)| !args.is_empty()))
+                .map(|(class, args)| (class.clone(), args.clone()));
+            (named.chain(owned)).map(move |(class, args)| mir::verify::ReachedInstance {
+                class,
+                args,
+                origin: mir::verify::ReachedOrigin::Copy(symbol.clone()),
+            })
+        })
+        .collect()
+}
+
+/// The generic class `ty` is an instance of, with the arguments a body of it
+/// is compiled at; `None` when `ty` is no such instance.
+fn class_instance_of(
+    ty: &Type,
+    definitions: &HashMap<String, TypeDefinition>,
+) -> Option<(String, Vec<Type>)> {
+    let TypeKind::Custom(class, Some(arg_exprs)) = &ty.kind else {
+        return None;
+    };
+    let Some(TypeDefinition::Class(class_def)) = definitions.get(class.as_str()) else {
+        return None;
+    };
+    let arity = class_def.generics.as_ref().map_or(0, Vec::len);
+    let args = mir::instantiation::monomorphized_arguments(arg_exprs, arity, definitions)?;
+    Some((class.clone(), args))
 }
 
 #[cfg(test)]
