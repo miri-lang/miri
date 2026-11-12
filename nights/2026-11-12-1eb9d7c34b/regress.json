@@ -1,0 +1,35 @@
+{
+ "run_id": "20261112T132915Z",
+ "suspect": [
+  {
+   "cell": "fannkuch-redux/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.0768878433240225,
+   "baseline": 1.2054494765962924,
+   "tonight": 1.2981338870878532
+  },
+  {
+   "cell": "fannkuch-redux/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.1051835199051994,
+   "baseline": 1.1889179733385753,
+   "tonight": 1.3139725506528825
+  },
+  {
+   "cell": "spectral-norm/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.102775478077468,
+   "baseline": 1.939775702115324,
+   "tonight": 2.1391370772632823
+  },
+  {
+   "cell": "spectral-norm/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.0743060547592511,
+   "baseline": 2.0113954238358858,
+   "tonight": 2.1608542823419423
+  }
+ ],
+ "regressed": [],
+ "recovered": []
+}
