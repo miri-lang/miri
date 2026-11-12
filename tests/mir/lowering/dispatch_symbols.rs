@@ -14,6 +14,7 @@ use miri::type_checker::context::{
 };
 use miri::type_checker::kept_parameters::KeptParameters;
 use miri::type_checker::slot_conventions::decide_slot_conventions;
+use miri::type_checker::utils::ResourceTypes;
 use std::collections::HashMap;
 
 use miri::ast::types::{Type, TypeKind};
@@ -305,7 +306,8 @@ fn slot_in(
     method: &str,
     defs: &HashMap<String, TypeDefinition>,
 ) -> Option<usize> {
-    let conventions = decide_slot_conventions(defs, &KeptParameters::default());
+    let resources = ResourceTypes::default();
+    let conventions = decide_slot_conventions(defs, &KeptParameters::default(), &resources);
     vtable_slot_index(layout, &conventions, receiver, method).map(|(slot, _)| slot)
 }
 

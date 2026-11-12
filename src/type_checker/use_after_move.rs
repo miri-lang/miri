@@ -14,6 +14,12 @@
 //!
 //! Every other value is lent to a call and stays the caller's, at the top
 //! level of a file as inside a function: the rule does not depend on scope.
+//!
+//! In a body compiled once per copy — a trait's default, a method of a
+//! generic class — a value of an open type (`Self`, the class's `T`) is a
+//! resource at some copies only. Its consuming sites are recorded once, as
+//! consumed where the value is a resource, and a use after one is refused at
+//! the copies reading it as one ([`super::open_consumption`]).
 
 use crate::ast::expression::{ExpressionKind, LeftHandSideExpression};
 use crate::ast::statement::{BindingResidency, StatementKind, WhileStatementType, DROP_HOOK_NAME};
@@ -31,6 +37,8 @@ use super::escape_analysis::{
     returned_tails, EscapeNextHop, EscapeSummary, FunctionId,
 };
 use super::function_analysis::DeclaredFunction;
+use super::kept_parameters::declared_type_name;
+use super::open_consumption::{OpenBody, OpenRefusal};
 use super::slot_conventions::SlotConventions;
 use super::utils::{hands_on_a_reference, runs_drop_hook, ResourceTypes};
 use crate::ast::captures::collect_lambda_captures;
@@ -85,6 +93,15 @@ impl std::fmt::Display for Sink {
 #[derive(Debug, Default)]
 pub struct ConsumedArguments {
     expressions: HashSet<usize>,
+    /// The expressions that consume the binding they name where the value
+    /// is a resource, naming a value of an open type in a body compiled per
+    /// copy ([`super::open_consumption`]).
+    open_expressions: HashSet<usize>,
+    /// The open sites some path reaches a use of the binding from: refused
+    /// at every copy the type checker sees reading the value as a resource,
+    /// and kept a funded copy at every other, so no copy reads a value it
+    /// moved.
+    open_expressions_used_after: HashSet<usize>,
     /// The bindings each kept closure takes over, by the closure's expression.
     captures: HashMap<usize, Vec<String>>,
 }
@@ -93,6 +110,14 @@ impl ConsumedArguments {
     /// Whether the call `argument` is passed to consumes the binding it names.
     pub fn consumes(&self, argument: &Expression) -> bool {
         self.expressions.contains(&argument.id)
+    }
+
+    /// Whether `argument` names a value of an open type that the site
+    /// consumes at each copy of the body reading it as a resource
+    /// ([`super::open_consumption::hands_on_at_copy`]).
+    pub fn consumes_if_handed_on(&self, argument: &Expression) -> bool {
+        self.open_expressions.contains(&argument.id)
+            && !self.open_expressions_used_after.contains(&argument.id)
     }
 
     /// The bindings the closure `lambda` creates takes over from the scope
@@ -104,6 +129,9 @@ impl ConsumedArguments {
     /// Add every argument `other` records.
     pub fn extend(&mut self, other: ConsumedArguments) {
         self.expressions.extend(other.expressions);
+        self.open_expressions.extend(other.open_expressions);
+        self.open_expressions_used_after
+            .extend(other.open_expressions_used_after);
         self.captures.extend(other.captures);
     }
 }
@@ -113,6 +141,10 @@ pub struct UseAfterMoveFindings {
     pub errors: Vec<TypeError>,
     pub warnings: Vec<Diagnostic>,
     pub consumed_arguments: ConsumedArguments,
+    /// Each use after a value of an open type was consumed, refused only at
+    /// the copies reading it as a resource
+    /// ([`super::open_consumption::refusals_at_copies`]).
+    pub open_refusals: Vec<OpenRefusal>,
 }
 
 /// The resources consumed on some path into a point, each with what
@@ -242,6 +274,18 @@ struct ConsumedInfo {
     /// that takes it when the report's file shows it; empty when no chain
     /// was computed.
     chain: Vec<RelatedNote>,
+    /// The open site that consumed the value, when it was consumed as a
+    /// value of an open type ([`super::open_consumption`]): a use after it
+    /// is refused only at copies reading it as a resource.
+    open: Option<OpenSite>,
+}
+
+/// A site consuming a value of an open type: the parameter the value's type
+/// is, and the expression naming it.
+#[derive(Clone, Debug)]
+struct OpenSite {
+    parameter: String,
+    expression: usize,
 }
 
 pub struct UseAfterMoveChecker<'a> {
@@ -307,6 +351,11 @@ pub struct UseAfterMoveChecker<'a> {
     /// The expressions the function being analysed returns without `return`
     /// ([`returned_tails`]), by id.
     tail_values: HashSet<usize>,
+    /// The body being analysed when it is compiled once per copy, whose
+    /// values of an open type are consumed per copy.
+    open_body: Option<OpenBody>,
+    /// Each use after a value of an open type was consumed.
+    open_refusals: Vec<OpenRefusal>,
 }
 
 /// A resource a closure captures.
@@ -356,6 +405,8 @@ impl<'a> UseAfterMoveChecker<'a> {
             closures: Vec::new(),
             lent_closures: HashMap::new(),
             tail_values: HashSet::new(),
+            open_body: None,
+            open_refusals: Vec::new(),
         }
     }
 
@@ -367,6 +418,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             errors: self.errors,
             warnings: self.warnings,
             consumed_arguments: self.consumed_arguments,
+            open_refusals: self.open_refusals,
         }
     }
 
@@ -407,10 +459,20 @@ impl<'a> UseAfterMoveChecker<'a> {
             StatementKind::GpuFrameBlock(block) => {
                 self.check_stmt(block, consumed);
             }
-            StatementKind::Class(class_data) => self.check_method_bodies(&class_data.body),
+            StatementKind::Class(class_data) => {
+                let open = self.generic_class_body(&class_data.name);
+                self.check_open_method_bodies(&class_data.body, |_| open.clone());
+            }
+            StatementKind::Trait(name, _, _, methods, _) => {
+                let trait_name = declared_type_name(name).map(str::to_string);
+                self.check_open_method_bodies(methods, |method| {
+                    let trait_name = trait_name.clone()?;
+                    let method = method.to_string();
+                    Some(OpenBody::Default { trait_name, method })
+                });
+            }
             StatementKind::Struct(_, _, _, methods, _, _)
-            | StatementKind::Enum(_, _, _, methods, _, _)
-            | StatementKind::Trait(_, _, _, methods, _) => self.check_method_bodies(methods),
+            | StatementKind::Enum(_, _, _, methods, _, _) => self.check_method_bodies(methods),
             StatementKind::Break => self.note_loop_exit(consumed, |exits| &mut exits.breaks),
             StatementKind::Continue => self.note_loop_exit(consumed, |exits| &mut exits.continues),
             StatementKind::Empty
@@ -429,6 +491,36 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.check_fn_decl(decl);
             }
         }
+    }
+
+    /// [`Self::check_method_bodies`] for the methods of a class or a trait,
+    /// each analysed as the body `open` names for it, when it is compiled
+    /// once per copy.
+    fn check_open_method_bodies(
+        &mut self,
+        members: &[Statement],
+        open: impl Fn(&str) -> Option<OpenBody>,
+    ) {
+        for member in members {
+            if let StatementKind::FunctionDeclaration(decl) = &member.node {
+                let outer = std::mem::replace(&mut self.open_body, open(&decl.name));
+                self.check_fn_decl(decl);
+                self.open_body = outer;
+            }
+        }
+    }
+
+    /// The body a method of the class named by `name` is, when the class
+    /// declares type parameters: compiled once per instantiation.
+    fn generic_class_body(&self, name: &Expression) -> Option<OpenBody> {
+        let class = declared_type_name(name)?;
+        let parameters: Vec<String> = (self.type_definitions.get(class)?.generics()?.iter())
+            .map(|generic| generic.name.clone())
+            .collect();
+        (!parameters.is_empty()).then(|| OpenBody::GenericClassMethod {
+            class: class.to_string(),
+            parameters,
+        })
     }
 
     fn check_fn_decl(&mut self, decl: &crate::ast::statement::FunctionDeclarationData) {
@@ -479,6 +571,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                     by_fn: "return".to_string(),
                     at_span: returned.span,
                     chain: vec![],
+                    open: None,
                 },
             );
         }
@@ -513,6 +606,11 @@ impl<'a> UseAfterMoveChecker<'a> {
             return;
         };
         let gpu_move = decl.residency == BindingResidency::Gpu && self.gpu_bindings.contains(src);
+        if let Some(parameter) = self.open_parameter(init).filter(|_| !gpu_move) {
+            let by_fn = format!("assignment to '{}'", decl.name);
+            self.consume_open_value((src, init), (by_fn, parameter), consumed);
+            return;
+        }
         if !gpu_move && !self.is_resource_expr(init) {
             return;
         }
@@ -528,6 +626,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             by_fn,
             at_span: init.span,
             chain: vec![],
+            open: None,
         };
         consumed.insert(src.clone(), info);
         if self.hands_on_its_reference(init) {
@@ -985,6 +1084,12 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.report_use_after_consume(&capture.name, capture.span, consumed);
                 continue;
             }
+            // TODO: a capture of a value whose type is open in a shared body (a
+            // default's `self`, a `T` parameter) is consumed here for every copy
+            // of the body, so a default keeping a closure over `self` and then
+            // reading `self` is refused even where no inheriting class is a
+            // resource. Routing it through the open-site record, as a store
+            // is, would refuse it only at the copies where the value is one.
             if capture.hands_on {
                 let taken = self.consumed_arguments.captures.entry(lambda).or_default();
                 taken.push(capture.name.clone());
@@ -995,6 +1100,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                     by_fn: "a closure that captures it".to_string(),
                     at_span: capture.span,
                     chain: vec![],
+                    open: None,
                 },
             );
         }
@@ -1021,7 +1127,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         consumed: &HashMap<String, ConsumedInfo>,
     ) {
         if let Some(info) = consumed.get(name) {
-            self.errors.push(TypeError {
+            let error = TypeError {
                 kind: TypeErrorKind::Coded {
                     code: DiagnosticCode::OwnUseOfMovedValue,
                     message: format!(
@@ -1036,8 +1142,60 @@ impl<'a> UseAfterMoveChecker<'a> {
                 source_override: None,
                 repair: None,
                 related: info.chain.clone(),
-            });
+            };
+            self.refuse(error, info);
         }
+    }
+
+    /// Reports `error`, a use of a binding after `info` consumed it: for the
+    /// program, or, when it consumed a value of an open type, at each copy
+    /// reading it as a resource; the consuming site then keeps a funded copy
+    /// at every copy, the ones built where the type checker does not see
+    /// them included.
+    fn refuse(&mut self, error: TypeError, info: &ConsumedInfo) {
+        match (&info.open, &self.open_body) {
+            (Some(site), Some(body)) => {
+                self.consumed_arguments
+                    .open_expressions_used_after
+                    .insert(site.expression);
+                self.open_refusals.push(OpenRefusal {
+                    error,
+                    body: body.clone(),
+                    parameter: site.parameter.clone(),
+                });
+            }
+            (Some(_), None) | (None, _) => self.errors.push(error),
+        }
+    }
+
+    /// The open parameter the value `expr` names is, in the body being
+    /// analysed, when that body is compiled per copy
+    /// ([`OpenBody::parameter_of`]).
+    fn open_parameter(&self, expr: &Expression) -> Option<String> {
+        let ty = self.types.get(&expr.id)?;
+        (self.open_body.as_ref())?.parameter_of(&ty.kind, self.type_definitions)
+    }
+
+    /// Marks the binding `name`, which `expr` names as a value of the open
+    /// type `parameter`, consumed by `by_fn`, and records the site so each
+    /// copy reading the value as a resource consumes it there.
+    fn consume_open_value(
+        &mut self,
+        (name, expr): (&str, &Expression),
+        (by_fn, parameter): (String, String),
+        consumed: &mut Consumed,
+    ) {
+        self.consumed_arguments.open_expressions.insert(expr.id);
+        let info = ConsumedInfo {
+            by_fn,
+            at_span: expr.span,
+            chain: Vec::new(),
+            open: Some(OpenSite {
+                parameter,
+                expression: expr.id,
+            }),
+        };
+        consumed.insert(name.to_string(), info);
     }
 
     /// Each arm starts from the state after the scrutinee. A name an arm's
@@ -1239,10 +1397,11 @@ impl<'a> UseAfterMoveChecker<'a> {
             let ExpressionKind::Identifier(name, _) = &passed.node else {
                 continue;
             };
-            let kept_here = consumed.contains_key(name) && !consumed_before.contains(name);
-            if kept_here && !seen.insert(name.as_str()) {
-                self.errors
-                    .push(passed_again_error(name, fn_name, passed.span));
+            let kept_here = consumed
+                .get(name)
+                .filter(|_| !consumed_before.contains(name));
+            if let Some(info) = kept_here.filter(|_| !seen.insert(name.as_str())) {
+                self.refuse(passed_again_error(name, fn_name, passed.span), info);
             }
         }
     }
@@ -1289,6 +1448,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                         by_fn: DROP_HOOK_NAME.to_string(),
                         at_span: receiver.span,
                         chain: vec![],
+                        open: None,
                     });
                 return;
             }
@@ -1417,6 +1577,11 @@ impl<'a> UseAfterMoveChecker<'a> {
         if consumed.contains_key(name.as_str()) {
             return;
         }
+        if let Some(parameter) = self.open_parameter(ident_expr) {
+            let by_fn = sink.to_string();
+            self.consume_open_value((&name, ident_expr), (by_fn, parameter), consumed);
+            return;
+        }
         if !self.is_resource_expr(ident_expr) {
             return;
         }
@@ -1433,6 +1598,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 by_fn: sink.to_string(),
                 at_span: ident_expr.span,
                 chain,
+                open: None,
             },
         );
     }

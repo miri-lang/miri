@@ -379,6 +379,14 @@ fn argument_value(arg: &Expression) -> &Expression {
     }
 }
 
+/// Whether the site `expr` consumes the binding it names in the body being
+/// lowered, read at the type this copy of the body gives it
+/// ([`crate::type_checker::TypeChecker::consumes_in_copy`]).
+pub(crate) fn is_consumed_here(ctx: &LoweringContext, expr: &Expression) -> bool {
+    let copy_type = ctx.recorded_type(expr.id);
+    ctx.type_checker.consumes_in_copy(expr, copy_type.as_ref())
+}
+
 /// Whether `local` is a binding of the body's own rather than a parameter,
 /// whose reference belongs to the caller.
 pub(crate) fn is_own_binding(ctx: &LoweringContext, local: crate::mir::Local) -> bool {
@@ -393,7 +401,7 @@ pub(crate) fn consumed_read(
     ctx: &mut LoweringContext,
     expr: &Expression,
 ) -> Result<Option<crate::mir::Local>, LoweringError> {
-    if !ctx.type_checker.consumed_arguments.consumes(expr) {
+    if !is_consumed_here(ctx, expr) {
         return Ok(None);
     }
     match ctx.consumed_reads.remove(&expr.id) {

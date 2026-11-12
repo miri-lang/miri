@@ -734,7 +734,7 @@ fn emit_resolved_method_call(
     if mono.is_some() {
         ctx.record_class_instantiations(&receiver_class_type(m.obj_ty));
     }
-    let return_ty = call_result_type(ctx, &m, &mono);
+    let return_ty = call_result_type(ctx, &m, mono.as_ref());
     let arg_types = method_argument_types(ctx, &m)?;
     let obj_watermark = ctx.body.local_decls.len();
     let (self_op, obj_temp_local) =
@@ -755,7 +755,7 @@ fn emit_resolved_method_call(
 fn emit_method_call(
     ctx: &mut LoweringContext,
     m: &ResolvedMethod,
-    mono: Option<(Symbol, Type)>,
+    mono: Option<Monomorph>,
     (self_op, obj_temp_local, obj_watermark): (Receiver<'_>, Option<Local>, usize),
     (destination, op, arg_types): (&Place, &Operand, &[Type]),
 ) -> Result<Option<Operand>, LoweringError> {
@@ -788,17 +788,18 @@ fn emit_method_call(
             return Ok(Some(op.clone()));
         }
     }
+    let kept = static_call_convention(ctx, m, mono.as_ref(), arg_types);
     let symbol = if m.method_info.declares_type_parameters() {
         resolved_generic_method_symbol(ctx, m)?
-    } else if let Some((mangled, _)) = mono {
-        mangled
+    } else if let Some(mono) = mono {
+        mono.symbol
     } else {
         Symbol::method(m.defining_class, &[], m.method_name, &[])
     };
     let handover = KeptCall {
         span: m.method_expr.span,
         receiver: Some(m.obj),
-        kept: (ctx.type_checker).kept_parameters_of_method(m.defining_class, m.method_name),
+        kept: &kept,
         args: m.args.written,
         arg_watermark: obj_watermark,
         destination: destination.local,
@@ -812,6 +813,30 @@ fn emit_method_call(
     };
     emit_static_method_call(ctx, static_call, destination, *m.span)?;
     Ok(Some(op.clone()))
+}
+
+/// The positions the body a statically dispatched call `m` names owns, read
+/// at the types that body is compiled at
+/// ([`crate::type_checker::TypeChecker::kept_parameters_of_method_at`]): its
+/// receiver at the class `mono` compiles it for, else at the class the call
+/// resolved it in named bare, and each parameter at `arg_types`, the types
+/// the call passes its arguments at.
+fn static_call_convention(
+    ctx: &LoweringContext,
+    m: &ResolvedMethod,
+    mono: Option<&Monomorph>,
+    arg_types: &[Type],
+) -> Vec<bool> {
+    let (owner, self_type) = mono.map_or_else(
+        || {
+            let bare = TypeKind::Custom(m.defining_class.to_string(), None);
+            (m.defining_class, Type::new(bare, *m.span))
+        },
+        |mono| (mono.owner.as_str(), mono.self_type.clone()),
+    );
+    let receiver = (!m.method_info.is_static).then_some(self_type);
+    (ctx.type_checker)
+        .kept_parameters_of_method_at((owner, m.method_name), receiver.iter().chain(arg_types))
 }
 
 /// The symbol of the copy of the generic method `m` calls, recorded on the
@@ -966,19 +991,15 @@ fn names_a_settled_type(ctx: &LoweringContext, ty: &Type) -> bool {
 /// nothing about what it holds, so the result is never released. The type
 /// checker already inferred the concrete type at this call site; the declared
 /// return type is the fallback for a call it did not record.
-fn call_result_type(
-    ctx: &LoweringContext,
-    m: &ResolvedMethod,
-    mono: &Option<(Symbol, Type)>,
-) -> Type {
+fn call_result_type(ctx: &LoweringContext, m: &ResolvedMethod, mono: Option<&Monomorph>) -> Type {
     if let Some(inferred) = ctx.type_checker.get_type(m.call_expr_id) {
         let resolved = ctx.resolve_self_in(inferred);
         return apply_generic_sub(&resolved, &ctx.generic_subs);
     }
-    match mono {
-        Some((_, concrete_return)) => concrete_return.clone(),
-        None => m.method_info.return_type.clone(),
-    }
+    mono.map_or_else(
+        || m.method_info.return_type.clone(),
+        |mono| mono.return_ty.clone(),
+    )
 }
 
 /// Whether a type argument sorts differently from the signed integer an
@@ -1303,7 +1324,7 @@ pub(crate) fn operator_method_callee(
     match resolve_generic_class_monomorph(ctx, receiver_ty, method_name, method) {
         Some(callee) => {
             ctx.record_class_instantiations(receiver_ty);
-            callee
+            (callee.symbol, callee.return_ty)
         }
         None => (
             Symbol::method(owner, &[], method_name, &[]),
@@ -1324,7 +1345,7 @@ fn resolve_generic_class_monomorph(
     obj_ty: &Type,
     method_name: &str,
     method_info: &MethodInfo,
-) -> Option<(Symbol, Type)> {
+) -> Option<Monomorph> {
     let (name, resolved) = receiver_instantiation(ctx, obj_ty)?;
     monomorph_for_instantiation(ctx, &name, &resolved, method_name, method_info)
 }
@@ -1445,7 +1466,7 @@ fn resolve_super_monomorph(
     ctx: &LoweringContext,
     method_name: &str,
     method_info: &MethodInfo,
-) -> Option<(Symbol, Type)> {
+) -> Option<Monomorph> {
     let (base, base_args) = super_instantiation(ctx)?;
     monomorph_for_instantiation(ctx, &base, &base_args, method_name, method_info)
 }
@@ -1507,6 +1528,16 @@ fn receiver_class_type(obj_ty: &Type) -> Cow<'_, Type> {
     ))
 }
 
+/// The per-instantiation body a statically dispatched call names: its symbol,
+/// the type its call returns, and the class it is compiled for, at the
+/// arguments its `self` is typed at.
+struct Monomorph {
+    symbol: Symbol,
+    return_ty: Type,
+    owner: String,
+    self_type: Type,
+}
+
 /// Resolve the monomorphized symbol and return type for `method_name` called on
 /// `name` instantiated at `resolved`.
 fn monomorph_for_instantiation(
@@ -1515,7 +1546,7 @@ fn monomorph_for_instantiation(
     resolved: &[Type],
     method_name: &str,
     method_info: &MethodInfo,
-) -> Option<(Symbol, Type)> {
+) -> Option<Monomorph> {
     // An instantiated body reaches instantiations the registry was never told
     // about; the caller records the receiver's so the pipeline registers it.
     // A receiver that declares no parameters carries no instantiation to
@@ -1539,7 +1570,18 @@ fn monomorph_for_instantiation(
         &callee.owner_subs,
     );
     let return_ty = apply_generic_sub(&method_info.return_type, &subs);
-    Some((callee.symbol, return_ty))
+    let self_type = super::monomorphized_self_type(
+        &callee.owner,
+        ctx.type_checker,
+        &callee.owner_subs,
+        method_info.return_type.span,
+    );
+    Some(Monomorph {
+        symbol: callee.symbol,
+        return_ty,
+        owner: callee.owner,
+        self_type,
+    })
 }
 
 /// The copy-on-write entry point a call of `method_name` of `class_name` on a

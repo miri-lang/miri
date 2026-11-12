@@ -612,10 +612,10 @@ class Reader implements Taker
 "#;
 
 /// A trait default that keeps its parameter fills the slot of every class
-/// inheriting it, so the slot owns the parameter: the default lends and
-/// retains what it keeps, its adapter releases the slot's reference, and an
-/// overriding reader's adapter releases it as the reader returns. A static
-/// call to the inherited default keeps the default's own convention.
+/// inheriting it, so the slot owns the parameter: each class's copy of the
+/// default owns what it keeps, and the hook runs where its shelf ends, while
+/// an overriding reader's adapter releases it as the reader returns. A static
+/// call to the inherited default hands the copy the parameter alike.
 #[test]
 fn a_keeping_trait_default_makes_its_slot_own_the_parameter() {
     assert_heap_guard_output(
@@ -638,7 +638,7 @@ fn main()
     println("end")
 "#
         )),
-        "inheritor\nkept by default\nleaving default take\nclosed 1\nafter take\nreader\nread 2\nclosed 2\nafter take\ninheritor\nkept by default\nleaving default take\nclosed 3\nafter static\nreader\nread 4\nclosed 4\nend",
+        "inheritor\nkept by default\nclosed 1\nleaving default take\nafter take\nreader\nread 2\nclosed 2\nafter take\ninheritor\nkept by default\nclosed 3\nleaving default take\nafter static\nreader\nread 4\nclosed 4\nend",
     );
 }
 
@@ -661,8 +661,9 @@ fn main()
 }
 
 /// A generic class's method fills its slot at every instantiation; one that
-/// keeps makes the slot own the parameter, and every instantiation, reading
-/// or keeping, is reached through an adapter.
+/// keeps makes the slot own the parameter, each instantiation of the keeper
+/// owns it and runs the hook where its shelf ends, and each instantiation of
+/// the reader is reached through an adapter.
 #[test]
 fn a_keeping_generic_class_method_makes_its_slot_own_the_parameter() {
     assert_heap_guard_output(
@@ -697,7 +698,7 @@ fn main()
     println("end")
 "#,
         ),
-        "boxed read 2\nclosed 2\n2\nboxed read 3\nclosed 3\n2\ngkept\nleaving gkeeper\nclosed 4\n3\nend",
+        "boxed read 2\nclosed 2\n2\nboxed read 3\nclosed 3\n2\ngkept\nclosed 4\nleaving gkeeper\n3\nend",
     );
 }
 
@@ -909,13 +910,11 @@ fn main()
     );
 }
 
-/// A generic implementor that keeps on one path only lends what it keeps
-/// and is reached through an adapter: on the keeping path its retain holds
-/// the value until its shelf ends and the adapter releases the slot's
-/// reference after it returns; on the other the adapter's release is the
-/// last.
+/// A generic implementor that keeps on one path only owns what it keeps: on
+/// the keeping path the hook runs where its shelf ends, on the other where
+/// the implementor ends, before it returns.
 #[test]
-fn a_conditional_keep_in_an_adapted_implementor_releases_on_both_paths() {
+fn a_conditional_keep_in_a_generic_implementor_releases_on_both_paths() {
     assert_heap_guard_output(
         &with_handle(
             r#"
@@ -942,7 +941,7 @@ fn main()
     run(Gate<int>(0), Handle(2), false)
 "#,
         ),
-        "gate kept\nleaving gate\nclosed 1\nafter\nleaving gate\nclosed 2\nafter",
+        "gate kept\nclosed 1\nleaving gate\nafter\nleaving gate\nclosed 2\nafter",
     );
 }
 

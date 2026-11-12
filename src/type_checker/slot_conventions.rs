@@ -14,20 +14,28 @@
 //! convention, and releases at its end what the body did not keep; the
 //! adapter never retains.
 //!
-//! The convention lists what the bodies own at their declared types. Each
-//! side reads it at its own types: a position whose operand is no counted
-//! value — a generic trait's parameter at a scalar type — is lent on both
-//! sides of the call. The consumption check at a virtual call
+//! A trait's default and a method of a generic class are compiled once per
+//! class and per instantiation, each copy owning what it keeps at its own
+//! types ([`super::kept_parameters::owned_at`]). The slot owns a position
+//! such a body keeps wherever some copy may own it: at a type its declared
+//! one hands on, or at one a copy reads through a type parameter or `Self`,
+//! as for a trait or an extended class held at the copy's own arguments.
+//! Each side reads the convention at its own types: a position whose operand
+//! is no counted value — a generic trait's parameter at a scalar type — is
+//! lent on both sides of the call. The consumption check at a virtual call
 //! ([`super::use_after_move`]), MIR lowering of the call, and the adapters
 //! the pipeline builds for the slot all read this table.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use super::context::{resolve_method_source, MethodSource, TypeDefinition};
-use super::kept_parameters::KeptParameters;
+use super::context::{class_is_extended, resolve_method_source, MethodSource, TypeDefinition};
+use super::instantiation_requirements::spells_a_type;
+use super::kept_parameters::{owned_at, KeptParameters};
+use super::utils::{hands_on_a_reference, ResourceTypes};
 use super::vtable_selectors::{
     class_fills, dispatch_candidates, dispatched_slot_root, overridden_method_names,
 };
+use crate::ast::types::TypeKind;
 
 /// For each vtable slot owning a position, which positions it owns, by the
 /// slot's root and then its method; a slot absent from the table lends every
@@ -84,13 +92,12 @@ impl SlotConventions {
 
 /// The convention of every slot the classes of `type_defs` fill, with the
 /// slot every call through a vtable reads: for each class and each slot it
-/// fills ([`class_fills`]), the positions the body filling it keeps
-/// ([`KeptParameters::kept_by_method`]) join the slot's. A trait's default
-/// or a generic class's method keeps what it keeps while lent, and is
-/// reached through an adapter owning what the slot hands.
+/// fills ([`class_fills`]), the positions some copy of the body filling it
+/// may own ([`owned_by_filling_body`]) join the slot's.
 pub fn decide_slot_conventions(
     type_defs: &HashMap<String, TypeDefinition>,
     kept: &KeptParameters,
+    resources: &ResourceTypes,
 ) -> SlotConventions {
     let mut conventions = SlotConventions {
         overridden: overridden_method_names(type_defs)
@@ -105,7 +112,7 @@ pub fn decide_slot_conventions(
         }
         let is_overridden = |method: &str| conventions.overridden.contains(method);
         for (selector, roots) in class_fills(name, type_defs, &is_overridden) {
-            let owned = owned_by_filling_body(name, selector, type_defs, kept).to_vec();
+            let owned = owned_by_filling_body((name, selector), type_defs, kept, resources);
             if !owned.contains(&true) {
                 continue;
             }
@@ -135,18 +142,74 @@ fn record_dispatch(
     }
 }
 
-/// The positions the body `class_name` runs for `selector` keeps: the
-/// method the nearest class of its chain declares, or the trait default it
-/// inherits; none for an abstract declaration.
-fn owned_by_filling_body<'k>(
-    class_name: &str,
-    selector: &str,
+/// The positions some copy of the body `class_name` runs for `selector` may
+/// own ([`owned_at`]): the method the nearest class of its chain declares,
+/// compiled for that class, or the trait default it inherits, compiled for
+/// `class_name`; none for an abstract declaration. A position is read at its
+/// declared type, and one some copy may read at a type handing its reference
+/// on ([`may_hand_on_in_some_copy`]) is owned wherever the body keeps it.
+fn owned_by_filling_body(
+    (class_name, selector): (&str, &str),
     type_defs: &HashMap<String, TypeDefinition>,
-    kept: &'k KeptParameters,
-) -> &'k [bool] {
-    match resolve_method_source(type_defs, class_name, selector) {
-        Some(MethodSource::Declared { class, .. }) => kept.kept_by_method(class, selector),
-        Some(MethodSource::Default(default)) => kept.kept_by_method(default.trait_name, selector),
-        Some(MethodSource::AbstractOnly { .. }) | None => &[],
+    kept: &KeptParameters,
+    resources: &ResourceTypes,
+) -> Vec<bool> {
+    let (declaring, compiled_for, info) =
+        match resolve_method_source(type_defs, class_name, selector) {
+            Some(MethodSource::Declared { class, info }) => (class, class, info),
+            Some(MethodSource::Default(default)) => (default.trait_name, class_name, default.info),
+            Some(MethodSource::AbstractOnly { .. }) | None => return Vec::new(),
+        };
+    let Some(declaration) = kept.method_declaration(declaring, selector) else {
+        return Vec::new();
+    };
+    let receiver = (!info.is_static).then(|| TypeKind::Custom(compiled_for.to_string(), None));
+    let params = info.params.iter().map(|(_, ty)| &ty.kind);
+    let may_hand_on = |kind: &TypeKind| {
+        hands_on_a_reference(kind, type_defs, resources)
+            || may_hand_on_in_some_copy(kind, type_defs)
+    };
+    owned_at(
+        kept.kept_by_method(declaration),
+        receiver.iter().chain(params),
+        may_hand_on,
+    )
+}
+
+/// Whether some copy of a body may read a value declared at `kind` at a type
+/// handing its reference on ([`hands_on_a_reference`]) where `kind` itself
+/// does not: a type parameter or `Self`, which each copy reads at its own
+/// arguments, or a trait or a class another class extends, held at arguments
+/// a copy reads at its own, which hands on what a resource instantiation
+/// below it holds. Any other named type hands on whatever its arguments are
+/// exactly when its hook runs, which its name decides.
+fn may_hand_on_in_some_copy(kind: &TypeKind, type_defs: &HashMap<String, TypeDefinition>) -> bool {
+    if is_type_parameter(kind, type_defs) {
+        return true;
     }
+    let TypeKind::Custom(name, args) = kind else {
+        return false;
+    };
+    let Some(definition) = type_defs.get(name) else {
+        return false;
+    };
+    let is_held_at_a_supertype =
+        matches!(definition, TypeDefinition::Trait(_)) || class_is_extended(name, type_defs);
+    let has_open_arguments = match args {
+        None => definition
+            .generics()
+            .is_some_and(|generics| !generics.is_empty()),
+        Some(_) => spells_a_type(kind, &|kind| is_type_parameter(kind, type_defs)),
+    };
+    is_held_at_a_supertype && has_open_arguments
+}
+
+/// Whether `kind` names a type parameter, `Self` among them, rather than a
+/// type the program declares.
+fn is_type_parameter(kind: &TypeKind, type_defs: &HashMap<String, TypeDefinition>) -> bool {
+    if let TypeKind::Custom(name, None) = kind {
+        return (type_defs.get(name))
+            .is_none_or(|definition| matches!(definition, TypeDefinition::Generic(_)));
+    }
+    matches!(kind, TypeKind::Generic(..))
 }

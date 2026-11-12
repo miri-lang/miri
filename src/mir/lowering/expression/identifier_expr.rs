@@ -117,7 +117,7 @@ fn lower_local_identifier(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    if ctx.type_checker.consumed_arguments.consumes(expr) {
+    if crate::mir::lowering::variable::is_consumed_here(ctx, expr) {
         ctx.consumed_reads.insert(
             expr.id,
             crate::mir::lowering::variable::ConsumedRead::Pending(local),

@@ -12,17 +12,15 @@
 //! the callee ends on a path that keeps it nowhere.
 //!
 //! A parameter is owned when the converged escape summary keeps it and its
-//! declared type hands its reference on when consumed
-//! ([`super::use_after_move::hands_on_a_reference`]), the predicate the
-//! consumption check reads. Every function that cannot keep one calling
-//! convention lends every parameter instead, and its callers keep releasing a
-//! consumed argument after the call:
+//! type hands its reference on when consumed
+//! ([`super::utils::hands_on_a_reference`]), the predicate the consumption
+//! check reads. Every function that cannot keep one calling convention lends
+//! every parameter instead, and its callers keep releasing a consumed
+//! argument after the call:
 //!
 //! - a constructor, a drop hook, and a method the compiler calls without a
 //!   written call: a runtime thunk's, an operator's, a loop's;
-//! - a generic function or method, or a method of a generic class, whose
-//!   body is shared by its instantiations, so no instance can own a
-//!   parameter the shared body leaves open;
+//! - a generic function, or a method declaring type parameters of its own;
 //! - a method of an enum, which the escape analysis does not summarize;
 //! - a `gpu`, `async` or `parallel` function, and one with no body;
 //! - a function an imported module declares. The consumption check walks the
@@ -33,17 +31,23 @@
 //!
 //! A method's receiver is a parameter like any other: a method keeping its
 //! instance — storing it, returning it, handing it to a keeper — owns it.
-//! The table lists a method's owned parameters in the order a call passes
+//! The table lists the parameters a method keeps in the order a call passes
 //! its operands, the receiver first ([`KeptSlots`]).
 //!
-//! MIR lowering reads this table on both sides of every call: the callee's
-//! signature carries the owned parameters, and each direct call hands its
-//! argument over at the positions the callee owns.
+//! A method is compiled once for each type it runs at: a trait's default
+//! once for each class inheriting it, a method of a generic class once for
+//! each instantiation. Each such copy owns what it keeps at the types it is
+//! compiled at ([`owned_at`]): the copy of `Wrap<T>.keep(x T)` at
+//! `Wrap<Handle>` owns the `Handle` it keeps where the copy at `Wrap<int>`
+//! owns nothing, and a default keeping its receiver owns it in a class
+//! running a hook and lends it in one running none. The escape summary, shared by every copy, says which
+//! positions are kept; the copy's types say which of those hand a reference
+//! on.
 //!
-//! A trait's default and a method of a generic class that keep a parameter
-//! lend it and retain what they keep; the table records those positions as
-//! kept while lent ([`KeptParameters::kept_by_method`]), which a vtable slot
-//! such a body fills owns.
+//! MIR lowering reads this table on both sides of every call: the callee's
+//! signature carries the owned parameters, read at the types its body is
+//! compiled at, and each direct call hands its argument over at the
+//! positions the body it names owns, read at the same types.
 //!
 //! A method a vtable slot stands for — one a trait or an abstract class
 //! declares, or one a class overrides — owns what it keeps like any other.
@@ -69,14 +73,15 @@ use crate::ast::statement::{FunctionDeclarationData, Statement, StatementKind};
 use crate::ast::types::{FunctionTypeData, TypeKind};
 use crate::ast::Parameter;
 
-use super::context::{MethodInfo, TypeDefinition};
+use super::context::{resolve_method_source, MethodInfo, MethodSource, TypeDefinition};
 use super::escape_analysis::{EscapeSummary, FunctionId};
 use super::function_analysis::{DeclaredFunction, ModuleId};
 use super::utils::{hands_on_a_reference, ResourceTypes};
 
-/// For each function owning a resource parameter, which of its parameters
-/// it owns, in parameter order, by the id of the statement declaring it. A
-/// function absent from the table lends every parameter.
+/// For each top-level function owning a resource parameter, which of its
+/// parameters it owns, in parameter order, by the id of the statement
+/// declaring it; beside it, for each method keeping a parameter, which ones
+/// it keeps. A function absent from the table lends every parameter.
 #[derive(Debug, Default)]
 pub struct KeptParameters {
     by_declaration: HashMap<usize, Vec<bool>>,
@@ -86,11 +91,11 @@ pub struct KeptParameters {
     /// two statements declare owns nothing: no call could tell which body it
     /// reaches.
     methods: HashMap<String, HashMap<String, Vec<usize>>>,
-    /// For each method that keeps a resource parameter but cannot own it —
-    /// a trait's default, a method of a generic class — which parameters it
-    /// keeps, in operand order, by the id of the statement declaring it. Such
-    /// a body lends them and retains what it keeps.
-    lent_keeps: HashMap<usize, Vec<bool>>,
+    /// For each method keeping a parameter it may own, which parameters it
+    /// keeps, in operand order, by the id of the statement declaring it.
+    /// Which of them a copy of the method owns is read at the types the copy
+    /// is compiled at ([`owned_at`]).
+    kept_by_methods: HashMap<usize, Vec<bool>>,
 }
 
 impl KeptParameters {
@@ -100,28 +105,17 @@ impl KeptParameters {
         (self.declarations.get(function)).map_or(&[], |&id| self.of_declaration(id))
     }
 
-    /// Which parameters the method `method` of the type `owner` owns, in the
-    /// order a call passes its operands, the receiver first ([`KeptSlots`]);
-    /// empty when it owns none.
-    pub fn of_method(&self, owner: &str, method: &str) -> &[bool] {
-        self.method_declaration(owner, method)
-            .map_or(&[], |id| self.of_declaration(id))
+    /// Which parameters the method the statement `declaration` declares
+    /// keeps, in the order a call passes its operands, the receiver first
+    /// ([`KeptSlots`]); empty when it keeps none. A copy of the method owns
+    /// those its types hand on ([`owned_at`]).
+    pub fn kept_by_method(&self, declaration: usize) -> &[bool] {
+        (self.kept_by_methods.get(&declaration)).map_or(&[], Vec::as_slice)
     }
 
-    /// Which parameters the body of the method `method` of the type `owner`
-    /// keeps, in operand order: those it owns, or, for a trait's default or
-    /// a method of a generic class, those it keeps while lent; empty when it
-    /// keeps none.
-    pub fn kept_by_method(&self, owner: &str, method: &str) -> &[bool] {
-        let Some(id) = self.method_declaration(owner, method) else {
-            return &[];
-        };
-        (self.lent_keeps.get(&id)).map_or_else(|| self.of_declaration(id), Vec::as_slice)
-    }
-
-    /// The one statement declaring the method `method` of the type `owner`;
-    /// `None` when none or two do.
-    fn method_declaration(&self, owner: &str, method: &str) -> Option<usize> {
+    /// The one statement declaring the method `method` in the body of the
+    /// class or trait `owner`; `None` when none or two do.
+    pub fn method_declaration(&self, owner: &str, method: &str) -> Option<usize> {
         match (self.methods.get(owner)).and_then(|methods| methods.get(method)) {
             Some(declarations) if declarations.len() == 1 => Some(declarations[0]),
             Some(_) | None => None,
@@ -136,14 +130,12 @@ impl KeptParameters {
             .filter(|declarations| declarations.len() > 1)
             .flatten();
         for id in ambiguous {
-            self.by_declaration.remove(id);
-            self.lent_keeps.remove(id);
+            self.kept_by_methods.remove(id);
         }
     }
 
-    /// Which parameters the function or method the statement `statement_id`
-    /// declares owns, in the order a call passes its operands; empty when it
-    /// owns none.
+    /// Which parameters the top-level function the statement `statement_id`
+    /// declares owns, in parameter order; empty when it owns none.
     pub fn of_declaration(&self, statement_id: usize) -> &[bool] {
         self.by_declaration
             .get(&statement_id)
@@ -244,7 +236,7 @@ fn declared_methods(statement: &Statement) -> Option<(&str, &[Statement])> {
 
 /// The name a type declaration's name expression spells, its type
 /// parameters aside.
-fn declared_type_name(name: &Expression) -> Option<&str> {
+pub(crate) fn declared_type_name(name: &Expression) -> Option<&str> {
     if let ExpressionKind::Identifier(name, _) = &name.node {
         return Some(name);
     }
@@ -255,8 +247,7 @@ fn declared_type_name(name: &Expression) -> Option<&str> {
 }
 
 /// Records the parameters the method `statement` declares in `owner`'s body
-/// keeps, when it keeps any: as owned when `owner` is a class every instance
-/// of which runs the one body, else as kept while lent.
+/// keeps, when it keeps any.
 fn collect_kept_method(
     owner: &str,
     statement: &Statement,
@@ -274,16 +265,14 @@ fn collect_kept_method(
     let Some(positions) = kept_method_positions(owner, (decl, method), facts) else {
         return;
     };
-    if owns_what_it_keeps(owner, facts.type_definitions) {
-        kept.by_declaration.insert(statement.id, positions);
-    } else {
-        kept.lent_keeps.insert(statement.id, positions);
-    }
+    kept.kept_by_methods.insert(statement.id, positions);
 }
 
 /// Which parameters the method `decl` of `owner`, registered as `method`,
 /// keeps, in operand order; `None` when it keeps none or is called where no
-/// call is written.
+/// call is written. A parameter declared `out` or optional is never kept: the
+/// first is the caller's binding, the second hands on no reference of its
+/// own.
 ///
 /// The escape summary of a method numbers its receiver 0 and each parameter
 /// a caller supplies from 1, a static method's included.
@@ -297,19 +286,54 @@ fn kept_method_positions(
     }
     let function = FunctionId::method(owner, &decl.name);
     let summary = facts.escape_summaries.get(&function)?;
-    let receiver_kind = TypeKind::Custom(owner.to_string(), None);
-    let receiver = (!method.is_static).then(|| {
-        summary.directly_escapes(0)
-            && hands_on_a_reference(&receiver_kind, facts.type_definitions, facts.resources)
-    });
+    let receiver = (!method.is_static).then(|| summary.directly_escapes(0));
     let params = (decl.explicit_params().iter().enumerate())
-        .map(|(index, param)| {
-            summary.directly_escapes(index + 1)
-                && is_handed_on(param, facts.type_definitions, facts.resources)
-        })
+        .map(|(index, param)| summary.directly_escapes(index + 1) && is_held_whole(param))
         .collect();
-    let owned = KeptSlots { receiver, params }.in_operand_order();
-    owned.contains(&true).then_some(owned)
+    let kept = KeptSlots { receiver, params }.in_operand_order();
+    kept.contains(&true).then_some(kept)
+}
+
+/// Which positions a copy of a method keeping `kept` owns, compiled with its
+/// operands at `operand_kinds`, one per position in operand order with the
+/// receiver first: each it keeps whose type `hands_on` says hands its
+/// reference on. Empty when it owns none.
+///
+/// The one rule every reader of a method's convention applies: the body
+/// binding what it owns, each call naming the body, and each vtable slot
+/// the body fills, each passing the types it reads the body at.
+pub fn owned_at<'k>(
+    kept: &[bool],
+    operand_kinds: impl IntoIterator<Item = &'k TypeKind>,
+    hands_on: impl Fn(&TypeKind) -> bool,
+) -> Vec<bool> {
+    let owned: Vec<bool> = (kept.iter().zip(operand_kinds))
+        .map(|(&is_kept, kind)| is_kept && hands_on(kind))
+        .collect();
+    if owned.contains(&true) {
+        owned
+    } else {
+        Vec::new()
+    }
+}
+
+/// The statement declaring the body an `owner` receiver runs for `method`,
+/// with its signature: the nearest class giving the method a body, or the
+/// trait default the class inherits. `owner` may also name the trait whose
+/// shared default a body is lowered for. `None` for an abstract declaration,
+/// and for a method no one statement declares.
+pub(crate) fn method_run_by<'d>(
+    kept: &KeptParameters,
+    type_definitions: &'d HashMap<String, TypeDefinition>,
+    (owner, method): (&str, &str),
+) -> Option<(usize, &'d MethodInfo)> {
+    let (declaring, info) = match resolve_method_source(type_definitions, owner, method) {
+        Some(MethodSource::Declared { class, info }) => (class, info),
+        Some(MethodSource::Default(default)) => (default.trait_name, default.info),
+        Some(MethodSource::AbstractOnly { .. }) => return None,
+        None => (owner, slot_method(owner, method, type_definitions)?),
+    };
+    Some((kept.method_declaration(declaring, method)?, info))
 }
 
 /// The signature the class or trait `owner` registers for its method
@@ -327,17 +351,6 @@ fn slot_method<'d>(
         | TypeDefinition::Generic(_)
         | TypeDefinition::Alias(_) => None,
     }
-}
-
-/// Whether a method of `owner` owns what it keeps: `owner` is a class
-/// declaring no type parameters, so every instance runs one body. A trait's
-/// default and a method of a generic class are shared by bodies of many
-/// types, and lend what they keep.
-fn owns_what_it_keeps(owner: &str, type_definitions: &HashMap<String, TypeDefinition>) -> bool {
-    let Some(TypeDefinition::Class(class)) = type_definitions.get(owner) else {
-        return false;
-    };
-    !(class.generics.as_ref()).is_some_and(|generics| !generics.is_empty())
 }
 
 /// Whether every call to the method `name` is written, naming it or reading
@@ -382,7 +395,8 @@ fn owned_parameters(
 }
 
 /// Whether a value `param` declares hands its reference on when a call keeps
-/// it: not `out`, and of a type [`hands_on_a_reference`] says hands it on.
+/// it: held whole ([`is_held_whole`]), and of a type [`hands_on_a_reference`]
+/// says hands it on.
 fn is_handed_on(
     param: &Parameter,
     type_definitions: &HashMap<String, TypeDefinition>,
@@ -391,7 +405,14 @@ fn is_handed_on(
     let ExpressionKind::Type(declared, false) = &param.typ.node else {
         return false;
     };
-    !param.is_out && hands_on_a_reference(&declared.kind, type_definitions, resources)
+    is_held_whole(param) && hands_on_a_reference(&declared.kind, type_definitions, resources)
+}
+
+/// Whether `param` holds a whole value a call can hand over: declared
+/// neither `out`, the caller's own binding, nor optional, whose payload
+/// hands on no reference of its own.
+fn is_held_whole(param: &Parameter) -> bool {
+    matches!(&param.typ.node, ExpressionKind::Type(_, false)) && !param.is_out
 }
 
 /// Which argument positions a call through a function value of the type

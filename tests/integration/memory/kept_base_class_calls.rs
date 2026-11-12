@@ -324,6 +324,40 @@ fn main()
     );
 }
 
+/// A generic subclass running a hook that keeps its receiver owns it at each
+/// instantiation, so the hook runs where its shelf ends, inside the call,
+/// whether the binding is held at the base or at the subclass itself.
+#[test]
+fn a_hooked_generic_subclass_keeping_its_receiver_runs_the_hook_inside_the_call() {
+    assert_heap_guard_output(
+        &with_bases(
+            r#"
+class Boxed<T> extends Base
+    public var item T
+    fn init(id int, item T)
+        super.init(id)
+        self.item = item
+    fn drop(self)
+        println(f"closed boxed {self.id}")
+    fn shelve(n int) int
+        if true
+            let _shelf = DerivedShelf(slot: Some(self))
+            println("boxed shelved")
+        println("leaving boxed shelve")
+        return n
+
+fn main()
+    let b Base = Boxed<int>(1, 7)
+    println(f"{b.shelve(1)}")
+    let c = Boxed<int>(2, 8)
+    println(f"{c.shelve(2)}")
+    println("end")
+"#,
+        ),
+        "boxed shelved\nclosed boxed 1\nleaving boxed shelve\n1\nboxed shelved\nclosed boxed 2\nleaving boxed shelve\n2\nend",
+    );
+}
+
 const MODULE_BASE: &str = concat!(
     "use system.io\n",
     "\n",

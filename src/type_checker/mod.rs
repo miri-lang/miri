@@ -73,6 +73,7 @@ pub(crate) mod module_loader;
 mod operators;
 pub use iteration_plan::{IterationPlan, PositionalAccess, ProtocolWalk};
 pub(crate) use operators::{named_class, ValueOrdering, ValueStepping};
+pub mod open_consumption;
 pub(crate) mod pattern_coverage;
 mod reference_cycles;
 pub mod reference_sharing;
@@ -526,11 +527,73 @@ impl TypeChecker {
         self.kept_parameters.of_declaration(statement_id)
     }
 
-    /// Which parameters the method `method` of the type `owner` owns, in the
-    /// order a call passes its operands, the receiver first; empty when it
-    /// owns none.
-    pub fn kept_parameters_of_method(&self, owner: &str, method: &str) -> &[bool] {
-        self.kept_parameters.of_method(owner, method)
+    /// Which parameters the body an `owner` receiver runs for `method` owns,
+    /// compiled with its operands at `operand_types`, in the order a call
+    /// passes them, the receiver first
+    /// ([`kept_parameters::owned_at`]); empty when it owns none. `owner` is
+    /// the class the body is compiled for, or the trait whose shared default
+    /// it is.
+    pub fn kept_parameters_of_method_at<'t>(
+        &self,
+        (owner, method): (&str, &str),
+        operand_types: impl IntoIterator<Item = &'t Type>,
+    ) -> Vec<bool> {
+        let definitions = &self.type_table.global_type_definitions;
+        kept_parameters::method_run_by(&self.kept_parameters, definitions, (owner, method))
+            .map_or_else(Vec::new, |(declaration, _)| {
+                self.kept_parameters_of_method_declaration(declaration, operand_types)
+            })
+    }
+
+    /// Which parameters the copy of the method the statement `declaration`
+    /// declares owns, compiled with its operands at `operand_types`, the
+    /// receiver first ([`kept_parameters::owned_at`]); empty when it owns
+    /// none.
+    pub fn kept_parameters_of_method_declaration<'t>(
+        &self,
+        declaration: usize,
+        operand_types: impl IntoIterator<Item = &'t Type>,
+    ) -> Vec<bool> {
+        let definitions = &self.type_table.global_type_definitions;
+        let resources = self.resource_types();
+        kept_parameters::owned_at(
+            self.kept_parameters.kept_by_method(declaration),
+            operand_types.into_iter().map(|ty| &ty.kind),
+            |kind| utils::hands_on_a_reference(kind, definitions, resources),
+        )
+    }
+
+    /// Which parameters the body an `owner` receiver runs for `method` owns
+    /// at the types it declares: the receiver at `owner` named bare and each
+    /// parameter as written, the body a generic owner shares among its
+    /// instantiations ([`Self::kept_parameters_of_method_at`]).
+    pub fn kept_parameters_of_method(&self, owner: &str, method: &str) -> Vec<bool> {
+        let definitions = &self.type_table.global_type_definitions;
+        let Some((declaration, info)) =
+            kept_parameters::method_run_by(&self.kept_parameters, definitions, (owner, method))
+        else {
+            return Vec::new();
+        };
+        let receiver =
+            (!info.is_static).then(|| make_type(TypeKind::Custom(owner.to_string(), None)));
+        let params = info.params.iter().map(|(_, ty)| ty);
+        self.kept_parameters_of_method_declaration(declaration, receiver.iter().chain(params))
+    }
+
+    /// Whether the site `expr` consumes the binding it names, in the copy of
+    /// its body being lowered, where the value is read at `copy_type`: a
+    /// resource the consumption check consumed, or a value of an open type
+    /// it consumes at each copy reading it as one
+    /// ([`open_consumption::hands_on_at_copy`]).
+    pub fn consumes_in_copy(&self, expr: &Expression, copy_type: Option<&Type>) -> bool {
+        if self.consumed_arguments.consumes(expr) {
+            return true;
+        }
+        let definitions = &self.type_table.global_type_definitions;
+        self.consumed_arguments.consumes_if_handed_on(expr)
+            && copy_type.is_some_and(|ty| {
+                open_consumption::hands_on_at_copy(&ty.kind, definitions, self.resource_types())
+            })
     }
 
     /// Which positions the vtable slot of `selector` numbered under `root`
@@ -927,6 +990,13 @@ impl TypeChecker {
         self.diagnostics.extend_errors(findings.errors);
         self.diagnostics.extend_warnings(findings.warnings);
         self.consumed_arguments.extend(findings.consumed_arguments);
+        let copies = open_consumption::Copies {
+            type_definitions: &self.type_table.global_type_definitions,
+            resources: self.resource_types(),
+            instantiations: &self.generic_class_instantiations,
+        };
+        let refusals = open_consumption::refusals_at_copies(findings.open_refusals, &copies);
+        self.diagnostics.extend_errors(refusals);
     }
 
     /// Decides which resource parameters each of the program's own
@@ -952,8 +1022,11 @@ impl TypeChecker {
         };
         self.kept_parameters =
             kept_parameters::decide_kept_parameters(top_level_statements(program), &facts);
-        self.slot_conventions =
-            slot_conventions::decide_slot_conventions(type_definitions, &self.kept_parameters);
+        self.slot_conventions = slot_conventions::decide_slot_conventions(
+            type_definitions,
+            &self.kept_parameters,
+            self.resource_types(),
+        );
     }
 
     /// Registers every class, trait, struct and enum among `statements` as

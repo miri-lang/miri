@@ -992,7 +992,7 @@ fn lower_class_method_body(
         receiver: has_self.then_some(ast_method.span),
         params,
     };
-    let owned = kept_parameters::record_and_bind_kept_parameters(
+    let owned = kept_parameters::record_and_bind_kept_method_parameters(
         &mut ctx,
         ast_method.id,
         named,

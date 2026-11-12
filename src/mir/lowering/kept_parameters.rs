@@ -104,6 +104,45 @@ pub(crate) fn record_and_bind_kept_parameters(
     span: Span,
 ) -> Result<KeptParameterBindings, LoweringError> {
     let kept = ctx.type_checker.kept_parameters_of_declaration(declaration);
+    bind_kept_parameters(ctx, kept, params, span)
+}
+
+/// [`record_and_bind_kept_parameters`] for the copy of the method the
+/// statement `declaration` declares being lowered: it owns what it keeps at
+/// the types it is compiled at, each parameter of the body read through the
+/// instantiation it is lowered for
+/// ([`crate::type_checker::TypeChecker::kept_parameters_of_method_declaration`]),
+/// the types every call naming the copy reads it at.
+pub(crate) fn record_and_bind_kept_method_parameters(
+    ctx: &mut LoweringContext,
+    declaration: usize,
+    params: NamedParameters<'_>,
+    span: Span,
+) -> Result<KeptParameterBindings, LoweringError> {
+    let operand_types: Vec<Type> = (ctx.body.local_decls.iter().skip(1).take(params.len()))
+        .map(|decl| compiled_operand_type(ctx, &decl.ty))
+        .collect();
+    let kept =
+        (ctx.type_checker).kept_parameters_of_method_declaration(declaration, &operand_types);
+    bind_kept_parameters(ctx, &kept, params, span)
+}
+
+/// The type a parameter declared at `ty` holds in the copy being lowered:
+/// read through the copy's instantiation, as a call passing it reads it
+/// (`method_dispatch::method_argument_types`).
+fn compiled_operand_type(ctx: &LoweringContext, ty: &Type) -> Type {
+    let instantiated = crate::mir::lowering::apply_generic_sub(ty, &ctx.generic_subs);
+    variable::canonical_declared_type(ctx.type_checker, &instantiated)
+}
+
+/// Records `kept`, in operand order, on the body's signature and binds each
+/// parameter of `params` it marks to a local of its own.
+fn bind_kept_parameters(
+    ctx: &mut LoweringContext,
+    kept: &[bool],
+    params: NamedParameters<'_>,
+    span: Span,
+) -> Result<KeptParameterBindings, LoweringError> {
     if !kept.contains(&true) {
         return Ok(KeptParameterBindings { is_scoped: false });
     }

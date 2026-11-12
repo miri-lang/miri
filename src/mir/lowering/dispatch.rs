@@ -290,7 +290,6 @@ fn lower_static_method_impl(
         defining_type: defining_type_name,
         info: method_info,
     } = site;
-    // Static method call with no receiver
     let arg_watermark = ctx.body.local_decls.len();
     let param_names: Vec<&str> = method_info
         .params
@@ -325,10 +324,11 @@ fn lower_static_method_impl(
     // Build arg_modes from method_info with no receiver offset (static methods have no self).
     let mut arg_modes =
         build_method_arg_modes_with_offset(method_info, args.len(), arg_ops.len(), 0);
+    let kept = (ctx.type_checker).kept_parameters_of_method(defining_type_name, method_name);
     let call = KeptCall {
         span: method_expr.span,
         receiver: None,
-        kept: (ctx.type_checker).kept_parameters_of_method(defining_type_name, method_name),
+        kept: &kept,
         args,
         arg_watermark,
         destination: destination.local,
