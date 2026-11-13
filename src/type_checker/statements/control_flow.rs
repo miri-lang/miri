@@ -204,7 +204,7 @@ impl TypeChecker {
         let plan = self.iteration_plan(&iterable_type);
         if let Some(plan) = &plan {
             let walked = (&iterable_type, iterable.span);
-            self.record_iteration_plan(plan, statement, walked, decls.get(1));
+            self.record_iteration_plan(plan, statement, walked, decls.get(1), context);
         }
         if let Some(IterationPlan::Protocol(walk)) = &plan {
             self.refuse_device_protocol_loop(&iterable_type, context, iterable.span);

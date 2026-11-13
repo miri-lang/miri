@@ -32,6 +32,8 @@ use std::collections::HashMap;
 use super::context::{
     class_ancestry, class_implements_trait, class_method_declaration, Context, TypeDefinition,
 };
+use super::instantiation_requirements::parameters_spelled;
+use super::used_methods::CallWriter;
 use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::statement::VariableDeclaration;
@@ -112,25 +114,35 @@ pub(crate) struct ProtocolLoop {
     pub second: Option<VariableDeclaration>,
     /// Where the loop's iterable is written.
     pub span: Span,
+    /// The body the loop is written in, with the parameters of it the
+    /// walked type spells, which a call through the iterator's trait is
+    /// read at.
+    pub writer: CallWriter,
 }
 
 impl TypeChecker {
     /// Records `plan` as how the `for` statement `statement` walks its value.
     /// A walk through an iterator is also kept for
-    /// [`Self::settle_iteration_plans`].
+    /// [`Self::settle_iteration_plans`], with the body `context` is checking.
     pub(crate) fn record_iteration_plan(
         &mut self,
         plan: &IterationPlan,
         statement: usize,
         (iterable, span): (&Type, Span),
         second: Option<&VariableDeclaration>,
+        context: &Context,
     ) {
         if let IterationPlan::Protocol(_) = plan {
+            let writer = CallWriter {
+                body: self.current_body(context),
+                parameters: parameters_spelled(std::iter::once(iterable), context),
+            };
             self.protocol_loops.push(ProtocolLoop {
                 statement,
                 iterable: iterable.clone(),
                 second: second.cloned(),
                 span,
+                writer,
             });
         }
         self.iteration_plans.insert(statement, plan.clone());
@@ -165,10 +177,10 @@ impl TypeChecker {
             }
             if let TypeKind::Custom(_, arguments) = &unproven.iterator.kind {
                 let arguments = arguments.clone();
-                let (trait_name, method) = (ITERATOR_TRAIT_NAME, NEXT_METHOD_NAME);
-                self.record_trait_method_call(
-                    trait_name,
-                    method,
+                let called = (ITERATOR_TRAIT_NAME, NEXT_METHOD_NAME);
+                self.record_trait_method_call_by(
+                    &walked.writer,
+                    called,
                     arguments.as_deref(),
                     walked.span,
                 );

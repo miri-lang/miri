@@ -557,3 +557,86 @@ fn main()
         "1\nkept\nleaving keep\nkept\nleaving keep\nend\nclosed 7",
     );
 }
+
+/// An iterable whose `iterator` a subclass overrides, so a `for` loop over it
+/// calls `next` through the `Iterator` trait. `Gen<T>`'s `next` builds a
+/// `Box<T>`; nothing hands a `Gen` out through `Src` itself.
+const WALKER: &str = r#"
+class Src<T> implements Iterable<T>
+    public var v T
+    fn init(v T)
+        self.v = v
+    public fn iterator() Iterator<T>
+        return Plain<T>()
+
+class SubSrc<T> extends Src<T>
+    fn init(v T)
+        super.init(v)
+    public fn iterator() Iterator<T>
+        return Gen<T>(self.v)
+
+class Gen<T> implements Iterator<T>
+    public var v T
+    fn init(v T)
+        self.v = v
+    public fn next() T?
+        let b = Box<T>(self.v)
+        if b.label() > 0: return None
+        return None
+
+class Plain<T> implements Iterator<T>
+    fn init()
+        let unused = 0
+    public fn next() T?
+        return None
+
+fn count_all<T>(s Src<T>) int
+    var n = 0
+    for _x in s
+        n += 1
+    return n
+"#;
+
+/// A `for` loop in a generic function calls `next` through the `Iterator`
+/// trait at the types that function is called at: called at `int` alone, it
+/// reads no slot of the `Gen<Handle>` converted to `Iterator<Handle>`, so
+/// the `Box<Handle>` that slot would build is never built and the trait
+/// above `Box` stays plain.
+#[test]
+fn a_trait_iterator_loop_in_a_generic_function_called_at_a_plain_type_leaves_the_trait_plain() {
+    assert_heap_guard_output(
+        &with_shelving(&format!(
+            "{WALKER}\n{}",
+            r#"
+fn main()
+    let unused Iterator<Handle> = Gen<Handle>(Handle(7))
+    println(f"{count_all(Src<int>(3))}")
+    let s Shelving = Box<int>(6)
+    keep_shelving(s)
+    keep_shelving(s)
+    println("end")
+"#
+        )),
+        "0\nkept\nleaving keep\nkept\nleaving keep\nend\nclosed 7",
+    );
+}
+
+/// The same loop, in the function called at `Handle`, calls `next` through
+/// `Iterator<Handle>`, which the `Gen<Handle>` stands behind: its slot builds
+/// the `Box<Handle>`, so the trait above it is a resource and its value
+/// cannot be handed on twice.
+#[test]
+fn a_trait_iterator_loop_in_a_generic_function_called_at_a_resource_makes_the_trait_a_resource() {
+    let program = with_shelving(&format!(
+        "{WALKER}\n{}",
+        r#"
+fn main()
+    let unused Iterator<Handle> = Gen<Handle>(Handle(7))
+    println(f"{count_all(Src<Handle>(Handle(8)))}")
+    let s Shelving = Box<int>(6)
+    keep_shelving(s)
+    keep_shelving(s)
+"#
+    ));
+    assert_compiler_error(&program, "MER_OWN_003");
+}

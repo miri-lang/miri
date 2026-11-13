@@ -645,19 +645,31 @@ impl TypeChecker {
     }
 
     /// Record a call to `method` through a receiver of the trait or class
-    /// `trait_name` at `type_args`, written at `span` where no body is known,
-    /// so it is read as written.
-    pub(crate) fn record_trait_method_call(
+    /// `trait_name` at `type_args`, written at `span` in the body `writer`
+    /// names, once that body is no longer the one being checked: of the
+    /// parameters `writer` lists, the call keeps those its receiver's
+    /// arguments spell.
+    pub(crate) fn record_trait_method_call_by(
         &mut self,
-        trait_name: &str,
-        method: &str,
+        writer: &CallWriter,
+        (trait_name, method): (&str, &str),
         type_args: Option<&[TypeArgument]>,
         span: Span,
     ) {
         let arguments = self.instance_arguments(trait_name, type_args);
+        let parameters = (writer.parameters.iter())
+            .filter(|parameter| {
+                (arguments.iter().flatten()).any(|ty| {
+                    spells_a_type(&ty.kind, &|kind| {
+                        super::generics::generic_parameter_name(kind) == Some(parameter.as_str())
+                    })
+                })
+            })
+            .cloned()
+            .collect();
         let writer = CallWriter {
-            body: None,
-            parameters: Vec::new(),
+            body: writer.body.clone(),
+            parameters,
         };
         self.record_call_through_trait(writer, (trait_name, method), arguments, span);
     }
