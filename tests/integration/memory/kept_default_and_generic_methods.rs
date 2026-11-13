@@ -509,6 +509,73 @@ fn main()
     assert_compiler_error(&program, "compiled at `Handle`");
 }
 
+/// A copy the program reaches only through an `extends` clause is a copy
+/// the type checker knows too: `Pinned` declares no parameters and extends
+/// `Holder<Handle>`, so calling the method it inherits runs the copy at
+/// `Handle`, which is refused, naming that copy, though nothing builds a
+/// `Holder<Handle>`.
+#[test]
+fn a_method_storing_a_type_parameter_twice_is_refused_at_a_copy_an_extends_clause_reaches() {
+    let program = with_handle(&format!(
+        "{TWICE_HOLDER}\n{}",
+        r#"
+class Pinned extends Holder<Handle>
+    fn init(tag int)
+        super.init(tag)
+
+fn main()
+    let p = Pinned(3)
+    println(f"{p.keep(Handle(1))}")
+    println("end")
+"#
+    ));
+    assert_compiler_error(&program, "MER_OWN_003");
+    assert_compiler_error(&program, "compiled at `Handle`");
+}
+
+/// A generic class reaches its base at the arguments its `extends` clause
+/// restates: `Sub<Handle>` is a `Holder<Handle>`, so the inherited copy at
+/// `Handle` is refused though the program writes only the subclass.
+#[test]
+fn a_method_storing_a_type_parameter_twice_is_refused_at_a_copy_a_generic_subclass_reaches() {
+    let program = with_handle(&format!(
+        "{TWICE_HOLDER}\n{}",
+        r#"
+class Sub<U> extends Holder<U>
+    fn init(tag int)
+        super.init(tag)
+
+fn main()
+    let s = Sub<Handle>(3)
+    println(f"{s.keep(Handle(1))}")
+    println("end")
+"#
+    ));
+    assert_compiler_error(&program, "MER_OWN_003");
+    assert_compiler_error(&program, "compiled at `Handle`");
+}
+
+/// The same class extending the holder at a plain type leaves the method
+/// storing its parameter twice accepted.
+#[test]
+fn a_method_storing_a_type_parameter_twice_compiles_at_a_plain_copy_an_extends_clause_reaches() {
+    assert_heap_guard_output(
+        &with_handle(&format!(
+            "{TWICE_HOLDER}\n{}",
+            r#"
+class Pinned extends Holder<int>
+    fn init(tag int)
+        super.init(tag)
+
+fn main()
+    let p = Pinned(3)
+    println(f"{p.keep(5)}")
+"#
+        )),
+        "held twice\n3",
+    );
+}
+
 /// A generic function building the copy only at a plain type leaves the
 /// method storing its parameter twice accepted.
 #[test]

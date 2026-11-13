@@ -143,3 +143,92 @@ fn an_instance_missing_from_the_decided_set_is_reported() {
         "the box missing from the set is reported: {gaps:?}"
     );
 }
+
+/// A chain of classes whose `extends` clauses restate their parameters, a
+/// generic function building the lowest of them, and a class that declares
+/// no parameters of its own extending one at a written type.
+const BASES: &str = r#"
+use system.collections.list
+
+class Top<T>
+    public var item T
+    fn init(item T)
+        self.item = item
+    fn take() int
+        return 1
+
+class Mid<U> extends Top<[U]>
+    fn init(item [U])
+        super.init(item)
+
+class Low<V> extends Mid<V>
+    fn init(item [V])
+        super.init(item)
+
+class Pinned extends Mid<Handle>
+    fn init(item [Handle])
+        super.init(item)
+
+fn low_of<V>(x V) Low<V>
+    return Low<V>(List([x]))
+"#;
+
+/// The instances of `class` the set `result`'s type checker decided
+/// ownership over holds, each spelled by its arguments.
+fn decided_instances_of(result: &PipelineResult, class: &str) -> Vec<String> {
+    let decided = result.type_checker.ownership_instantiations();
+    (decided.get(class).into_iter().flatten())
+        .map(|arguments| {
+            let spelled: Vec<String> = arguments.iter().map(|ty| ty.kind.to_string()).collect();
+            spelled.join(", ")
+        })
+        .collect()
+}
+
+/// A class built in a generic function is an instance of every class above
+/// it, at the arguments each `extends` clause restates: `low_of` reached at
+/// `int` builds `Low<int>`, so `Mid<int>` and `Top<[int]>` are decided over
+/// too, and lowering, which compiles the inherited bodies at those, is
+/// reported for neither.
+#[test]
+fn a_base_reached_through_a_built_class_is_not_reported() {
+    let source = format!(
+        "{DECLARATIONS}\n{BASES}\nfn main()\n    let l = low_of(3)\n    println(f\"{{l.take()}}\")\n"
+    );
+    let result = lowered(&source);
+    let gaps = gaps_in(&result);
+    assert!(
+        !gaps
+            .iter()
+            .any(|gap| gap.class == "Top" || gap.class == "Mid"),
+        "no base on the chain is reported: {gaps:?}"
+    );
+    assert!(
+        decided_instances_of(&result, "Top").contains(&"List(int)".to_string()),
+        "the top of the chain is decided over: {:?}",
+        decided_instances_of(&result, "Top")
+    );
+}
+
+/// A class declaring no parameters reaches its base at the arguments its
+/// own `extends` clause writes, and every class above that one: `Pinned`
+/// reaches `Mid<Handle>` and `Top<[Handle]>`, though nothing builds either.
+#[test]
+fn a_base_a_class_without_parameters_extends_is_not_reported() {
+    let source = format!(
+        "{DECLARATIONS}\n{BASES}\nfn main()\n    let p = Pinned(List([Handle(1)]))\n    println(f\"{{p.take()}}\")\n"
+    );
+    let result = lowered(&source);
+    let gaps = gaps_in(&result);
+    assert!(
+        !gaps
+            .iter()
+            .any(|gap| gap.class == "Top" || gap.class == "Mid"),
+        "no base on the chain is reported: {gaps:?}"
+    );
+    assert!(
+        decided_instances_of(&result, "Mid").contains(&"Handle".to_string()),
+        "the base the clause writes is decided over: {:?}",
+        decided_instances_of(&result, "Mid")
+    );
+}

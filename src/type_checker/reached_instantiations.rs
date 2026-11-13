@@ -20,6 +20,12 @@
 //! over every instantiation the program builds, whichever body builds it
 //! ([`TypeChecker::ownership_instantiations`]).
 //!
+//! A class instance is an instance of every class above it, at the
+//! arguments each `extends` clause restates from the one below ([`bases`]).
+//! So each instance the program builds outside every generic body, each
+//! class declaring no parameters of its own, and each class a reached body
+//! builds records the instances above it, where the bodies it inherits run.
+//!
 //! A site a trait slot reaches ([`SlotRead`]) is followed only where
 //! lowering compiles the slot's body: where the call through the trait
 //! agrees with the converted trait's arguments, each side restated at the
@@ -53,6 +59,7 @@
 //! decided over every instantiation lowering compiles from the bodies
 //! followed.
 
+mod bases;
 mod limits;
 
 use super::compiled_instances::CompiledInstance;
@@ -66,7 +73,7 @@ use super::utils::add_instantiation;
 use super::TypeChecker;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
-use limits::Refused;
+use limits::{GrowthChain, Refused};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::rc::Rc;
@@ -217,6 +224,7 @@ impl TypeChecker {
         let built = std::mem::take(&mut self.classes_built_in_bodies);
         let refusal = self.walk_reached_bodies(sites, &built, context).err();
         self.classes_built_in_bodies = built;
+        self.record_rooted_bases();
         self.resource_types.take();
         if let Some(refusal) = refusal {
             self.diagnostics.push_error(*refusal);
@@ -483,23 +491,36 @@ impl TypeChecker {
             .map(|ty| self.substitute_type(ty, bound))
             .collect();
         let builder = Some(Rc::clone(step));
-        let growth = || {
-            if class_needs_vtable(&class.class, self.type_definitions()) {
-                self.growth_through_slots(&class.class, &builder, context)
-            } else {
-                self.growth_through_calls(&class.class, &arguments, &builder, context)
-            }
-        };
+        let growth = || self.growth_of(&class.class, &arguments, &builder, context);
         let within = (class.span, step.as_ref());
         self.refuse_instance_past_limits(&class.class, &arguments, growth, within, walk)?;
-        if let Some(arguments) = self.instantiation_arguments(&arguments) {
+        if let Some(recorded) = self.instantiation_arguments(&arguments) {
             add_instantiation(
                 &mut self.reached_class_instantiations,
                 &class.class,
-                arguments,
+                recorded,
             );
         }
-        Ok(())
+        let built = (class.class.as_str(), arguments.as_slice());
+        self.record_bases_built_at(built, (class.span, step), context, walk)
+    }
+
+    /// The instances of `class` that led to the one at `arguments`, which a
+    /// body on `builder` builds, as lowering names the chain of an instance
+    /// it builds: through the slots read on the way when the class fills a
+    /// vtable, else through the calls made on the way.
+    fn growth_of(
+        &self,
+        class: &str,
+        arguments: &[Type],
+        builder: &Lineage,
+        context: &Context,
+    ) -> GrowthChain {
+        if class_needs_vtable(class, self.type_definitions()) {
+            self.growth_through_slots(class, builder, context)
+        } else {
+            self.growth_through_calls(class, arguments, builder, context)
+        }
     }
 }
 
