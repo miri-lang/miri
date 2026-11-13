@@ -70,7 +70,8 @@ impl TypeChecker {
         let own = (class.methods.get(method).into_iter())
             .flat_map(|info| info.generics.iter().map(|generic| generic.name.as_str()));
         let own: Vec<&Type> = bound_types(own, &step.bound).collect();
-        refuse_call_past_limits(method, &own, (span, step))
+        let declared = walk.declaration_of(&step.body).unwrap_or(span);
+        refuse_call_past_limits(method, &own, (declared, step))
     }
 
     /// Refuse the generic function `step` reaches, from a site at `span`,
@@ -86,8 +87,9 @@ impl TypeChecker {
         walk: &mut ReachWalk<'_>,
     ) -> Result<(), Refused> {
         let method = &step.body.1;
+        let declared = walk.declaration_of(&step.body).unwrap_or(span);
         let Some(function) = self.declared_function(&step.body, context) else {
-            return refuse_call_past_limits(method, &types_by_name(&step.bound), (span, step));
+            return refuse_call_past_limits(method, &types_by_name(&step.bound), (declared, step));
         };
         let arguments: Vec<&Type> =
             bound_types(function.parameters.iter().copied(), &step.bound).collect();
@@ -103,7 +105,7 @@ impl TypeChecker {
                 self.refuse_instance_past_limits(class, &parts, growth, (span, step), walk)?;
             }
         }
-        refuse_call_past_limits(method, &arguments, (span, step))
+        refuse_call_past_limits(method, &arguments, (declared, step))
     }
 
     /// The top-level generic function `body` names, as the program's global
@@ -273,8 +275,8 @@ fn types_by_name(bound: &HashMap<String, Type>) -> Vec<&Type> {
     named.into_iter().map(|(_, ty)| ty).collect()
 }
 
-/// Refuse the generic function or method `name` bound at `arguments`, at the
-/// site at `span` reaching it as the body `within` reached, where a recursion
+/// Refuse the generic function or method `name` bound at `arguments`, at
+/// `span`, where it is declared, as the body `within` reached, where a recursion
 /// reached it ([`is_recursive`]) and they nest past [`MAX_INSTANCE_TYPE_DEPTH`]
 /// or are built from more than [`MAX_INSTANCE_TYPE_SIZE`] types, as lowering
 /// refuses the instantiation it would compile.

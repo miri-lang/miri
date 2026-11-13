@@ -330,3 +330,58 @@ fn main()
     let gaps = gaps_naming(source, "List");
     assert!(gaps.is_empty(), "no list is reported: {gaps:?}");
 }
+
+/// A trait default holds instances spelling `Self`, which every class the
+/// default is copied into restates as itself: `L` runs `Labeled.go`, which
+/// holds `List<Box<Self>>` and an `Array<Box<Self>, 2>` literal, so
+/// `List<Box<L>>` and `Array<Box<L>, 2>` are decided over.
+#[test]
+fn an_instance_spelling_self_in_a_default_is_not_reported() {
+    let source = r#"
+use system.collections.list
+
+trait Same
+    fn same(other Self) bool
+    fn pick(others [Self]) Self?
+        for o in others
+            if self.same(o)
+                return Some(o)
+        None
+
+class Box<T> implements Same
+    var t T
+    var n int
+    fn init(t T, n int)
+        self.t = t
+        self.n = n
+    public fn same(other Box<T>) bool
+        self.n == other.n
+
+trait Labeled
+    fn label() String
+    fn go() bool
+        let a = Box<Self>(self, 1)
+        let r = a.pick(List([Box<Self>(self, 2), Box<Self>(self, 1)]))
+        match r
+            Some(v): v.t.label() == self.label() and v.n == 1
+            None: false
+
+class L implements Labeled
+    var s String
+    fn init(s String)
+        self.s = s
+    public fn label() String
+        self.s
+
+fn main()
+    let l = L("q")
+    println(f"{l.go()}")
+"#;
+    let gaps: Vec<AgreementGap> = (gaps_in(&lowered(source)).into_iter())
+        .filter(|gap| gap.class == "List" || gap.class == "Array")
+        .collect();
+    assert!(
+        gaps.is_empty(),
+        "no instance around `Box<L>` is reported: {gaps:?}"
+    );
+}

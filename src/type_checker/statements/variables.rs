@@ -215,6 +215,7 @@ impl TypeChecker {
         keyword_start: Option<usize>,
     ) {
         let inferred_type = self.determine_variable_type(decl, context, span);
+        self.record_classes_bound_in_body(&inferred_type, span, context);
         self.check_gpu_variable_type(&decl.name, &inferred_type, context, span);
         self.refuse_buffer_copy_in_kernel(decl, &inferred_type, context);
         if let (true, Some(type_expr)) = (context.in_gpu_function, &decl.typ) {

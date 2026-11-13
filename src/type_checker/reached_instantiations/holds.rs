@@ -10,8 +10,10 @@
 //! A type spelling no parameter of the body holding it is the instance it
 //! names; one spelling the body's own parameters names an instance at each
 //! type the body is reached at, so it is recorded as a class that body
-//! builds ([`TypeChecker::record_class_built_in_body`]).
+//! builds, held by an expression or bound by a declared binding
+//! ([`super::Naming`]), where a refusal of it is placed.
 
+use super::Naming;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
@@ -28,13 +30,36 @@ impl TypeChecker {
     /// body being checked writes at `span` has, spells at that body's own
     /// parameters.
     pub(crate) fn record_classes_held_in_body(&mut self, ty: &Type, span: Span, context: &Context) {
+        self.record_classes_named_in_body((ty, Naming::Held), span, context);
+    }
+
+    /// Record each generic class instance `ty`, the type of a binding the
+    /// statement at `span` in the body being checked declares, spells at
+    /// that body's own parameters.
+    pub(crate) fn record_classes_bound_in_body(
+        &mut self,
+        ty: &Type,
+        span: Span,
+        context: &Context,
+    ) {
+        self.record_classes_named_in_body((ty, Naming::Bound), span, context);
+    }
+
+    /// Record each generic class instance `ty` spells at the body being
+    /// checked's own parameters, named the way `naming` says at `span`.
+    fn record_classes_named_in_body(
+        &mut self,
+        (ty, naming): (&Type, Naming),
+        span: Span,
+        context: &Context,
+    ) {
         if self.suppress_diagnostics || context.current_function.is_none() {
             return;
         }
         let mut held = Vec::new();
         collect_held_classes(self.type_definitions(), &ty.kind, 0, &mut held);
         for (class, arguments) in held {
-            self.record_class_built_in_body(&class, &arguments, span, context);
+            self.record_class_named_in_body((&class, &arguments, naming), span, context);
         }
     }
 
@@ -66,9 +91,9 @@ impl TypeChecker {
     }
 }
 
-/// Append every generic class instance `kind` spells, each nested one
-/// before the one holding it, down to [`MAX_INSTANCE_TYPE_DEPTH`] levels, as
-/// lowering lists the instances a type it compiles holds.
+/// Append every generic class or struct instance `kind` spells, each nested
+/// one before the one holding it, down to [`MAX_INSTANCE_TYPE_DEPTH`] levels,
+/// as lowering lists the instances a type it compiles holds.
 fn collect_held_classes(
     definitions: &HashMap<String, TypeDefinition>,
     kind: &TypeKind,
@@ -81,10 +106,18 @@ fn collect_held_classes(
     let TypeKind::Custom(name, Some(arguments)) = kind else {
         return;
     };
-    let Some(TypeDefinition::Class(class)) = definitions.get(name) else {
-        return;
+    let declared = match definitions.get(name) {
+        Some(definition @ (TypeDefinition::Class(_) | TypeDefinition::Struct(_))) => {
+            definition.generics().unwrap_or_default()
+        }
+        Some(
+            TypeDefinition::Enum(_)
+            | TypeDefinition::Trait(_)
+            | TypeDefinition::Generic(_)
+            | TypeDefinition::Alias(_),
+        )
+        | None => return,
     };
-    let declared = class.generics.as_deref().unwrap_or_default();
     let Some(arguments) = arguments
         .iter()
         .map(instantiation_argument)

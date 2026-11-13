@@ -640,3 +640,138 @@ fn main()
     ));
     assert_compiler_error(&program, "MER_OWN_003");
 }
+
+/// What checking `program` reports, whatever it says.
+fn checked_report(program: &str) -> String {
+    crate::utils::miri_check(program).output()
+}
+
+/// The help on a type argument growing on every static call.
+const STATIC_GROWTH_HELP: &str = "  = help: the type argument grows on every call; bound the recursion by type, or keep one type (e.g. store the depth as a value instead of in the type)\n";
+
+/// A generic function calling itself at a tuple of its own argument doubles
+/// that argument's size on every call: the program is refused where the
+/// function is declared, as the instantiation past the bound is one of it.
+#[test]
+fn a_generic_function_doubling_its_argument_is_refused_at_its_declaration() {
+    let report = checked_report(
+        r#"
+use system.io
+
+fn grow<T>(x T, n int) int
+    if n == 0: return 0
+    return grow((x, x), n - 1)
+
+fn main()
+    println(f"{grow(1, 3)}")
+"#,
+    );
+    let expected = format!(
+        ":4:1\n   |\n 4 | fn grow<T>(x T, n int) int\n   | ^^^^^^^^^^^^^^^^^^^^^^^^^^ \
+         instantiating `grow<((…, …), (…, …))>` builds its type argument from more types \
+         than one instance may hold (1024)\n   |\n{STATIC_GROWTH_HELP}   |\n"
+    );
+    assert!(report.contains("error[MER_MIR_016]"), "{report}");
+    assert!(
+        report.contains(&expected),
+        "expected {expected:?} in:\n{report}"
+    );
+    assert!(!report.contains("= note:"), "no chain is named:\n{report}");
+}
+
+/// The same growth in a generic method is refused where the method is
+/// declared.
+#[test]
+fn a_generic_method_doubling_its_argument_is_refused_at_its_declaration() {
+    let report = checked_report(
+        r#"
+use system.io
+
+class G
+    fn grow<T>(x T, n int) int
+        if n == 0: return 0
+        return self.grow((x, x), n - 1)
+
+fn main()
+    let g = G()
+    println(f"{g.grow(1, 3)}")
+"#,
+    );
+    let expected = format!(
+        ":5:5\n   |\n 5 |     fn grow<T>(x T, n int) int\n   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ \
+         instantiating `grow<((…, …), (…, …))>` builds its type argument from more types \
+         than one instance may hold (1024)\n   |\n{STATIC_GROWTH_HELP}   |\n"
+    );
+    assert!(report.contains("error[MER_MIR_016]"), "{report}");
+    assert!(
+        report.contains(&expected),
+        "expected {expected:?} in:\n{report}"
+    );
+}
+
+/// A generic function holding a list of its own argument and calling itself
+/// with it nests the list one level deeper on every call: the program is
+/// refused at the binding declared at the list's type, naming each call's
+/// list as a static call grows it.
+#[test]
+fn a_list_nested_on_every_call_of_a_generic_function_is_refused_with_its_chain() {
+    let report = checked_report(
+        r#"
+use system.collections.list
+
+fn nest<T>(a T, n int) int
+    if n == 0
+        return 0
+    var l = List<T>()
+    l.push(a)
+    return 1 + nest(l, n - 1)
+
+fn main()
+    println(f"{nest(1, 3)}")
+"#,
+    );
+    let expected = format!(
+        ":7:5\n   |\n 7 |     var l = List<T>()\n   |     ^^^ instantiating \
+         `List<List<List<…>>>` nests its type argument 33 levels deep\n   |\n\
+         {STATIC_GROWTH_HELP}   |\n  = note: each call builds `List` at a larger type: \
+         List<int> → List<List<int>> → List<List<List<int>>> → …\n"
+    );
+    assert!(report.contains("error[MER_MIR_016]"), "{report}");
+    assert!(
+        report.contains(&expected),
+        "expected {expected:?} in:\n{report}"
+    );
+}
+
+/// A struct a generic function builds around its own argument and hands to
+/// itself grows on every call: the program is refused where the body builds
+/// it, not where the call hands it on.
+#[test]
+fn a_struct_built_around_the_argument_of_a_generic_function_is_refused_where_it_is_built() {
+    let report = checked_report(
+        r#"
+use system.io
+
+struct S<T>
+    v T
+
+fn nest<T>(x T, n int) int
+    if n == 0
+        return 0
+    return 1 + nest(S(v: x), n - 1)
+
+fn main()
+    let s = "a" + "b"
+    println(f"{nest(s, 3)}")
+"#,
+    );
+    let expected = format!(
+        ":10:21\n    |\n 10 |     return 1 + nest(S(v: x), n - 1)\n    |                     \
+         ^^^^^^^ instantiating `S<S<S<…>>>` nests its type argument 33 levels deep\n"
+    );
+    assert!(report.contains("error[MER_MIR_016]"), "{report}");
+    assert!(
+        report.contains(&expected),
+        "expected {expected:?} in:\n{report}"
+    );
+}

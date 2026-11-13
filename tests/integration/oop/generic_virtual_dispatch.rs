@@ -1181,3 +1181,51 @@ fn main()
         &["S<String> → S<S<String>> → S<S<S<String>>> → …"],
     );
 }
+
+/// A class extending a base at a list of its own argument, whose method
+/// builds the class at an optional of that argument and calls it, reaches the
+/// base one level deeper than the class on every call: the base passes the
+/// depth bound first, and the program is refused where the method builds the
+/// class, naming the base instance and a static call's growth.
+#[test]
+fn test_a_base_reached_through_a_growing_subclass_is_refused_where_the_subclass_is_built() {
+    let report = crate::utils::miri_check(
+        r#"
+use system.io
+use system.collections.list
+
+class Base<T>
+    public var item T
+    fn init(item T)
+        self.item = item
+    fn take() int
+        return 1
+
+class Child<T> extends Base<[T]>
+    fn init(item [T])
+        super.init(item)
+    fn grow(n int) int
+        if n == 0
+            return self.take()
+        let next = Child<T?>(List<T?>())
+        return next.grow(n - 1)
+
+fn main()
+    let c = Child<int>(List<int>())
+    println(f"{c.grow(3)}")
+"#,
+    )
+    .output();
+    let expected = "error[MER_MIR_016]: Polymorphic Recursion\n";
+    let located = ":18:20\n    |\n 18 |         let next = Child<T?>(List<T?>())\n    |                    \
+                   ^^^^^^^^^^^^^^^^^^^^^ instantiating `Base<List<int???????????????????????????????>>` \
+                   nests its type argument 33 levels deep\n    |\n  = help: the type argument grows on \
+                   every call; bound the recursion by type, or keep one type (e.g. store the depth as \
+                   a value instead of in the type)\n    |\n";
+    assert!(report.contains(expected), "{report}");
+    assert!(
+        report.contains(located),
+        "expected {located:?} in:\n{report}"
+    );
+    assert!(!report.contains("= note:"), "no chain is named:\n{report}");
+}

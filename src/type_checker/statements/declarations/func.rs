@@ -210,6 +210,7 @@ impl TypeChecker {
         context.in_function = true;
         context.in_async_function = properties.is_async;
         context.in_static_method = properties.is_static;
+        self.record_generic_body_declaration(generics.as_deref(), span, context);
 
         // Store the function body for GPU callability analysis
         let declared = self.declared_here(name);

@@ -56,7 +56,10 @@ impl TypeChecker {
     ) -> Result<(), Refused> {
         let builder = Some(Rc::clone(step));
         for (base, base_arguments) in self.bases_above(class, arguments) {
-            let growth = || self.growth_of(&base, &base_arguments, &builder, context);
+            // A base is derived from the class built, never constructed, so
+            // it grows by the calls that build that class.
+            let base_instance = (base_arguments.as_slice(), false);
+            let growth = || self.growth_of(&base, base_instance, &builder, context);
             let within = (span, step.as_ref());
             self.refuse_instance_past_limits(&base, &base_arguments, growth, within, walk)?;
             self.record_reached_base(&base, base_arguments);

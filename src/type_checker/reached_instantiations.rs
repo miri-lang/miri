@@ -8,7 +8,8 @@
 //! against its own parameters, so a class it builds from them, `Box<T>(x)`
 //! inside `fn f<T>(x T)`, names no type the program can be judged at. Each
 //! such construction is recorded against the body that writes it, with the
-//! parameters it spells ([`BuiltInBodies`]). Once every body is checked, the
+//! parameters it spells, beside where a body declaring type parameters of its
+//! own is declared ([`BuiltInBodies`]). Once every body is checked, the
 //! bodies the program reaches are followed: from each site pinning a body
 //! at concrete types, through each site a reached body writes, its pins
 //! restated at the types that body is reached at. Every class a reached
@@ -58,7 +59,10 @@
 //! ([`super::instantiation_limits`]) to every body it reaches and every class
 //! a reached body builds, and refuses the program at the first one past a
 //! bound that a body reached from itself leads to, as polymorphic recursion,
-//! naming the earlier instances of its class that led to it. A type the
+//! naming the earlier instances of its class that led to it. The refusal is
+//! placed where lowering places it: a class instance where the body building
+//! it names it most strongly ([`Naming`]), and a generic function or method
+//! whose own parameters pass a bound where it is declared. A type the
 //! program writes past a bound, with no recursion leading to it, is left to
 //! lowering, which refuses it in its own words. The walk follows the most
 //! deeply nested body it has reached first, so a type growing on every call
@@ -76,20 +80,32 @@ use super::compiled_instances::CompiledInstance;
 use super::context::{class_needs_vtable, Context};
 use super::instantiation_limits::deepest_argument_depth;
 use super::instantiation_requirements::{
-    parameters_spelled, spells_a_type, GenericBodyId, Pin, PinningSite, SlotRead,
+    parameters_spelled, spells_a_type, GenericBodyId, Pin, PinningSite, SlotRead, SELF_PIN,
 };
 use super::used_methods::reads_converted_slot;
 use super::utils::add_instantiation;
 use super::TypeChecker;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::expression::Expression;
+use crate::ast::types::{is_trait_self, Type, TypeKind};
 use crate::error::syntax::Span;
 use limits::{GrowthChain, Refused};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::rc::Rc;
 
-/// The classes each generic body builds from its own parameters, by body.
-pub(crate) type BuiltInBodies = HashMap<GenericBodyId, Vec<BuiltClass>>;
+/// What the walk reads of each generic body, by body.
+pub(crate) type BuiltInBodies = HashMap<GenericBodyId, GenericBody>;
+
+/// A generic body as the walk over reached bodies reads it.
+#[derive(Debug, Default)]
+pub(crate) struct GenericBody {
+    /// Where the body is declared, when it declares type parameters of its
+    /// own: a refusal of those parameters bound past a bound names the
+    /// declaration, as lowering names the instantiation it would compile.
+    declared_at: Option<Span>,
+    /// The classes it builds from its parameters.
+    built: Vec<BuiltClass>,
+}
 
 /// A generic class a body builds at arguments spelling the body's own
 /// parameters.
@@ -99,8 +115,24 @@ pub(crate) struct BuiltClass {
     arguments: Vec<Type>,
     /// The body's parameters `arguments` spell.
     parameters: Vec<String>,
-    /// The construction building it.
+    /// Where the body names it, the way it names it there.
     span: Span,
+    naming: Naming,
+}
+
+/// How a body names a class instance it builds, from the weakest to the
+/// strongest. Lowering refuses an instance past a bound where the body names
+/// it most strongly: a construction first, else the binding declared at its
+/// type, else the expression holding it. An instance of a class filling a
+/// vtable is refused as the vtable it builds only where it is constructed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Naming {
+    /// A value of an expression has its type.
+    Held,
+    /// A binding is declared at its type.
+    Bound,
+    /// A construction builds it.
+    Constructed,
 }
 
 /// Whether lowering compiles a slot's body at an instance, by the class, the
@@ -170,8 +202,9 @@ impl PartialEq for Pending {
 impl Eq for Pending {}
 
 /// What the walk over reached bodies knows as it goes.
-#[derive(Default)]
 struct ReachWalk<'s> {
+    /// What the walk reads of each generic body.
+    bodies: &'s BuiltInBodies,
     /// Whether lowering compiles a slot's body at an instance.
     verdicts: SlotVerdicts,
     /// Each step each body is reached at so far.
@@ -187,6 +220,27 @@ struct ReachWalk<'s> {
     value_instances: HashMap<String, HashSet<Vec<TypeKind>>>,
 }
 
+impl<'s> ReachWalk<'s> {
+    /// A walk over the generic bodies `bodies` records, nothing reached yet.
+    fn over(bodies: &'s BuiltInBodies) -> Self {
+        Self {
+            bodies,
+            verdicts: HashMap::new(),
+            reached: HashMap::new(),
+            waiting: HashMap::new(),
+            pending: BinaryHeap::new(),
+            admitted: 0,
+            value_instances: HashMap::new(),
+        }
+    }
+
+    /// Where the body `body` is declared, when it declares type parameters
+    /// of its own.
+    fn declaration_of(&self, body: &GenericBodyId) -> Option<Span> {
+        self.bodies.get(body).and_then(|body| body.declared_at)
+    }
+}
+
 impl TypeChecker {
     /// Record that the body being checked builds the generic class `class`
     /// at `arguments`, at `span`, when they spell that body's own parameters.
@@ -197,26 +251,63 @@ impl TypeChecker {
         span: Span,
         context: &Context,
     ) {
-        let parameters = parameters_spelled(arguments.iter(), context);
+        let named = (class, arguments, Naming::Constructed);
+        self.record_class_named_in_body(named, span, context);
+    }
+
+    /// Record that the body being checked names the generic class `class` at
+    /// `arguments` the way `naming` says, at `span`, when they spell that
+    /// body's own parameters. A class it names more strongly elsewhere keeps
+    /// the place it names it most strongly, the first such place on a tie.
+    pub(super) fn record_class_named_in_body(
+        &mut self,
+        (class, arguments, naming): (&str, &[Type], Naming),
+        span: Span,
+        context: &Context,
+    ) {
+        let parameters = body_parameters_spelled(arguments, context);
         if parameters.is_empty() {
             return;
         }
         let Some(body) = self.current_body(context) else {
             return;
         };
-        let built = self.classes_built_in_bodies.entry(body).or_default();
-        let is_recorded = built.iter().any(|known| {
+        let built = &mut self.classes_built_in_bodies.entry(body).or_default().built;
+        let known = built.iter_mut().find(|known| {
             known.class == class
                 && (known.arguments.iter().map(|ty| &ty.kind))
                     .eq(arguments.iter().map(|ty| &ty.kind))
         });
-        if !is_recorded {
-            built.push(BuiltClass {
+        match known {
+            Some(known) if known.naming < naming => {
+                known.span = span;
+                known.naming = naming;
+            }
+            Some(_) => {}
+            None => built.push(BuiltClass {
                 class: class.to_string(),
                 arguments: arguments.to_vec(),
                 parameters,
                 span,
-            });
+                naming,
+            }),
+        }
+    }
+
+    /// Record that the body being checked is declared at `span`, when it
+    /// declares type parameters of its own (`type_parameters`).
+    pub(crate) fn record_generic_body_declaration(
+        &mut self,
+        type_parameters: Option<&[Expression]>,
+        span: Span,
+        context: &Context,
+    ) {
+        if type_parameters.is_none_or(<[_]>::is_empty) {
+            return;
+        }
+        if let Some(body) = self.current_body(context) {
+            let generic_body = self.classes_built_in_bodies.entry(body).or_default();
+            generic_body.declared_at = Some(span);
         }
     }
 
@@ -258,7 +349,7 @@ impl TypeChecker {
                 written_in.entry(caller).or_default().push(site);
             }
         }
-        let mut walk = ReachWalk::default();
+        let mut walk = ReachWalk::over(built);
         let roots = (sites.iter()).filter(|site| site.caller_parameters.is_empty());
         for site in roots.chain(rooted) {
             self.reach_site(site, &None, context, &mut walk)?;
@@ -268,7 +359,7 @@ impl TypeChecker {
             if !seen.insert(step.identity()) {
                 continue;
             }
-            for class in built.get(&step.body).into_iter().flatten() {
+            for class in (walk.bodies.get(&step.body).into_iter()).flat_map(|body| &body.built) {
                 self.record_built_at(class, &step, context, &mut walk)?;
             }
             self.resume_waiting_slots(&step, context, &mut walk)?;
@@ -502,7 +593,15 @@ impl TypeChecker {
             .map(|ty| self.substitute_type(ty, bound))
             .collect();
         let builder = Some(Rc::clone(step));
-        let growth = || self.growth_of(&class.class, &arguments, &builder, context);
+        let is_constructed = class.naming == Naming::Constructed;
+        let growth = || {
+            self.growth_of(
+                &class.class,
+                (&arguments, is_constructed),
+                &builder,
+                context,
+            )
+        };
         let within = (class.span, step.as_ref());
         self.refuse_instance_past_limits(&class.class, &arguments, growth, within, walk)?;
         if let Some(recorded) = self.instantiation_arguments(&arguments) {
@@ -518,21 +617,36 @@ impl TypeChecker {
 
     /// The instances of `class` that led to the one at `arguments`, which a
     /// body on `builder` builds, as lowering names the chain of an instance
-    /// it builds: through the slots read on the way when the class fills a
-    /// vtable, else through the calls made on the way.
+    /// it builds: through the slots read on the way when the body constructs
+    /// it (`is_constructed`) and the class fills a vtable, as lowering builds
+    /// that vtable there, else through the calls made on the way. A
+    /// collection a body holds, `List<T>()` inside `fn f<T>`, grows by the
+    /// calls that hold it.
     fn growth_of(
         &self,
         class: &str,
-        arguments: &[Type],
+        (arguments, is_constructed): (&[Type], bool),
         builder: &Lineage,
         context: &Context,
     ) -> GrowthChain {
-        if class_needs_vtable(class, self.type_definitions()) {
+        if is_constructed && class_needs_vtable(class, self.type_definitions()) {
             self.growth_through_slots(class, builder, context)
         } else {
             self.growth_through_calls(class, arguments, builder, context)
         }
     }
+}
+
+/// The parameters of the body being checked that `arguments` spell: its
+/// own type parameters, and a trait's `Self`, which a trait default spells
+/// for the class each copy of it is compiled for ([`SELF_PIN`]).
+fn body_parameters_spelled(arguments: &[Type], context: &Context) -> Vec<String> {
+    let mut parameters = parameters_spelled(arguments.iter(), context);
+    let spells_self = (arguments.iter()).any(|ty| spells_a_type(&ty.kind, &is_trait_self));
+    if spells_self && !parameters.iter().any(|name| name == SELF_PIN) {
+        parameters.push(SELF_PIN.to_string());
+    }
+    parameters
 }
 
 /// Whether `kind` is a parameter left open, or a type that failed to check.
