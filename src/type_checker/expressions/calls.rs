@@ -2735,9 +2735,12 @@ impl TypeChecker {
 
                 if def.generics.is_some() {
                     if let Some(args) = type_args {
-                        if let Some(resolved) = self.resolve_type_arg_tuple(args, context) {
-                            self.record_class_built_in_body(name, &resolved, span, context);
-                            self.record_generic_class_instantiation(name, resolved);
+                        match self.resolve_type_arg_tuple(args, context) {
+                            Some(resolved) => {
+                                self.record_class_built_in_body(name, &resolved, span, context);
+                                self.record_generic_class_instantiation(name, resolved);
+                            }
+                            None => self.record_class_computed_in_body(name, args, span, context),
                         }
                     }
                 }

@@ -157,11 +157,13 @@ pub(crate) fn value_generic_slot(arg: &TypeArgument) -> Option<Type> {
 }
 
 /// `arg` with a value generic it names replaced by the argument `mapping`
-/// binds it to. A name `mapping` binds to a type flows through
-/// `substitute_type` instead, and anything else is kept as written. Used by
-/// `substitute_array` (and any other size-position substitution) so that
-/// `Array<T, Size>` inside a class body lowers to `Array<float, 3>` when the
-/// class is instantiated as `Wrap<float, 3>`.
+/// binds it to, and a value computed from value generics (`Size + 1`) folded
+/// once `mapping` binds each one, as lowering folds it. A name `mapping`
+/// binds to a type flows through `substitute_type` instead, and anything
+/// else is kept as written. Used by `substitute_array` (and any other
+/// size-position substitution) so that `Array<T, Size>` inside a class body
+/// lowers to `Array<float, 3>` when the class is instantiated as
+/// `Wrap<float, 3>`.
 pub(crate) fn substitute_value_generic(
     arg: &TypeArgument,
     mapping: &HashMap<String, Type>,
@@ -169,7 +171,17 @@ pub(crate) fn substitute_value_generic(
     let bound = written_name(arg)
         .and_then(|name| mapping.get(name))
         .and_then(extract_value_generic);
-    bound.unwrap_or(arg).clone()
+    match (bound, &arg.node) {
+        (Some(bound), _) => bound.clone(),
+        (None, TypeArgKind::Value(ValueArg::Binary(..))) => {
+            fold_value_generic_arithmetic(arg, mapping).unwrap_or_else(|| arg.clone())
+        }
+        (
+            None,
+            TypeArgKind::Value(ValueArg::Int(_) | ValueArg::Name(_) | ValueArg::OutOfRange { .. }),
+        )
+        | (None, TypeArgKind::Type(..)) => arg.clone(),
+    }
 }
 
 /// A value argument computed from value parameters — the `Size + 1` in
@@ -297,7 +309,7 @@ pub(crate) fn bound_value_names<'e>(
 }
 
 /// The names `value` is written with, in order.
-fn collect_value_names<'e>(value: &'e ValueArg, names: &mut Vec<&'e str>) {
+pub(crate) fn collect_value_names<'e>(value: &'e ValueArg, names: &mut Vec<&'e str>) {
     match value {
         ValueArg::Int(_) | ValueArg::OutOfRange { .. } => {}
         ValueArg::Name(name) => names.push(name),

@@ -39,6 +39,39 @@ fn main()
     );
 }
 
+/// The grown instance is the one at the folded size: read through the trait,
+/// `Buf<String, 1>.grow` answers `Size` as `1 + K`, carries its counted
+/// payload over, and the instance it grew from still answers its own size.
+#[test]
+fn test_a_value_argument_computed_with_a_const_answers_its_folded_size() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+const K = 3
+
+trait Op<T>
+    fn get() T
+    fn size() int
+
+class Buf<T, Size> implements Op<T>
+    v T
+    fn get() T
+        return self.v
+    fn size() int
+        return Size
+    fn grow() Op<T>
+        return Buf<T, Size + K>(v: self.v)
+
+fn main()
+    let b = Buf<String, 1>(v: "a" + "b")
+    let g = b.grow()
+    println(f"{g.get()} {g.size()} {b.size()}")
+"#,
+        "ab 4 1",
+    );
+}
+
 /// A method growing its class's value argument by a `const` on every static
 /// call needs a new instantiation per call, and is refused as polymorphic
 /// recursion rather than compiled through the shared body.

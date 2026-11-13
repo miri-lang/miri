@@ -13,7 +13,10 @@
 //! bodies the program reaches are followed: from each site pinning a body
 //! at concrete types, through each site a reached body writes, its pins
 //! restated at the types that body is reached at. Every class a reached
-//! body builds is recorded at those types.
+//! body builds is recorded at those types. A value argument computed from
+//! the body's value parameters, the `Size + 1` in `Buf<T, Size + 1>`,
+//! spells those parameters, and is folded where the body is reached as
+//! lowering folds it.
 //!
 //! So `f(Handle(1))` records `Box<Handle>` before ownership is decided: a
 //! trait or a base class above it ([`super::resource_types`]) and each copy
@@ -77,8 +80,9 @@ mod limits;
 mod roots;
 
 use super::compiled_instances::CompiledInstance;
-use super::context::{class_needs_vtable, Context};
-use super::instantiation_limits::deepest_argument_depth;
+use super::context::{class_needs_vtable, Context, TypeDefinition};
+use super::generics::{collect_value_names, value_generic_marker_type};
+use super::instantiation_limits::{deepest_argument_depth, instantiation_argument};
 use super::instantiation_requirements::{
     parameters_spelled, spells_a_type, GenericBodyId, Pin, PinningSite, SlotRead, SELF_PIN,
 };
@@ -86,9 +90,11 @@ use super::used_methods::reads_converted_slot;
 use super::utils::add_instantiation;
 use super::TypeChecker;
 use crate::ast::expression::Expression;
+use crate::ast::type_arguments::{TypeArgKind, TypeArgument, ValueArg};
 use crate::ast::types::{is_trait_self, Type, TypeKind};
 use crate::error::syntax::Span;
 use limits::{GrowthChain, Refused};
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::rc::Rc;
@@ -252,6 +258,28 @@ impl TypeChecker {
         context: &Context,
     ) {
         let named = (class, arguments, Naming::Constructed);
+        self.record_class_named_in_body(named, span, context);
+    }
+
+    /// Record that the body being checked builds the generic class `class`
+    /// at the written `arguments`, at `span`, when one is a value computed
+    /// from that body's value parameters (`Size + 1`): such an argument names
+    /// an instance only at each type the body is reached at.
+    pub(crate) fn record_class_computed_in_body(
+        &mut self,
+        class: &str,
+        arguments: &[TypeArgument],
+        span: Span,
+        context: &Context,
+    ) {
+        let Some(arguments) = arguments
+            .iter()
+            .map(body_argument)
+            .collect::<Option<Vec<_>>>()
+        else {
+            return;
+        };
+        let named = (class, arguments.as_slice(), Naming::Constructed);
         self.record_class_named_in_body(named, span, context);
     }
 
@@ -638,15 +666,63 @@ impl TypeChecker {
 }
 
 /// The parameters of the body being checked that `arguments` spell: its
-/// own type parameters, and a trait's `Self`, which a trait default spells
-/// for the class each copy of it is compiled for ([`SELF_PIN`]).
+/// own type parameters, the value parameters a value computed from them
+/// names (the `Size` in `Buf<T, Size + 1>`), and a trait's `Self`, which a
+/// trait default spells for the class each copy of it is compiled for
+/// ([`SELF_PIN`]).
 fn body_parameters_spelled(arguments: &[Type], context: &Context) -> Vec<String> {
     let mut parameters = parameters_spelled(arguments.iter(), context);
+    for name in value_parameters_spelled(arguments, context) {
+        if !parameters.contains(&name) {
+            parameters.push(name);
+        }
+    }
     let spells_self = (arguments.iter()).any(|ty| spells_a_type(&ty.kind, &is_trait_self));
     if spells_self && !parameters.iter().any(|name| name == SELF_PIN) {
         parameters.push(SELF_PIN.to_string());
     }
     parameters
+}
+
+/// The value parameters in scope that a value argument `arguments` spell at
+/// any depth names, in the order they are first named.
+fn value_parameters_spelled(arguments: &[Type], context: &Context) -> Vec<String> {
+    let named = RefCell::new(Vec::<String>::new());
+    for ty in arguments {
+        spells_a_type(&ty.kind, &|kind| {
+            let TypeKind::Custom(_, Some(class_arguments)) = kind else {
+                return false;
+            };
+            let mut names = Vec::new();
+            for argument in class_arguments {
+                if let TypeArgKind::Value(value) = &argument.node {
+                    collect_value_names(value, &mut names);
+                }
+            }
+            let mut named = named.borrow_mut();
+            for name in names {
+                let is_parameter = matches!(
+                    context.resolve_type_definition(name),
+                    Some(TypeDefinition::Generic(_))
+                );
+                if is_parameter && !named.iter().any(|known| known == name) {
+                    named.push(name.to_string());
+                }
+            }
+            false
+        });
+    }
+    named.into_inner()
+}
+
+/// A generic argument as a body naming a class at it spells it: as an
+/// instantiation lists it ([`instantiation_argument`]), or a value computed
+/// from the body's value parameters (`Size + 1`), which each type the body
+/// is reached at folds. `None` for any other value.
+pub(super) fn body_argument(argument: &TypeArgument) -> Option<Type> {
+    let is_computed = matches!(&argument.node, TypeArgKind::Value(ValueArg::Binary(..)));
+    instantiation_argument(argument)
+        .or_else(|| is_computed.then(|| value_generic_marker_type(argument.clone())))
 }
 
 /// Whether `kind` is a parameter left open, or a type that failed to check.

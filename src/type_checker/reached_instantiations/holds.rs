@@ -11,9 +11,12 @@
 //! names; one spelling the body's own parameters names an instance at each
 //! type the body is reached at, so it is recorded as a class that body
 //! builds, held by an expression or bound by a declared binding
-//! ([`super::Naming`]), where a refusal of it is placed.
+//! ([`super::Naming`]), where a refusal of it is placed. A value argument
+//! computed from the body's value parameters, `Buf<T, Size + 1>`, is one
+//! such spelling: each type the body is reached at folds it.
 
-use super::Naming;
+use super::{body_argument, Naming};
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
@@ -24,6 +27,10 @@ use std::collections::{HashMap, HashSet};
 
 /// A generic class at the arguments a held type spells it at.
 type HeldClass = (String, Vec<Type>);
+
+/// How a held type's generic argument is read as an instance's argument;
+/// `None` when it names no argument an instance can be listed at.
+type ArgumentReader = fn(&TypeArgument) -> Option<Type>;
 
 impl TypeChecker {
     /// Record each generic class instance `ty`, the type an expression the
@@ -57,7 +64,8 @@ impl TypeChecker {
             return;
         }
         let mut held = Vec::new();
-        collect_held_classes(self.type_definitions(), &ty.kind, 0, &mut held);
+        let reader = (self.type_definitions(), body_argument as ArgumentReader);
+        collect_held_classes(reader, &ty.kind, 0, &mut held);
         for (class, arguments) in held {
             self.record_class_named_in_body((&class, &arguments, naming), span, context);
         }
@@ -70,8 +78,9 @@ impl TypeChecker {
     pub(super) fn record_held_instances(&mut self) {
         let definitions = self.type_definitions();
         let mut held = Vec::new();
+        let reader = (definitions, instantiation_argument as ArgumentReader);
         for ty in self.type_table.types.values() {
-            collect_held_classes(definitions, &ty.kind, 0, &mut held);
+            collect_held_classes(reader, &ty.kind, 0, &mut held);
         }
         let mut seen = HashSet::new();
         held.retain(|(class, arguments)| {
@@ -93,9 +102,10 @@ impl TypeChecker {
 
 /// Append every generic class or struct instance `kind` spells, each nested
 /// one before the one holding it, down to [`MAX_INSTANCE_TYPE_DEPTH`] levels,
-/// as lowering lists the instances a type it compiles holds.
+/// as lowering lists the instances a type it compiles holds, each argument
+/// read by `read`.
 fn collect_held_classes(
-    definitions: &HashMap<String, TypeDefinition>,
+    (definitions, read): (&HashMap<String, TypeDefinition>, ArgumentReader),
     kind: &TypeKind,
     depth: usize,
     out: &mut Vec<HeldClass>,
@@ -118,18 +128,14 @@ fn collect_held_classes(
         )
         | None => return,
     };
-    let Some(arguments) = arguments
-        .iter()
-        .map(instantiation_argument)
-        .collect::<Option<Vec<_>>>()
-    else {
+    let Some(arguments) = arguments.iter().map(read).collect::<Option<Vec<_>>>() else {
         return;
     };
     if declared.is_empty() || arguments.len() != declared.len() {
         return;
     }
     for argument in &arguments {
-        collect_held_classes(definitions, &argument.kind, depth + 1, out);
+        collect_held_classes((definitions, read), &argument.kind, depth + 1, out);
     }
     out.push((name.clone(), arguments));
 }

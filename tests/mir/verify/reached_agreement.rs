@@ -385,3 +385,36 @@ fn main()
         "no instance around `Box<L>` is reported: {gaps:?}"
     );
 }
+
+/// A method of a value-generic class builds the class at a value argument
+/// computed from its own value parameter, `Size + K`, and hands it out
+/// behind a trait: `Buf<float, 1>.grow` builds `Buf<float, 2>`, whose vtable
+/// `g.get()` reads, so `Buf<float, 2>` is decided over.
+#[test]
+fn an_instance_at_a_value_argument_computed_from_a_parameter_is_not_reported() {
+    let source = r#"
+use system.io
+
+const K = 1
+
+trait Op<T>
+    fn get() T
+
+class Buf<T, Size> implements Op<T>
+    v T
+    fn get() T
+        return self.v
+    fn grow() Op<T>
+        return Buf<T, Size + K>(v: self.v)
+
+fn main()
+    let b = Buf<float, 1>(v: 2.5)
+    let g = b.grow()
+    println(f"{g.get()} {b.get()}")
+"#;
+    let gaps = gaps_naming(source, "Buf");
+    assert!(
+        gaps.is_empty(),
+        "the instance one size up is not reported: {gaps:?}"
+    );
+}
