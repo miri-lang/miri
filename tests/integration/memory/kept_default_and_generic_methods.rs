@@ -576,6 +576,45 @@ fn main()
     );
 }
 
+/// A copy the program reaches only through an instance a body holds is a
+/// copy the type checker knows too: nothing builds a `Holder<Handle>`, but
+/// the list holds them, and calling `keep` on its elements runs the copy at
+/// `Handle`, which is refused, naming that copy.
+#[test]
+fn a_method_storing_a_type_parameter_twice_is_refused_at_a_copy_only_a_held_instance_reaches() {
+    let program = with_handle(&format!(
+        "use system.collections.list\n{TWICE_HOLDER}\n{}",
+        r#"
+fn main()
+    let holders = List<Holder<Handle>>()
+    for h in holders
+        println(f"{h.keep(Handle(1))}")
+    println("end")
+"#
+    ));
+    assert_compiler_error(&program, "MER_OWN_003");
+    assert_compiler_error(&program, "compiled at `Handle`");
+}
+
+/// The same list holding the holder at a plain type leaves the method
+/// storing its parameter twice accepted.
+#[test]
+fn a_method_storing_a_type_parameter_twice_compiles_at_a_plain_held_instance() {
+    assert_heap_guard_output(
+        &with_handle(&format!(
+            "use system.collections.list\n{TWICE_HOLDER}\n{}",
+            r#"
+fn main()
+    let holders = List<Holder<int>>()
+    for h in holders
+        println(f"{h.keep(5)}")
+    println("end")
+"#
+        )),
+        "end",
+    );
+}
+
 /// A generic function building the copy only at a plain type leaves the
 /// method storing its parameter twice accepted.
 #[test]

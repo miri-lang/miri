@@ -20,6 +20,14 @@
 //! over every instantiation the program builds, whichever body builds it
 //! ([`TypeChecker::ownership_instantiations`]).
 //!
+//! A body holds instances it never builds: a collection literal, a typed
+//! local, a value a call returns ([`holds`]). Each generic class instance
+//! the type of such a value spells is recorded as one the body builds, so
+//! `List<T>` held in `fn f<T>` is recorded at every type `f` is reached at.
+//! The walk also starts at the bodies lowering compiles whether or not a
+//! call reaches them: each trait default a class declaring no parameters
+//! inherits, at the class ([`roots`]).
+//!
 //! A class instance is an instance of every class above it, at the
 //! arguments each `extends` clause restates from the one below ([`bases`]).
 //! So each instance the program builds outside every generic body, each
@@ -60,7 +68,9 @@
 //! followed.
 
 mod bases;
+mod holds;
 mod limits;
+mod roots;
 
 use super::compiled_instances::CompiledInstance;
 use super::context::{class_needs_vtable, Context};
@@ -222,20 +232,23 @@ impl TypeChecker {
         context: &Context,
     ) {
         let built = std::mem::take(&mut self.classes_built_in_bodies);
-        let refusal = self.walk_reached_bodies(sites, &built, context).err();
+        let rooted = self.default_copy_sites(context);
+        let refusal = (self.walk_reached_bodies((sites, &rooted), &built, context)).err();
         self.classes_built_in_bodies = built;
         self.record_rooted_bases();
+        self.record_held_instances();
         self.resource_types.take();
         if let Some(refusal) = refusal {
             self.diagnostics.push_error(*refusal);
         }
     }
 
-    /// Follow every body `sites` reach, deepest first, recording what each
+    /// Follow every body `sites` and the bodies lowering compiles unasked
+    /// (`rooted`, [`roots`]) reach, deepest first, recording what each
     /// builds; the refusal of the first instance past a bound, if any.
     fn walk_reached_bodies(
         &mut self,
-        sites: &[PinningSite],
+        (sites, rooted): (&[PinningSite], &[PinningSite]),
         built: &BuiltInBodies,
         context: &Context,
     ) -> Result<(), Refused> {
@@ -246,10 +259,8 @@ impl TypeChecker {
             }
         }
         let mut walk = ReachWalk::default();
-        for site in sites
-            .iter()
-            .filter(|site| site.caller_parameters.is_empty())
-        {
+        let roots = (sites.iter()).filter(|site| site.caller_parameters.is_empty());
+        for site in roots.chain(rooted) {
             self.reach_site(site, &None, context, &mut walk)?;
         }
         let mut seen = HashSet::new();

@@ -109,9 +109,7 @@ fn an_instance_around_a_large_type_is_not_reported() {
 }
 
 /// A box built around a handle in a generic function is an instance both the
-/// type checker and lowering reach, so the program is reported for nothing
-/// beyond what a program declaring nothing is: the library instances lowering
-/// compiles for bodies codegen names outside any call.
+/// type checker and lowering reach, so the program is reported for nothing.
 #[test]
 fn instances_both_walks_reach_are_not_reported() {
     let result = lowered(&keeping("Handle(1)", 1));
@@ -119,8 +117,8 @@ fn instances_both_walks_reach_are_not_reported() {
         (result.reached_instances.iter()).any(|instance| instance.class == "Box"),
         "lowering records the box it compiled"
     );
-    let baseline = gaps_in(&lowered("fn main()\n    let _x = 1\n"));
-    assert_eq!(gaps_in(&result), baseline);
+    let gaps = gaps_in(&result);
+    assert!(gaps.is_empty(), "nothing is reported: {gaps:?}");
 }
 
 /// Removing an instance from the decided set makes the rule report it: the
@@ -231,4 +229,104 @@ fn a_base_a_class_without_parameters_extends_is_not_reported() {
         "the base the clause writes is decided over: {:?}",
         decided_instances_of(&result, "Mid")
     );
+}
+
+/// What the rule reports for `source` about instances of `class`.
+fn gaps_naming(source: &str, class: &str) -> Vec<AgreementGap> {
+    let result = lowered(source);
+    (gaps_in(&result).into_iter())
+        .filter(|gap| gap.class == class)
+        .collect()
+}
+
+/// A class declaring no parameters is compiled with every trait default its
+/// `implements` clauses supply, called or not: `Digits` runs the `Indexed`
+/// default `iterator`, which builds `IndexIterator<int, Digits>`, so that
+/// instance is decided over though nothing calls `iterator`.
+#[test]
+fn an_instance_a_default_of_a_class_without_parameters_builds_is_not_reported() {
+    let source = r#"
+use system.ops
+
+class Digits implements Indexed<int>
+    fn length() int
+        return 3
+    fn element_at(index int) int
+        return index
+
+fn main()
+    let d = Digits()
+    println(f"{d.length()}")
+"#;
+    let gaps = gaps_naming(source, "IndexIterator");
+    assert!(
+        gaps.is_empty(),
+        "no iterator instance is reported: {gaps:?}"
+    );
+}
+
+/// A program declaring nothing is reported for nothing: the library bodies
+/// lowering compiles for every program, the trait defaults of the library's
+/// own classes and the methods of the classes declaring no parameters, are
+/// followed like the program's.
+#[test]
+fn a_program_declaring_nothing_is_not_reported() {
+    let gaps = gaps_in(&lowered("fn main()\n    let _x = 1\n"));
+    assert!(gaps.is_empty(), "nothing is reported: {gaps:?}");
+}
+
+/// An array literal holds an array instance no construction names, and
+/// lowering compiles that instance's `equals`: it is decided over.
+#[test]
+fn an_array_literal_is_not_reported() {
+    let source = "fn main()\n    let a = [1, 2, 3]\n    println(f\"{a[0]}\")\n";
+    let gaps = gaps_naming(source, "Array");
+    assert!(gaps.is_empty(), "the array is not reported: {gaps:?}");
+}
+
+/// A map literal holds a map instance no construction names: it is decided
+/// over.
+#[test]
+fn a_map_literal_is_not_reported() {
+    let source = "fn main()\n    let m = {\"a\": 1}\n    println(f\"{m.length()}\")\n";
+    let gaps = gaps_naming(source, "Map");
+    assert!(gaps.is_empty(), "the map is not reported: {gaps:?}");
+}
+
+/// A method of a class declaring no parameters holds the list `split`
+/// returns: it is decided over, though the method builds no list itself.
+#[test]
+fn a_list_a_call_returns_in_a_class_without_parameters_is_not_reported() {
+    let source = r#"
+class Words
+    public var text String
+    fn init(text String)
+        self.text = text
+    fn count() int
+        return self.text.split(" ").length()
+
+fn main()
+    let w = Words("a b")
+    println(f"{w.count()}")
+"#;
+    let gaps = gaps_naming(source, "List");
+    assert!(gaps.is_empty(), "the list is not reported: {gaps:?}");
+}
+
+/// A generic function holding a `List<T>` in a typed local holds a list at
+/// each type it is reached at: `List<int>` and `List<bool>` are decided over.
+#[test]
+fn a_list_a_generic_function_holds_is_not_reported() {
+    let source = r#"
+use system.collections.list
+
+fn hold<T>(x T) int
+    let items List<T> = List<T>()
+    return items.length()
+
+fn main()
+    println(f"{hold(1)} {hold(true)}")
+"#;
+    let gaps = gaps_naming(source, "List");
+    assert!(gaps.is_empty(), "no list is reported: {gaps:?}");
 }

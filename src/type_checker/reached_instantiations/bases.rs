@@ -64,7 +64,17 @@ impl TypeChecker {
         Ok(())
     }
 
-    /// Record the base instance `base` at `arguments`.
+    /// Record `class` at `arguments`, which no recursion leads to, with the
+    /// instances above it.
+    pub(super) fn record_with_bases(&mut self, class: &str, arguments: Vec<Type>) {
+        let above = self.bases_above(class, &arguments);
+        self.record_reached_base(class, arguments);
+        for (base, base_arguments) in above {
+            self.record_reached_base(&base, base_arguments);
+        }
+    }
+
+    /// Record the instance `base` at `arguments`.
     fn record_reached_base(&mut self, base: &str, arguments: Vec<Type>) {
         if let Some(arguments) = self.instantiation_arguments(&arguments) {
             add_instantiation(&mut self.reached_class_instantiations, base, arguments);
