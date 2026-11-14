@@ -38,6 +38,7 @@ pub mod multiple_errors;
 pub mod mutability;
 pub mod option;
 pub mod rawptr;
+pub mod reached_program;
 pub mod result;
 pub mod runtime_effects;
 pub mod runtime_function;

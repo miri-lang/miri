@@ -48,6 +48,7 @@ mod compiled_instances;
 mod derived_conformance;
 pub mod element_layout;
 pub use compiled_instances::CompiledInstance;
+pub use reached_instantiations::{CopyOwner, ReachedCopy, ReachedProgram};
 pub mod context;
 pub(crate) mod diagnostics;
 pub mod escape_analysis;
@@ -270,6 +271,10 @@ pub struct TypeChecker {
     /// `generic_class_instantiations` and lowering never reads; see
     /// [`reached_instantiations`].
     pub(crate) reached_class_instantiations: utils::Instantiations,
+    /// Every generic body the program reaches, at each set of types it is
+    /// reached at, and whether each slot body a reached call reads is
+    /// compiled; see [`Self::reached_program`].
+    pub(crate) reached_bodies: reached_instantiations::ReachedBodies,
     /// Expression ids of integer literals that appear directly under a unary
     /// negation. `i64::MIN` can only be written as `-9223372036854775808`, whose
     /// bare operand (2^63) is one past `i64::MAX`; that magnitude is in range
@@ -421,6 +426,7 @@ impl TypeChecker {
             generic_class_instantiations: HashMap::new(),
             classes_built_in_bodies: HashMap::new(),
             reached_class_instantiations: HashMap::new(),
+            reached_bodies: reached_instantiations::ReachedBodies::default(),
             negated_int_literals: HashSet::new(),
             deferred_int_literal_ranges: Vec::new(),
             deferred_gpu_int_literal_ranges: Vec::new(),
@@ -753,13 +759,26 @@ impl TypeChecker {
     }
 
     /// The generic class instantiations every ownership decision read
-    /// whether a type is a resource over: those the program's bodies build,
-    /// a generic body's at each type the program reaches it at
-    /// ([`reached_instantiations`]). Lowering adds instantiations it derives
-    /// to [`Self::generic_class_instantiations`] afterwards, so a check
-    /// rebuilding those answers reads this set to agree with them.
+    /// whether a type is a resource over: the instances of the reached
+    /// program ([`Self::reached_program`]). Lowering adds instantiations it
+    /// derives to [`Self::generic_class_instantiations`] afterwards, so a
+    /// check rebuilding those answers reads this set to agree with them.
     pub fn ownership_instantiations(&self) -> &utils::Instantiations {
-        &self.decided_resource_types().0
+        self.reached_program().instances()
+    }
+
+    /// What the program reaches, as the type checker decided it once the
+    /// bodies were checked: the instances ownership is decided over, those
+    /// the program's bodies build, a generic body's at each type the program
+    /// reaches it at; every generic body at each set of types it is reached
+    /// at; and whether each slot body a reached call reads is compiled
+    /// ([`reached_instantiations`]).
+    pub fn reached_program(&self) -> ReachedProgram<'_> {
+        ReachedProgram::new(
+            &self.decided_resource_types().0,
+            &self.reached_bodies,
+            self.type_definitions(),
+        )
     }
 
     fn decided_resource_types(&self) -> &(utils::Instantiations, utils::ResourceTypes) {

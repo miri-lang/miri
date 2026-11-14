@@ -48,13 +48,18 @@
 //! reaches reads no slot. So a conversion `Impl<T>` to `Maker<T>` inside a
 //! generic function reached at `Handle`, beside calls through `Maker<int>`
 //! alone, records nothing `Impl<Handle>.make` would build.
+//!
+//! What the walk decides is kept for the stages after checking
+//! ([`program`], [`TypeChecker::reached_program`]): the instances, each
+//! reached body at every set of types it is reached at under the owner its
+//! copy is compiled for, with the bodies that led to it, and whether the
+//! body of a slot a call through a trait reads is compiled at an instance.
 // TODO: two functions still answer which instantiations a program builds,
-// this record and lowering's own worklist, which finds every instance it
-// compiles from the bodies it lowers and never reads this one. They still
-// disagree where a call's receiver is not a bare local: lowering reads it
-// as reaching every instance, so it compiles slot bodies this record does
-// not follow, while this record reads it at the type of the place holding
-// it. Lowering should read one answer decided here.
+// this record and lowering's own worklist, which finds every instance and
+// copy it compiles from the bodies it lowers and never reads this one.
+// Lowering should seed its worklist from `reached_program` and keep its own
+// discovery only as a check that the two agree; until then the record's
+// copies and verdicts are read by no stage but the agreement census.
 //!
 //! A body calling itself at a type built around its own parameter reaches a
 //! larger type on every step, and one doing so at two types reaches twice as
@@ -77,7 +82,11 @@
 mod bases;
 mod holds;
 mod limits;
+mod program;
 mod roots;
+
+pub(crate) use program::ReachedBodies;
+pub use program::{CopyOwner, ReachedCopy, ReachedProgram};
 
 use super::compiled_instances::CompiledInstance;
 use super::context::{class_needs_vtable, Context};
@@ -341,7 +350,9 @@ impl TypeChecker {
     /// Record every class instantiation a body the program reaches through
     /// `sites` builds, at the types that body is reached at, in
     /// [`TypeChecker::reached_class_instantiations`], refusing the program
-    /// where one passes a bound of [`super::instantiation_limits`].
+    /// where one passes a bound of [`super::instantiation_limits`]. Every
+    /// body reached, at each set of types it is reached at, and every slot
+    /// verdict the walk answered are kept in [`TypeChecker::reached_bodies`].
     /// `context` is the program's global scope, which a slot's obligations
     /// are answered in.
     pub(super) fn record_reached_instantiations(
@@ -351,7 +362,9 @@ impl TypeChecker {
     ) {
         let built = std::mem::take(&mut self.classes_built_in_bodies);
         let rooted = self.default_copy_sites(context);
-        let refusal = (self.walk_reached_bodies((sites, &rooted), &built, context)).err();
+        let mut walk = ReachWalk::over(&built);
+        let refusal = (self.walk_reached_bodies((sites, &rooted), &mut walk, context)).err();
+        self.reached_bodies = self.reached_bodies_of(&walk.reached, walk.verdicts, context);
         self.classes_built_in_bodies = built;
         self.record_rooted_bases();
         self.record_held_instances();
@@ -364,10 +377,10 @@ impl TypeChecker {
     /// Follow every body `sites` and the bodies lowering compiles unasked
     /// (`rooted`, [`roots`]) reach, deepest first, recording what each
     /// builds; the refusal of the first instance past a bound, if any.
-    fn walk_reached_bodies(
+    fn walk_reached_bodies<'s>(
         &mut self,
-        (sites, rooted): (&[PinningSite], &[PinningSite]),
-        built: &BuiltInBodies,
+        (sites, rooted): (&'s [PinningSite], &'s [PinningSite]),
+        walk: &mut ReachWalk<'s>,
         context: &Context,
     ) -> Result<(), Refused> {
         let mut written_in: HashMap<&GenericBodyId, Vec<&PinningSite>> = HashMap::new();
@@ -376,10 +389,9 @@ impl TypeChecker {
                 written_in.entry(caller).or_default().push(site);
             }
         }
-        let mut walk = ReachWalk::over(built);
         let roots = (sites.iter()).filter(|site| site.caller_parameters.is_empty());
         for site in roots.chain(rooted) {
-            self.reach_site(site, &None, context, &mut walk)?;
+            self.reach_site(site, &None, context, walk)?;
         }
         let mut seen = HashSet::new();
         while let Some(Pending { step, .. }) = walk.pending.pop() {
@@ -387,12 +399,12 @@ impl TypeChecker {
                 continue;
             }
             for class in (walk.bodies.get(&step.body).into_iter()).flat_map(|body| &body.built) {
-                self.record_built_at(class, &step, context, &mut walk)?;
+                self.record_built_at(class, &step, context, walk)?;
             }
-            self.resume_waiting_slots(&step, context, &mut walk)?;
+            self.resume_waiting_slots(&step, context, walk)?;
             let writer = Some(Rc::clone(&step));
             for site in written_in.get(&step.body).into_iter().flatten() {
-                self.reach_site(site, &writer, context, &mut walk)?;
+                self.reach_site(site, &writer, context, walk)?;
             }
         }
         Ok(())

@@ -1542,9 +1542,7 @@ impl Pipeline {
         let launches: Vec<_> = (lowered.iter())
             .flat_map(|lowered| lowered.requests.kernel_workgroups.iter().cloned())
             .collect();
-        let mut lowered: Vec<(Symbol, mir::Body)> = (lowered.into_iter())
-            .map(|lowered| (lowered.symbol, lowered.body))
-            .collect();
+        let mut lowered = Self::bodies_by_symbol(result, lowered)?;
         let mut gpu_names =
             mir::gpu_names::GpuNames::collect(&lowered).map_err(CompilerError::Lowering)?;
 
@@ -1651,13 +1649,24 @@ impl Pipeline {
             result.type_checker.ownership_instantiations(),
             &result.reached_instances,
         );
-        let Some(log) = std::env::var_os("MIRI_REACHED_AGREEMENT_LOG") else {
-            return Ok(gaps);
-        };
-        if gaps.is_empty() {
-            return Ok(gaps);
-        }
         let lines: Vec<String> = gaps.iter().map(ToString::to_string).collect();
+        Self::append_agreement_record(result, &lines)?;
+        Ok(gaps)
+    }
+
+    /// Append `lines`, with the program they were found in, to the file
+    /// MIRI_REACHED_AGREEMENT_LOG names; nothing when it is unset or there
+    /// are no lines.
+    fn append_agreement_record(
+        result: &PipelineResult,
+        lines: &[String],
+    ) -> Result<(), CompilerError> {
+        let Some(log) = std::env::var_os("MIRI_REACHED_AGREEMENT_LOG") else {
+            return Ok(());
+        };
+        if lines.is_empty() {
+            return Ok(());
+        }
         let source = result
             .type_checker
             .entry_source
@@ -1668,7 +1677,41 @@ impl Pipeline {
         let record = format!("{}\n--- program\n{source}\n--- end\n", lines.join("\n"));
         let mut file = fs::OpenOptions::new().create(true).append(true).open(log)?;
         std::io::Write::write_all(&mut file, record.as_bytes())?;
-        Ok(gaps)
+        Ok(())
+    }
+
+    /// Each of `lowered` under the symbol it is emitted as, after recording
+    /// the census of where they and the decided program disagree
+    /// ([`Self::record_reached_census`]).
+    fn bodies_by_symbol(
+        result: &PipelineResult,
+        lowered: Vec<LoweredBody>,
+    ) -> Result<Vec<(Symbol, mir::Body)>, CompilerError> {
+        let bodies: Vec<(Symbol, mir::Body)> = (lowered.into_iter())
+            .map(|lowered| (lowered.symbol, lowered.body))
+            .collect();
+        Self::record_reached_census(result, &bodies)?;
+        Ok(bodies)
+    }
+
+    /// Where lowering and the program the type checker decided it reaches
+    /// ([`crate::type_checker::TypeChecker::reached_program`]) disagree, in
+    /// both directions, appended as `census` lines to the file
+    /// MIRI_REACHED_AGREEMENT_LOG names when it is set. It measures how far
+    /// lowering could compile from the decided program alone, and changes
+    /// nothing a build does.
+    fn record_reached_census(
+        result: &PipelineResult,
+        lowered: &[(Symbol, mir::Body)],
+    ) -> Result<(), CompilerError> {
+        if std::env::var_os("MIRI_REACHED_AGREEMENT_LOG").is_none() {
+            return Ok(());
+        }
+        let program = result.type_checker.reached_program();
+        let mut lines = census::copy_lines(&program, lowered);
+        lines.extend(census::class_lines(&program, &result.reached_instances));
+        lines.extend(census::verdict_lines(&program, &result.withheld_methods));
+        Self::append_agreement_record(result, &lines)
     }
 
     /// Refuse a lowered body that still spells `Self`, on every build: it has
@@ -1872,6 +1915,146 @@ fn read_trap_report(path: &std::path::Path) -> Option<DiagnosticCode> {
         return None;
     }
     Some(code)
+}
+
+/// The lines of the census of where lowering and the decided program
+/// disagree. Each names a direction: `compiled-not-reached`, what lowering
+/// compiled that the decided program lacks, or `reached-not-compiled`, what
+/// the decided program lists that lowering never compiled.
+mod census {
+    use crate::ast::types::{Type, TypeKind};
+    use crate::mir;
+    use crate::mir::symbol::{Symbol, TypeInstance};
+    use crate::type_checker::instantiation_limits::instantiation_argument;
+    use crate::type_checker::{CopyOwner, ReachedCopy, ReachedProgram};
+    use std::collections::HashSet;
+
+    /// The symbol lowering compiles `copy` under.
+    fn copy_symbol(copy: &ReachedCopy) -> Symbol {
+        match &copy.owner {
+            CopyOwner::Function(module) => Symbol::function(module, &copy.name, &copy.arguments),
+            CopyOwner::Type { name, arguments } => {
+                Symbol::method(name, arguments, &copy.name, &copy.arguments)
+            }
+        }
+    }
+
+    /// Whether `body`, lowered as `symbol`, is a copy of a generic body:
+    /// a function or a method its substitution bound parameters of.
+    fn is_compiled_copy(symbol: &Symbol, body: &mir::Body) -> bool {
+        (symbol.is_plain_function() || symbol.is_method()) && !body.generics.bound_params.is_empty()
+    }
+
+    /// Every reached copy lowering never compiled, every copy lowering
+    /// compiled that no reached copy names, and every reached body with no
+    /// copy to name.
+    pub(super) fn copy_lines(
+        program: &ReachedProgram,
+        lowered: &[(Symbol, mir::Body)],
+    ) -> Vec<String> {
+        let compiled: HashSet<&Symbol> = lowered.iter().map(|(symbol, _)| symbol).collect();
+        let reached: Vec<(Symbol, &ReachedCopy)> = (program.copies().iter())
+            .map(|copy| (copy_symbol(copy), copy))
+            .collect();
+        let named: HashSet<&Symbol> = reached.iter().map(|(symbol, _)| symbol).collect();
+        let missing = (reached.iter())
+            .filter(|(symbol, _)| !compiled.contains(symbol))
+            .map(|(symbol, copy)| {
+                let through: Vec<String> = (copy.reached_through())
+                    .map(|(owner, name)| format!("{owner}.{name}"))
+                    .collect();
+                format!(
+                    "census copy reached-not-compiled: {symbol} (slot: {}, through: [{}])",
+                    copy.through_slot,
+                    through.join(" <- ")
+                )
+            });
+        let extra = (lowered.iter())
+            .filter(|(symbol, body)| is_compiled_copy(symbol, body) && !named.contains(symbol))
+            .map(|(symbol, _)| format!("census copy compiled-not-reached: {symbol}"));
+        let unowned = (program.unowned().iter())
+            .map(|(owner, name)| format!("census copy unowned: {owner}.{name}"));
+        missing.chain(extra).chain(unowned).collect()
+    }
+
+    /// Every class instance lowering compiled a body for that the decided
+    /// set lacks, whatever it bears on, and every decided instance of a
+    /// class filling a vtable that lowering wrote no vtable for.
+    pub(super) fn class_lines(
+        program: &ReachedProgram,
+        compiled: &[mir::verify::ReachedInstance],
+    ) -> Vec<String> {
+        let decided: HashSet<TypeInstance> = (program.instances().iter())
+            .flat_map(|(class, tuples)| tuples.iter().map(|args| TypeInstance::new(class, args)))
+            .collect();
+        let mut seen = HashSet::new();
+        let extra = (compiled.iter())
+            .filter(|instance| !instance.args.is_empty())
+            .filter(|instance| {
+                let identity = TypeInstance::new(&instance.class, &instance.args);
+                !decided.contains(&identity) && seen.insert(identity)
+            })
+            .map(|instance| {
+                format!(
+                    "census class compiled-not-reached: {} ({})",
+                    spelled(&instance.class, &instance.args),
+                    instance.origin
+                )
+            });
+        let written: HashSet<TypeInstance> = (compiled.iter())
+            .filter(|instance| instance.origin == mir::verify::ReachedOrigin::Vtable)
+            .map(|instance| TypeInstance::new(&instance.class, &instance.args))
+            .collect();
+        let unwritten = (program.vtables())
+            .filter(|(class, args)| !written.contains(&TypeInstance::new(class, *args)))
+            .map(|(class, args)| {
+                format!(
+                    "census vtable reached-not-compiled: {}",
+                    spelled(class, args)
+                )
+            });
+        extra.chain(unwritten).collect()
+    }
+
+    /// Every method lowering withheld at an instance that no slot verdict
+    /// withholds, and every one a verdict withholds that lowering compiled.
+    pub(super) fn verdict_lines(
+        program: &ReachedProgram,
+        withheld: &HashSet<Symbol>,
+    ) -> Vec<String> {
+        let refused: HashSet<Symbol> = (program.slot_verdicts())
+            .filter(|(_, _, _, compiled)| !compiled)
+            .filter_map(|(class, method, at, _)| {
+                let args = instance_arguments(at)?;
+                Some(Symbol::method(class, &args, method, &[]))
+            })
+            .collect();
+        let extra = (withheld.iter())
+            .filter(|symbol| !refused.contains(*symbol))
+            .map(|symbol| format!("census verdict compiled-not-reached: withheld {symbol}"));
+        let missing = (refused.iter())
+            .filter(|symbol| !withheld.contains(*symbol))
+            .map(|symbol| format!("census verdict reached-not-compiled: withheld {symbol}"));
+        let mut lines: Vec<String> = extra.chain(missing).collect();
+        lines.sort();
+        lines
+    }
+
+    /// The arguments of the class instance `kind` is.
+    fn instance_arguments(kind: &TypeKind) -> Option<Vec<Type>> {
+        let TypeKind::Custom(_, arguments) = kind else {
+            return None;
+        };
+        (arguments.iter().flatten())
+            .map(instantiation_argument)
+            .collect()
+    }
+
+    /// `class<args>` as the program spells it.
+    fn spelled(class: &str, args: &[Type]) -> String {
+        let args: Vec<String> = args.iter().map(|arg| arg.kind.to_string()).collect();
+        format!("{class}<{}>", args.join(", "))
+    }
 }
 
 #[cfg(test)]
