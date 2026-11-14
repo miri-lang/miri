@@ -556,10 +556,6 @@ impl<T> Reported<T> {
     }
 }
 
-/// The prefix of each line reporting an instance lowering compiled a body for
-/// that ownership was not decided over.
-pub const REACHED_AGREEMENT_WARNING: &str = "warning: reached instance outside the ownership set:";
-
 /// The result of running the frontend pipeline (parsing + type checking).
 #[derive(Debug)]
 pub struct PipelineResult {
@@ -1611,8 +1607,8 @@ impl Pipeline {
                 program_violations,
             )?;
             report.add_slot_violations(mir::verify::verify_vtable_slots(&result.vtable_fills));
+            report.add_agreement_gaps(Self::reached_disagreements(result)?);
             Self::fail_or_warn(&report, &mode)?;
-            Self::warn_reached_disagreements(result, &mode)?;
         }
 
         Ok((bodies, facts))
@@ -1642,32 +1638,26 @@ impl Pipeline {
         found
     }
 
-    /// Report each instance lowering compiled a body for that ownership was not
-    /// decided over ([`mir::verify::verify_reached_agreement`]). The findings
-    /// never fail the build: they are printed under `warn` mode, and appended,
-    /// with the program they were found in, to the file
-    /// MIRI_REACHED_AGREEMENT_LOG names when it is set.
-    fn warn_reached_disagreements(
+    /// Each instance lowering compiled a body for that ownership was not
+    /// decided over ([`mir::verify::verify_reached_agreement`]), for the
+    /// verifier report. The findings are also appended, with the program they
+    /// were found in, to the file MIRI_REACHED_AGREEMENT_LOG names when it is
+    /// set.
+    fn reached_disagreements(
         result: &PipelineResult,
-        mode: &str,
-    ) -> Result<(), CompilerError> {
+    ) -> Result<Vec<mir::verify::AgreementGap>, CompilerError> {
         let gaps = mir::verify::verify_reached_agreement(
             result.type_checker.type_definitions(),
             result.type_checker.ownership_instantiations(),
             &result.reached_instances,
         );
-        if gaps.is_empty() {
-            return Ok(());
-        }
-        let lines: Vec<String> = (gaps.iter())
-            .map(|gap| format!("{REACHED_AGREEMENT_WARNING} {gap}"))
-            .collect();
-        if mode == "warn" {
-            eprintln!("{}", lines.join("\n"));
-        }
         let Some(log) = std::env::var_os("MIRI_REACHED_AGREEMENT_LOG") else {
-            return Ok(());
+            return Ok(gaps);
         };
+        if gaps.is_empty() {
+            return Ok(gaps);
+        }
+        let lines: Vec<String> = gaps.iter().map(ToString::to_string).collect();
         let source = result
             .type_checker
             .entry_source
@@ -1678,7 +1668,7 @@ impl Pipeline {
         let record = format!("{}\n--- program\n{source}\n--- end\n", lines.join("\n"));
         let mut file = fs::OpenOptions::new().create(true).append(true).open(log)?;
         std::io::Write::write_all(&mut file, record.as_bytes())?;
-        Ok(())
+        Ok(gaps)
     }
 
     /// Refuse a lowered body that still spells `Self`, on every build: it has

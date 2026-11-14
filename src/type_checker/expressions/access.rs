@@ -63,6 +63,7 @@ use crate::type_checker::expressions::identifiers::declares_type_parameters;
 use crate::type_checker::generics::value_generic_marker_type;
 use crate::type_checker::instantiation_requirements::pins_of;
 use crate::type_checker::member_hints::{self, MemberCandidate};
+use crate::type_checker::reached_instantiations::Naming;
 use crate::type_checker::statements::declarations::generic_method_rules::DEVICE_GENERIC_METHOD_HELP;
 use crate::type_checker::type_mismatch::TypeSides;
 use crate::type_checker::utils::{tuple_class_arguments, uniform_element_type};
@@ -1377,7 +1378,7 @@ impl TypeChecker {
                 Some(vec![*elem.clone(), *size.clone()]),
             ),
             TypeKind::Tuple(element_type_exprs) => {
-                self.extract_tuple_member_type(element_type_exprs, context)
+                self.extract_tuple_member_type(element_type_exprs, span, context)
             }
             TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
             TypeKind::Result(ok, err) => (
@@ -1405,10 +1406,12 @@ impl TypeChecker {
         }
     }
 
-    /// Extracts member type info from a tuple type.
+    /// Extracts member type info from a tuple type whose member is read at
+    /// `span`.
     fn extract_tuple_member_type(
         &mut self,
         element_type_exprs: &[TypeArgument],
+        span: Span,
         context: &mut Context,
     ) -> (Option<String>, Option<Vec<TypeArgument>>) {
         if element_type_exprs.is_empty() {
@@ -1428,14 +1431,15 @@ impl TypeChecker {
         );
         // The tuple class's methods are compiled per element type and length
         // like any generic class's, so the instantiation a call reaches is
-        // recorded.
-        self.record_generic_class_instantiation(
-            TUPLE_TYPE_NAME,
-            vec![
-                first_type.clone(),
-                value_generic_marker_type(length.clone()),
-            ],
-        );
+        // recorded. A tuple's type does not spell its class, so one whose
+        // element is a parameter of the body reading it is recorded for that
+        // body, to be reached at each type the body is.
+        let instance = [
+            first_type.clone(),
+            value_generic_marker_type(length.clone()),
+        ];
+        self.record_class_named_in_body((TUPLE_TYPE_NAME, &instance, Naming::Held), span, context);
+        self.record_generic_class_instantiation(TUPLE_TYPE_NAME, instance.to_vec());
         (
             Some(TUPLE_TYPE_NAME.to_string()),
             Some(vec![element, length]),

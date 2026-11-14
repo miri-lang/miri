@@ -5,7 +5,7 @@
 //! body for, and that runs a drop hook, holds one or takes part in virtual
 //! dispatch, is one the type checker decided ownership over.
 
-use miri::mir::verify::{verify_reached_agreement, AgreementGap};
+use miri::mir::verify::{verify_reached_agreement, AgreementGap, ProgramReport};
 use miri::pipeline::{Pipeline, PipelineResult};
 
 /// A handle with a drop hook, a trait implemented by a generic box, and a
@@ -475,4 +475,117 @@ fn main()
 "#;
     let gaps = gaps_naming(source, "Map");
     assert!(gaps.is_empty(), "no map is reported: {gaps:?}");
+}
+
+/// The rule's findings join the verifier report the build fails with under
+/// verification: removing the box from the decided set, as a type checker
+/// deciding over too small a set would, makes the report name the instance
+/// with the rule's message, and the set the type checker decided leaves the
+/// report empty.
+#[test]
+fn a_gap_fails_the_verification_report_and_a_matching_set_leaves_it_empty() {
+    let result = lowered(&keeping("Handle(1)", 1));
+    let mut decided = result.type_checker.ownership_instantiations().clone();
+    assert!(
+        decided.remove("Box").is_some(),
+        "the type checker decided ownership over the box"
+    );
+    let mut report = ProgramReport::default();
+    report.add_agreement_gaps(verify_reached_agreement(
+        result.type_checker.type_definitions(),
+        &decided,
+        &result.reached_instances,
+    ));
+    let message = report.message().expect("the gap fails the report");
+    assert!(
+        message.contains(
+            "reached instance outside the ownership set: `Box<Handle>` (a resource) is \
+             compiled for its vtable but is not among the instantiations ownership was \
+             decided over"
+        ),
+        "the report names the box with the rule's message: {message}"
+    );
+    let mut matching = ProgramReport::default();
+    matching.add_agreement_gaps(gaps_in(&result));
+    assert_eq!(
+        matching.message(),
+        None,
+        "the decided set leaves the report empty"
+    );
+}
+
+/// A method called on a tuple whose element is a parameter of the body
+/// calling it reaches the tuple class at each type the body is reached at:
+/// `pair_length` reached at `bool` calls `length` of `Tuple<bool, 2>`, so that
+/// instance is decided over.
+#[test]
+fn a_tuple_method_called_in_a_generic_function_is_not_reported() {
+    let source = r#"
+use system.collections.tuple
+
+fn pair_length<T>(t (T, T)) int
+    return t.length()
+
+fn main()
+    println(f"{pair_length((true, false))}")
+"#;
+    let gaps = gaps_naming(source, "Tuple");
+    assert!(gaps.is_empty(), "no tuple is reported: {gaps:?}");
+}
+
+/// A tuple handed on to another generic function reaches the tuple class at
+/// the type the outer function is reached at: `inner` reached through `outer`
+/// at `bool` calls `length` of `Tuple<bool, 2>`.
+#[test]
+fn a_tuple_method_called_through_a_second_generic_function_is_not_reported() {
+    let source = r#"
+use system.collections.tuple
+
+fn inner<U>(t (U, U)) int
+    return t.length()
+
+fn outer<T>(t (T, T)) int
+    return inner(t)
+
+fn main()
+    println(f"{outer((true, false))}")
+"#;
+    let gaps = gaps_naming(source, "Tuple");
+    assert!(gaps.is_empty(), "no tuple is reported: {gaps:?}");
+}
+
+/// A tuple of a class with a drop hook reaches the tuple class at that class:
+/// `Tuple<Handle, 2>` is decided over, and the program is reported for
+/// nothing.
+#[test]
+fn a_tuple_method_called_on_a_tuple_of_resources_is_not_reported() {
+    let source = format!(
+        "{DECLARATIONS}\nuse system.collections.tuple\n\nfn pair_length<T>(t (T, T)) int\n    return t.length()\n\nfn main()\n    let t = (Handle(1), Handle(2))\n    println(f\"{{pair_length(t)}}\")\n"
+    );
+    let gaps = gaps_in(&lowered(&source));
+    assert!(gaps.is_empty(), "nothing is reported: {gaps:?}");
+}
+
+/// Each method a generic function calls on a tuple of its parameter reaches
+/// the tuple class at the types the function is reached at: `length` of
+/// `Tuple<float, 3>` and `contains` of `Tuple<bool, 2>`.
+#[test]
+fn tuple_methods_called_at_two_shapes_are_not_reported() {
+    let source = r#"
+use system.collections.tuple
+
+fn count<T>(t (T, T, T)) int
+    var n = 0
+    for _i in 0..t.length()
+        n += 1
+    return n
+
+fn has<T>(t (T, T), x T) bool
+    return t.contains(x)
+
+fn main()
+    println(f"{count((1.5, 2.5, 3.5))} {has((true, false), true)}")
+"#;
+    let gaps = gaps_naming(source, "Tuple");
+    assert!(gaps.is_empty(), "no tuple is reported: {gaps:?}");
 }

@@ -47,6 +47,14 @@ impl ProgramReport {
         );
     }
 
+    /// Add a line for each instance lowering compiled a body for that
+    /// ownership was not decided over; an instance belongs to no function,
+    /// so the count of functions the report names is unchanged.
+    pub fn add_agreement_gaps(&mut self, found: Vec<super::AgreementGap>) {
+        self.lines
+            .extend(found.into_iter().map(|gap| format!("  {gap}")));
+    }
+
     /// The report as one message, or `None` when nothing was found.
     pub fn message(&self) -> Option<String> {
         (!self.lines.is_empty()).then(|| {

@@ -18,8 +18,8 @@
 //! identity symbols are mangled from, so two spellings of one instantiation
 //! agree.
 //!
-//! Its findings are warnings: they are reported beside the program's other
-//! findings, never fail a build.
+//! Its findings join the program's verifier report: under `--verify-mir` they
+//! fail the build, and under `warn` they are printed with the rest.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -84,8 +84,8 @@ impl fmt::Display for AgreementGap {
         };
         write!(
             f,
-            "`{}<{}>` ({bearing}) is compiled for {} but is not among the instantiations \
-             ownership was decided over",
+            "reached instance outside the ownership set: `{}<{}>` ({bearing}) is compiled \
+             for {} but is not among the instantiations ownership was decided over",
             self.class,
             args.join(", "),
             self.origin
