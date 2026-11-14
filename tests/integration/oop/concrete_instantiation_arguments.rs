@@ -597,6 +597,49 @@ fn main()
     );
 }
 
+/// A class that names only a value parameter, inside a computed value
+/// argument, is reached at the value its caller binds and never at the
+/// unfolded spelling, so the refusal names the instance past the bound, as
+/// lowering does.
+#[test]
+fn test_a_value_only_class_grown_on_every_call_is_refused_past_the_bound() {
+    assert_build_error(
+        &value_only_growth_program(300),
+        "instantiating `Cnt<257>`: `Cnt` needs more than 256 instantiations of `Size`",
+    );
+}
+
+/// The same chain is refused when the call that grows it recurses only a few
+/// times: the depth is a run-time value, so the chain has no bound.
+#[test]
+fn test_a_value_only_class_grown_a_few_times_is_refused_past_the_bound() {
+    assert_build_error(
+        &value_only_growth_program(3),
+        "instantiating `Cnt<257>`: `Cnt` needs more than 256 instantiations of `Size`",
+    );
+}
+
+/// A program whose class builds itself at `Size + 1` on every call,
+/// recursing `depth` times.
+fn value_only_growth_program(depth: usize) -> String {
+    format!(
+        r#"
+use system.io
+
+class Cnt<Size>
+    v int
+    fn depth(n int) int
+        if n == 0
+            return Size
+        return Cnt<Size + 1>(v: self.v).depth(n - 1)
+
+fn main()
+    let c = Cnt<1>(v: 2)
+    println(f"{{c.depth({depth})}}")
+"#
+    )
+}
+
 /// `Option<Option<…<leaf>…>>` nested `depth` levels deep.
 fn nested_options(depth: usize, leaf: &str) -> String {
     format!("{}{leaf}{}", "Option<".repeat(depth), ">".repeat(depth))

@@ -80,8 +80,8 @@ mod limits;
 mod roots;
 
 use super::compiled_instances::CompiledInstance;
-use super::context::{class_needs_vtable, Context, TypeDefinition};
-use super::generics::{collect_value_names, value_generic_marker_type};
+use super::context::{class_needs_vtable, Context};
+use super::generics::value_generic_marker_type;
 use super::instantiation_limits::{deepest_argument_depth, instantiation_argument};
 use super::instantiation_requirements::{
     parameters_spelled, spells_a_type, GenericBodyId, Pin, PinningSite, SlotRead, SELF_PIN,
@@ -94,7 +94,6 @@ use crate::ast::type_arguments::{TypeArgKind, TypeArgument, ValueArg};
 use crate::ast::types::{is_trait_self, Type, TypeKind};
 use crate::error::syntax::Span;
 use limits::{GrowthChain, Refused};
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::rc::Rc;
@@ -672,47 +671,11 @@ impl TypeChecker {
 /// ([`SELF_PIN`]).
 fn body_parameters_spelled(arguments: &[Type], context: &Context) -> Vec<String> {
     let mut parameters = parameters_spelled(arguments.iter(), context);
-    for name in value_parameters_spelled(arguments, context) {
-        if !parameters.contains(&name) {
-            parameters.push(name);
-        }
-    }
     let spells_self = (arguments.iter()).any(|ty| spells_a_type(&ty.kind, &is_trait_self));
     if spells_self && !parameters.iter().any(|name| name == SELF_PIN) {
         parameters.push(SELF_PIN.to_string());
     }
     parameters
-}
-
-/// The value parameters in scope that a value argument `arguments` spell at
-/// any depth names, in the order they are first named.
-fn value_parameters_spelled(arguments: &[Type], context: &Context) -> Vec<String> {
-    let named = RefCell::new(Vec::<String>::new());
-    for ty in arguments {
-        spells_a_type(&ty.kind, &|kind| {
-            let TypeKind::Custom(_, Some(class_arguments)) = kind else {
-                return false;
-            };
-            let mut names = Vec::new();
-            for argument in class_arguments {
-                if let TypeArgKind::Value(value) = &argument.node {
-                    collect_value_names(value, &mut names);
-                }
-            }
-            let mut named = named.borrow_mut();
-            for name in names {
-                let is_parameter = matches!(
-                    context.resolve_type_definition(name),
-                    Some(TypeDefinition::Generic(_))
-                );
-                if is_parameter && !named.iter().any(|known| known == name) {
-                    named.push(name.to_string());
-                }
-            }
-            false
-        });
-    }
-    named.into_inner()
 }
 
 /// A generic argument as a body naming a class at it spells it: as an

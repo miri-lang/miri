@@ -30,6 +30,7 @@
 
 use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::function_analysis::ModuleId;
+use super::generics::collect_value_names;
 use super::operators::{is_ordering_op, missing_ordering_at_instantiation_message};
 use super::type_mismatch::{MismatchExtras, TypeSides};
 use super::used_methods::{held_value, CallWriter};
@@ -527,16 +528,22 @@ fn generic_parameter_in_scope<'t>(ty: &'t Type, context: &Context) -> Option<&'t
 /// [`generic_parameter_in_scope`] against a bare kind, for the walk over a
 /// type's components, which holds kinds rather than types.
 fn parameter_in_scope<'k>(kind: &'k TypeKind, context: &Context) -> Option<&'k str> {
-    let name = generic_parameter_name(kind)?;
-    let is_parameter = matches!(
+    generic_parameter_name(kind).filter(|name| is_parameter_in_scope(name, context))
+}
+
+/// True when `name` is in scope as a generic parameter rather than as a
+/// declared type.
+fn is_parameter_in_scope(name: &str, context: &Context) -> bool {
+    matches!(
         context.resolve_type_definition(name),
         Some(TypeDefinition::Generic(_))
-    );
-    is_parameter.then_some(name)
+    )
 }
 
 /// The in-scope generic parameters `types` spell, each named once, in the
-/// order they are first spelled.
+/// order they are first spelled: a type parameter spelled as a type, and a
+/// value parameter a value argument names at any depth (the `Size` in
+/// `Buf<T, Size + 1>`).
 pub(super) fn parameters_spelled<'t>(
     types: impl Iterator<Item = &'t Type>,
     context: &Context,
@@ -544,9 +551,11 @@ pub(super) fn parameters_spelled<'t>(
     let spelled = std::cell::RefCell::new(Vec::<String>::new());
     for ty in types {
         spells_a_type(&ty.kind, &|kind| {
-            if let Some(name) = parameter_in_scope(kind, context) {
-                let mut spelled = spelled.borrow_mut();
-                if !spelled.iter().any(|known| known == name) {
+            let mut spelled = spelled.borrow_mut();
+            for name in names_spelled_at(kind) {
+                if is_parameter_in_scope(name, context)
+                    && !spelled.iter().any(|known| known == name)
+                {
                     spelled.push(name.to_string());
                 }
             }
@@ -554,6 +563,21 @@ pub(super) fn parameters_spelled<'t>(
         });
     }
     spelled.into_inner()
+}
+
+/// The names `kind` spells at its own level that may be parameters: the bare
+/// name it is written as, and the names each value argument it takes is
+/// computed from, in order.
+fn names_spelled_at(kind: &TypeKind) -> Vec<&str> {
+    let mut names: Vec<&str> = generic_parameter_name(kind).into_iter().collect();
+    if let TypeKind::Custom(_, Some(arguments)) = kind {
+        for argument in arguments {
+            if let TypeArgKind::Value(value) = &argument.node {
+                collect_value_names(value, &mut names);
+            }
+        }
+    }
+    names
 }
 
 /// The parameter name a bare generic-parameter spelling refers to.
