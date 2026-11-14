@@ -131,7 +131,7 @@ pub(crate) fn record_and_bind_kept_method_parameters(
 /// read through the copy's instantiation, as a call passing it reads it
 /// (`method_dispatch::method_argument_types`).
 fn compiled_operand_type(ctx: &LoweringContext, ty: &Type) -> Type {
-    let instantiated = crate::mir::lowering::apply_generic_sub(ty, &ctx.generic_subs);
+    let instantiated = crate::mir::lowering::apply_generic_sub(ty, &ctx.repeatable_substitution());
     variable::canonical_declared_type(ctx.type_checker, &instantiated)
 }
 

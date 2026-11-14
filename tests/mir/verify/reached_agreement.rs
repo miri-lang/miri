@@ -455,3 +455,24 @@ fn a_trait_call_through_a_field_is_not_reported() {
         "no box around a handle is reported: {gaps:?}"
     );
 }
+
+/// A program class named like a library type parameter is not read as that
+/// parameter: `Map<String, K>` binds the map's `K` to `String` and its `V` to
+/// the program's `K`, and the map's bodies keep that `K` a class, so lowering
+/// compiles no `Map<String, String>`.
+#[test]
+fn a_class_named_like_a_library_parameter_is_not_reported() {
+    let source = r#"
+use system.collections.map
+
+class K
+    var n int
+
+fn main()
+    var m = Map<String, K>()
+    m["a"] = K(n: 3)
+    println(f"{m.length()}")
+"#;
+    let gaps = gaps_naming(source, "Map");
+    assert!(gaps.is_empty(), "no map is reported: {gaps:?}");
+}

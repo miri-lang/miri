@@ -604,13 +604,13 @@ fn lower_instantiation_body(
     ctx.body
         .new_local(LocalDecl::new(ret_ty.clone(), ast_func.span));
 
-    // Lower parameters and record out-param flags. `push_param` reads each
-    // declared type at the instantiation.
+    // Lower parameters and record out-param flags, each declared type read at
+    // the instantiation.
     ctx.body.signature.out_params = params.iter().map(|p| p.is_out).collect();
     for param in params.iter() {
         ctx.push_param(
             param.name.clone(),
-            resolve_declared_annotation(tc, &param.typ),
+            apply_generic_sub(&resolve_declared_annotation(tc, &param.typ), subs),
             param.typ.span,
         );
     }
@@ -973,7 +973,8 @@ fn lower_class_method_body(
         out_params.push(false); // self is never `out`
     }
     for param in params.iter() {
-        let param_ty = read_self_as(&resolve_declared_annotation(tc, &param.typ), &reads_self_as);
+        let written = apply_generic_sub(&resolve_declared_annotation(tc, &param.typ), subs);
+        let param_ty = read_self_as(&written, &reads_self_as);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
         out_params.push(param.is_out);
     }

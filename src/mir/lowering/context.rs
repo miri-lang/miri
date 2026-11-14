@@ -4,7 +4,7 @@
 use super::compilation_ids::{new_shared_compilation_ids, SharedCompilationIds};
 use crate::ast::expression::Expression;
 use crate::ast::type_arguments::TypeArgument;
-use crate::ast::types::Type;
+use crate::ast::types::{Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -15,7 +15,9 @@ use crate::mir::module::Import;
 use crate::mir::place::{Local, Place};
 use crate::mir::symbol::{ClosureKind, InstantiationKey, RuntimeCallee, Symbol};
 use crate::mir::{BasicBlock, BasicBlockData, Body, LocalDecl, Operand, StatementKind, Terminator};
+use crate::type_checker::instantiation_requirements::spells_a_type;
 use crate::type_checker::{CalleeKind, DeclaredFunction};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -898,9 +900,45 @@ impl<'a> LoweringContext<'a> {
     /// and a call passing it is declared with a signature the instantiation's
     /// own declaration contradicts. Outside a monomorphized body the
     /// substitution is empty and `ty` is kept as written.
+    ///
+    /// Most callers hand in a type already read at the instance, so only the
+    /// part of the substitution that reading again cannot change is applied;
+    /// see [`Self::repeatable_substitution`].
+    ///
+    /// TODO: this second substitution exists because some callers still hand
+    /// in a type naming the body's parameters, and nothing in a type tells a
+    /// parameter from a program type of the same name. Once every caller
+    /// substitutes the type where it reads it, this pass and
+    /// `repeatable_substitution` are deleted.
     fn instantiated_local_decl(&self, ty: Type, span: Span) -> LocalDecl {
-        let ty = super::apply_generic_sub(&self.resolve_self_in(&ty), &self.generic_subs);
+        let ty =
+            super::apply_generic_sub(&self.resolve_self_in(&ty), &self.repeatable_substitution());
         LocalDecl::new(ty, span)
+    }
+
+    /// The part of `generic_subs` a type already read at the instance can be
+    /// read through again unchanged: every parameter whose name no argument
+    /// spells bare. `Map<String, K>` binds the map's `K` to `String` and its
+    /// `V` to a program class `K`; reading `V`'s argument again through the
+    /// whole substitution would turn that class into `String`.
+    pub(crate) fn repeatable_substitution(&self) -> Cow<'_, HashMap<String, Type>> {
+        let is_spelled_bare = |name: &str| {
+            self.generic_subs.values().any(|arg| {
+                spells_a_type(
+                    &arg.kind,
+                    &|kind| matches!(kind, TypeKind::Custom(spelled, None) if spelled == name),
+                )
+            })
+        };
+        if !self.generic_subs.keys().any(|name| is_spelled_bare(name)) {
+            return Cow::Borrowed(&self.generic_subs);
+        }
+        Cow::Owned(
+            (self.generic_subs.iter())
+                .filter(|(name, _)| !is_spelled_bare(name))
+                .map(|(name, arg)| (name.clone(), arg.clone()))
+                .collect(),
+        )
     }
 
     /// Returns `true` if `kind` requires reference-count management, as the

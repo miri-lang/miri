@@ -266,3 +266,67 @@ fn main()
         "2 true",
     );
 }
+
+/// A program struct named like the map's key parameter is the map's value
+/// type, not its key type: `Map<String, K>` compares its `K` values field by
+/// field, each at its own width.
+#[test]
+fn a_struct_named_like_the_key_parameter_compares_as_the_value_type() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+struct K
+    a int
+    b float
+
+fn main()
+    var x = Map<String, K>()
+    x["p"] = K(a: 1, b: 2.5)
+    var y = Map<String, K>()
+    y["p"] = K(a: 1, b: 2.5)
+    var z = Map<String, K>()
+    z["p"] = K(a: 1, b: 3.5)
+    println(f"{x == y} {x == z} {x['p'].b}")
+"#,
+        "true false 2.5",
+    );
+}
+
+/// Program classes named like library type parameters, `K` beside a map's
+/// `K` and `T` beside a list's `T`, are held, read and compared as the
+/// program's own classes.
+#[test]
+fn classes_named_like_library_parameters_are_the_programs_classes() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+use system.collections.map
+
+class K implements Equatable
+    var n int
+    public fn equals(other K) bool
+        return self.n == other.n
+
+class T
+    var s String
+
+fn main()
+    var m = Map<String, K>()
+    m["a"] = K(n: 3)
+    var same = Map<String, K>()
+    same["a"] = K(n: 3)
+    var xs = List<T>()
+    xs.push(T(s: "t" + "1"))
+    xs.push(T(s: "t2"))
+    var popped = ""
+    match xs.pop()
+        Some(t): popped = t.s
+        None: popped = "none"
+    match m.get("a")
+        Some(k): println(f"{k.n} {popped} {xs.length()} {m == same}")
+        None: println("none")
+"#,
+        "3 t2 1 true",
+    );
+}
