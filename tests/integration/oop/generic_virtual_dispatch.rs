@@ -233,6 +233,64 @@ fn main()
     );
 }
 
+/// A call through a field reaches the body of the instance the field holds:
+/// fields at `int` and at `String` of one struct, a class nested one field
+/// deeper, a class implementing the trait at one argument only, and a field
+/// whose trait argument is a parameter of a generic holder read in a generic
+/// function, each answer with their own instance's body.
+#[test]
+fn test_a_call_through_a_field_reaches_the_instance_the_field_holds() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+trait Source<T>
+    fn get() T
+
+class Const<T> implements Source<T>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+
+class Doubled implements Source<int>
+    v int
+    fn init(v int)
+        self.v = v
+    fn get() int
+        return self.v * 2
+
+struct Pair
+    a Source<int>
+    b Source<String>
+
+class Outer
+    public var pair Pair
+    fn init(pair Pair)
+        self.pair = pair
+
+class Holder<T>
+    public var s Source<T>
+    fn init(s Source<T>)
+        self.s = s
+
+fn read<T>(h Holder<T>) T
+    return h.s.get()
+
+fn main()
+    let p = Pair(a: Const<int>(3), b: Const<String>("x" + "y"))
+    println(f"{p.a.get()} {p.b.get()}")
+    let o = Outer(Pair(a: Doubled(4), b: Const<String>("z")))
+    println(f"{o.pair.a.get()} {o.pair.b.get()}")
+    let h = Holder<float>(Const<float>(0.5))
+    let d = Holder<int>(Doubled(5))
+    println(f"{read(h)} {read(d)} {h.s.get()}")
+"#,
+        "3 xy\n8 z\n0.5 10 0.5",
+    );
+}
+
 /// Receivers kept in a list and called in a loop reach each element's body.
 #[test]
 fn test_trait_receivers_in_a_list_reach_their_generic_class_bodies() {

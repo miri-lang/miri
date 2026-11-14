@@ -34,6 +34,7 @@ use super::is_monomorphizable_type_argument;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::place_type::PlaceTypes;
 use crate::mir::symbol::token::type_kind_to_mangle_str;
 use crate::mir::symbol::Symbol;
 use crate::mir::visitor::Visitor;
@@ -603,8 +604,9 @@ impl Visitor for DemandCollector<'_> {
 
 /// The dispatch a virtual call reading `slot` through `receiver` makes.
 ///
-/// Only a receiver read straight out of a local has a type to read; any other
-/// is taken to reach every instance.
+/// A receiver read out of a place has the type the place declares, a field's
+/// at its holder's type arguments; one whose type cannot be read is taken to
+/// reach every instance.
 fn dispatch_through(
     receiver: Option<&Operand>,
     slot: usize,
@@ -612,12 +614,10 @@ fn dispatch_through(
     tables: DemandTables,
 ) -> Dispatch {
     let receiver_ty = receiver.and_then(|operand| match operand {
-        Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
-            Some(operand.ty(body))
-        }
-        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => None,
+        Operand::Copy(place) | Operand::Move(place) => PlaceTypes::of(body).declared(place),
+        Operand::Constant(_) | Operand::Function(_) => None,
     });
-    let Some(TypeKind::Custom(name, args)) = receiver_ty.map(|ty| &ty.kind) else {
+    let Some(TypeKind::Custom(name, args)) = receiver_ty.as_ref().map(|ty| &ty.kind) else {
         return Dispatch {
             receiver: None,
             pins: Vec::new(),

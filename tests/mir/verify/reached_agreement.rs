@@ -418,3 +418,40 @@ fn main()
         "the instance one size up is not reported: {gaps:?}"
     );
 }
+
+/// A trait implemented by a generic class whose method builds a `Box` at the
+/// class's argument, and a struct holding the trait at `int`.
+const MAKER_IN_A_FIELD: &str = r#"
+trait Maker<T>
+    fn make() int
+
+class Impl<T> implements Maker<T>
+    public var v T
+    fn init(v T)
+        self.v = v
+    fn make() int
+        let b = Box<T>(self.v)
+        return b.label()
+
+fn as_maker<T>(v T) Maker<T>
+    return Impl<T>(v)
+
+struct MakerHolder
+    m Maker<int>
+"#;
+
+/// A call through a field reads the slot at the field's declared trait
+/// arguments: `holder.m` is a `Maker<int>`, which the `Impl<Handle>` built
+/// for `unused` never stands behind, so lowering compiles no `make` of it and
+/// no `Box<Handle>`, the instance the type checker left out.
+#[test]
+fn a_trait_call_through_a_field_is_not_reported() {
+    let source = format!(
+        "{DECLARATIONS}\n{MAKER_IN_A_FIELD}\nfn main()\n    let unused = as_maker(Handle(7))\n    let holder = MakerHolder(m: as_maker(3))\n    println(f\"{{holder.m.make()}}\")\n"
+    );
+    let gaps = gaps_naming(&source, "Box");
+    assert!(
+        gaps.is_empty(),
+        "no box around a handle is reported: {gaps:?}"
+    );
+}
