@@ -839,6 +839,13 @@ impl TypeChecker {
         self.fn_analysis.function_out_params.get(declared)
     }
 
+    /// Whether a call of `method` on an instance of `owner` takes its
+    /// receiver's place and restores it
+    /// ([`body_writes::ReceiverWrites::replaces_receiver`]).
+    pub fn restores_receiver(&self, owner: &str, method: &str) -> bool {
+        self.receiver_writes.replaces_receiver(owner, method)
+    }
+
     /// Whether `info`, the declaration `written` resolved to, is `@diverges`.
     fn is_declared_diverging(&self, written: &str, info: &SymbolInfo) -> bool {
         !self.fn_analysis.diverging_functions.is_empty()
@@ -959,15 +966,16 @@ impl TypeChecker {
         self.report_deferred_int_literal_ranges();
         self.report_deferred_gpu_int_literal_ranges();
         self.answer_pinning_sites(&context);
-        self.run_pass_escape_summaries(program, &mut context);
-        self.run_pass_kept_parameters(program, &context);
-        self.run_pass_use_after_move(program, &context);
-        self.check_hygiene(program);
         self.receiver_writes = body_writes::ReceiverWrites::of(
             top_level_statements(program).chain(&self.imported_statements),
             |name| self.type_identity_named_by(name).map(str::to_string),
             &self.runtime_effects,
         );
+        self.report_unrestorable_replacements();
+        self.run_pass_escape_summaries(program, &mut context);
+        self.run_pass_kept_parameters(program, &context);
+        self.run_pass_use_after_move(program, &context);
+        self.check_hygiene(program);
         let lost_capture_writes;
         (
             self.parameter_writes,
@@ -1120,6 +1128,7 @@ impl TypeChecker {
             use_after_move::VtableCalls {
                 dispatch: &self.dispatch_table,
                 conventions: &self.slot_conventions,
+                restored: &self.receiver_writes,
             },
             self.resource_types(),
         )
@@ -1179,6 +1188,7 @@ impl TypeChecker {
             thunk_methods::ThunkBodies::of(&self.type_table.global_type_definitions);
         let type_definitions = &self.type_table.global_type_definitions;
         let facts = kept_parameters::KeepFacts {
+            restored: &self.receiver_writes,
             type_definitions,
             resources: self.resource_types(),
             escape_summaries: &context.escape_summaries,

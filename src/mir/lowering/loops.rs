@@ -435,6 +435,8 @@ struct IterableMethods {
 struct PositionalMethod {
     symbol: Symbol,
     kept: Vec<bool>,
+    /// The receiver's type when the body restores its receiver.
+    restored_receiver: Option<Type>,
 }
 
 /// The bodies a `for` loop walking `access` calls, or `None` when the
@@ -485,6 +487,7 @@ fn iterable_method_symbol(
         return PositionalMethod {
             symbol,
             kept: Vec::new(),
+            restored_receiver: None,
         };
     };
     let (symbol, _) = super::method_dispatch::operator_method_callee(
@@ -496,7 +499,13 @@ fn iterable_method_symbol(
     );
     let callee = (owner.as_str(), method_name);
     let kept = super::method_dispatch::operator_call_convention(ctx, receiver_ty, callee, &method);
-    PositionalMethod { symbol, kept }
+    let restored_receiver =
+        super::method_dispatch::restored_receiver(ctx, &method, receiver_ty, method_name);
+    PositionalMethod {
+        symbol,
+        kept,
+        restored_receiver,
+    }
 }
 
 /// Calls `method` with `args` into `destination`. The loop holds every
@@ -528,9 +537,22 @@ fn emit_positional_call(
         &mut args,
         &mut arg_modes,
     )?;
+    let lent = match &method.restored_receiver {
+        Some(ty) => Some(super::method_dispatch::lend_restored_receiver(
+            ctx,
+            ty,
+            &mut args,
+            &mut arg_modes,
+            *span,
+        )?),
+        None => None,
+    };
     let func = Operand::function(method.symbol.clone(), *span);
     let place = Place::new(destination);
     super::dispatch::emit_call_terminator(ctx, func, args, arg_modes, Vec::new(), place, *span);
+    if let Some(lent) = lent {
+        lent.finish(ctx, handover.arg_watermark, *span);
+    }
     super::kept_parameters::end_handed_over(ctx, &handed, *span);
     Ok(())
 }

@@ -500,7 +500,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (89 codes: 001-089)
+    // TYP — Type checker (91 codes: 001-091)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1128,6 +1128,13 @@ diagnostics!(
     "090",
     TypCapturedValueWritten,
     "Captured Value Written",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "TYP",
+    "091",
+    TypReceiverReplaced,
+    "Receiver Replaced",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

@@ -23,6 +23,16 @@
 //!   a closure. A runtime entry point writes the block it is handed in place,
 //!   so a write through any of those reaches the receiver's block itself.
 //!
+//! An enum method replaces its receiver when it assigns `self` whole,
+//! `self = ...`, or calls on `self` a method that does. Every call of such a
+//! method takes the receiver's place and restores it with what the method
+//! leaves there, the way an `out` argument is. A call of a method with no
+//! body found replaces nothing. The methods that run as an instance is built
+//! or released, and those a container calls on elements it only lends, have
+//! no place to restore a receiver to, so replacing it there is refused. A
+//! class holds its state in its fields, so a class method assigns those
+//! instead (the type checker refuses `self = ...` there).
+//!
 //! Reading `self` writes nothing: indexing it, reading a field of it,
 //! comparing it, formatting it, iterating over it, returning it, and handing
 //! it to a runtime entry point at a position the runtime only reads.
@@ -34,7 +44,11 @@
 //! never analysed: a needless copy costs time, a missing one loses a write
 //! or frees a block another binding still holds.
 
+use crate::ast::implicit_methods::{CONSTRUCTION_METHOD_NAMES, THUNK_METHOD_NAMES};
+use crate::diagnostics::DiagnosticCode;
+use crate::error::syntax::Span;
 use crate::runtime_effects::{RuntimeEffect, RuntimeEffects};
+use crate::type_checker::TypeChecker;
 
 use super::{BodyWrites, Mention, Place, Role, Scope};
 use crate::ast::expression::{Expression, ExpressionKind};
@@ -44,13 +58,76 @@ use std::collections::{HashMap, HashSet};
 /// The name the receiver goes by inside a method body.
 const RECEIVER: &str = "self";
 
-/// The methods of every class that write their receiver, by the identity of
-/// the class the receiver is an instance of and the method's name, with every
-/// such pair the analysis looked at.
+/// The methods of every class and enum that write their receiver, by the
+/// identity of the type the receiver is an instance of and the method's name,
+/// with every such pair the analysis looked at, and those among them that
+/// replace their receiver whole.
 #[derive(Debug, Default)]
 pub struct ReceiverWrites {
     writers: HashSet<(String, String)>,
     analysed: HashSet<(String, String)>,
+    replacers: HashSet<(String, String)>,
+    refused: Vec<RefusedReplacement>,
+}
+
+/// An enum method that replaces its receiver where no call can restore it:
+/// a method the compiler or a container's runtime calls on a value it only
+/// lends ([`unrestorable_receiver`]).
+#[derive(Debug, Clone)]
+pub struct RefusedReplacement {
+    pub owner: String,
+    pub method: String,
+    pub reason: UnrestorableReceiver,
+    /// Where the body assigns `self`, or calls the method on `self` that does.
+    pub span: Span,
+}
+
+/// Why a method's receiver has no place a call could restore it to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnrestorableReceiver {
+    /// The method runs as an instance is built or released.
+    Construction,
+    /// A container's runtime calls the method on elements it only lends.
+    ContainerElement,
+}
+
+/// Why a method named `name` cannot restore its receiver, when it cannot:
+/// the methods building and releasing an instance run, and the ones a
+/// container's runtime thunk calls on its elements.
+fn unrestorable_receiver(name: &str) -> Option<UnrestorableReceiver> {
+    if CONSTRUCTION_METHOD_NAMES.contains(&name) {
+        Some(UnrestorableReceiver::Construction)
+    } else if THUNK_METHOD_NAMES.contains(&name) {
+        Some(UnrestorableReceiver::ContainerElement)
+    } else {
+        None
+    }
+}
+
+impl TypeChecker {
+    /// Reports `MER_TYP_091` for each enum method replacing its receiver
+    /// where no call can restore it.
+    pub(crate) fn report_unrestorable_replacements(&mut self) {
+        let refused = std::mem::take(&mut self.receiver_writes.refused);
+        for replacement in refused {
+            let reason = match replacement.reason {
+                UnrestorableReceiver::Construction => "it runs as an instance is built or released",
+                UnrestorableReceiver::ContainerElement => {
+                    "a container calls it on elements it only lends"
+                }
+            };
+            self.report_error_with_help(
+                DiagnosticCode::TypReceiverReplaced,
+                format!(
+                    "'{}.{}' replaces its receiver, but {reason}, so no caller's place gets the new value back",
+                    replacement.owner, replacement.method
+                ),
+                replacement.span,
+                "return the new value instead, or replace the receiver in a method of its own"
+                    .to_string(),
+            );
+        }
+    }
 }
 
 impl ReceiverWrites {
@@ -59,6 +136,16 @@ impl ReceiverWrites {
     pub fn writes_receiver(&self, class: &str, method: &str) -> bool {
         let key = (class.to_string(), method.to_string());
         self.writers.contains(&key) || !self.analysed.contains(&key)
+    }
+
+    /// Whether calling `method` on an instance of the enum `owner` assigns
+    /// the receiver whole, itself or through a method it calls on `self`, so
+    /// every call takes the receiver's place and restores it; false for any
+    /// other pair. The one answer the ownership checks, the method bodies MIR
+    /// lowering binds and every call of them read.
+    pub fn replaces_receiver(&self, owner: &str, method: &str) -> bool {
+        let key = (owner.to_string(), method.to_string());
+        self.replacers.contains(&key)
     }
 
     /// The receiver writers among the classes `statements` declare, at any
@@ -71,12 +158,28 @@ impl ReceiverWrites {
         let declarations = Declarations::of(statements, &identity);
         let mut writes = Self::default();
         for class in &declarations.classes {
+            let is_enum = declarations.enums.contains(class);
             let methods = declarations.methods_of(class);
-            let writers = Analysis::of(&declarations, &methods, runtime).writers();
+            let analysis = Analysis::of(&declarations, &methods, runtime);
+            let writers = analysis.closure(|fact| fact.writes, true);
+            let replacers = analysis.closure(|fact| fact.replaced_at.is_some(), false);
             for (name, node) in &methods {
                 let key = (class.clone(), name.to_string());
                 if writers.contains(node) {
                     writes.writers.insert(key.clone());
+                }
+                if is_enum && replacers.contains(node) {
+                    match unrestorable_receiver(name) {
+                        None => {
+                            writes.replacers.insert(key.clone());
+                        }
+                        Some(reason) => writes.refused.push(RefusedReplacement {
+                            owner: class.clone(),
+                            method: name.to_string(),
+                            reason,
+                            span: analysis.replacement_site(node, &replacers),
+                        }),
+                    }
                 }
                 writes.analysed.insert(key);
             }
@@ -92,6 +195,8 @@ type Node<'d> = (&'d str, &'d str);
 /// writes a body for, and the classes and traits each extends or implements.
 struct Declarations<'s> {
     classes: Vec<String>,
+    /// The enums among `classes`.
+    enums: HashSet<String>,
     bodies: HashMap<String, Vec<(&'s str, &'s Statement)>>,
     parents: HashMap<String, Vec<String>>,
 }
@@ -103,6 +208,7 @@ impl<'s> Declarations<'s> {
     ) -> Self {
         let mut declarations = Self {
             classes: Vec::new(),
+            enums: HashSet::new(),
             bodies: HashMap::new(),
             parents: HashMap::new(),
         };
@@ -136,6 +242,15 @@ impl<'s> Declarations<'s> {
                 self.parents.insert(name.clone(), named);
                 self.bodies.insert(name, bodies(body));
             }
+            StatementKind::Enum(name, _, _, methods, _, _) => {
+                let Some(name) = identity(name) else {
+                    return;
+                };
+                self.parents.insert(name.clone(), Vec::new());
+                self.bodies.insert(name.clone(), bodies(methods));
+                self.enums.insert(name.clone());
+                self.classes.push(name);
+            }
             StatementKind::Empty
             | StatementKind::Break
             | StatementKind::Continue
@@ -152,7 +267,6 @@ impl<'s> Declarations<'s> {
             | StatementKind::Return(_)
             | StatementKind::Use(..)
             | StatementKind::Type(..)
-            | StatementKind::Enum(..)
             | StatementKind::Struct(..)
             | StatementKind::RuntimeFunctionDeclaration(..)
             | StatementKind::IntrinsicFunctionDeclaration(..) => {}
@@ -253,39 +367,62 @@ impl<'s, 'd> Analysis<'s, 'd> {
         }
     }
 
-    /// The bodies that write their receiver: those that do themselves, then,
-    /// round by round, those calling one.
-    fn writers(&self) -> HashSet<Node<'d>> {
-        let mut writers: HashSet<Node<'d>> = (self.facts.iter())
-            .filter(|(_, fact)| fact.writes)
+    /// The bodies `does` holds of themselves, then, round by round, those
+    /// calling one on `self` or `super`, and those calling a method no body is
+    /// found for when `unknown_does`.
+    fn closure(
+        &self,
+        does: impl Fn(&BodyFacts<'s>) -> bool,
+        unknown_does: bool,
+    ) -> HashSet<Node<'d>> {
+        let mut found: HashSet<Node<'d>> = (self.facts.iter())
+            .filter(|(_, fact)| does(fact))
             .map(|(&node, _)| node)
             .collect();
         loop {
-            let found: Vec<Node<'d>> = (self.facts.iter())
-                .filter(|(node, _)| !writers.contains(*node))
-                .filter(|(&node, fact)| self.calls_a_writer(node, fact, &writers))
+            let callers: Vec<Node<'d>> = (self.facts.iter())
+                .filter(|(node, _)| !found.contains(*node))
+                .filter(|(&node, fact)| self.calls_one_of(node, fact, &found, unknown_does))
                 .map(|(&node, _)| node)
                 .collect();
-            if found.is_empty() {
-                return writers;
+            if callers.is_empty() {
+                return found;
             }
-            writers.extend(found);
+            found.extend(callers);
         }
     }
 
-    /// Whether the body `node`, doing `fact`, calls a method among `writers`
-    /// or one no body is found for.
-    fn calls_a_writer(
+    /// Where the replacing body `node` replaces its receiver: the assignment
+    /// to `self` it makes itself, else the first call on `self` of a method
+    /// among `replacers`.
+    fn replacement_site(&self, node: &Node<'d>, replacers: &HashSet<Node<'d>>) -> Span {
+        let Some(fact) = self.facts.get(node) else {
+            return Span::default();
+        };
+        let called = |(method, span): &(&str, Span)| {
+            let callee = self.methods.get(method)?;
+            replacers.contains(callee).then_some(*span)
+        };
+        (fact.replaced_at)
+            .or_else(|| fact.calls_on_self.iter().find_map(called))
+            .unwrap_or_default()
+    }
+
+    /// Whether the body `node`, doing `fact`, calls a method among `callees`,
+    /// or one no body is found for when `unknown_counts`.
+    fn calls_one_of(
         &self,
         node: Node<'d>,
         fact: &BodyFacts<'s>,
-        writers: &HashSet<Node<'d>>,
+        callees: &HashSet<Node<'d>>,
+        unknown_counts: bool,
     ) -> bool {
-        let writes =
-            |callee: Option<Node<'d>>| callee.is_none_or(|callee| writers.contains(&callee));
-        (fact.calls_on_self.iter()).any(|method| writes(self.methods.get(method).copied()))
+        let counts = |callee: Option<Node<'d>>| {
+            callee.map_or(unknown_counts, |callee| callees.contains(&callee))
+        };
+        (fact.calls_on_self.iter()).any(|(method, _)| counts(self.methods.get(method).copied()))
             || (fact.calls_on_super.iter())
-                .any(|method| writes(self.declarations.inherited(node.0, method)))
+                .any(|method| counts(self.declarations.inherited(node.0, method)))
     }
 }
 
@@ -332,10 +469,12 @@ fn bodies(body: &[Statement]) -> Vec<(&str, &Statement)> {
 struct BodyFacts<'b> {
     /// Whether the body writes the receiver itself.
     writes: bool,
+    /// Where the body first assigns the receiver whole itself, if it does.
+    replaced_at: Option<Span>,
     /// Whether the body names the receiver anywhere.
     mentions_receiver: bool,
-    /// The methods the body calls on `self`.
-    calls_on_self: Vec<&'b str>,
+    /// The methods the body calls on `self`, each where it calls it.
+    calls_on_self: Vec<(&'b str, Span)>,
     /// The methods the body calls on `super`.
     calls_on_super: Vec<&'b str>,
 }
@@ -369,11 +508,21 @@ impl<'b> BodyFacts<'b> {
             return;
         }
         match mention.role {
-            Some(Role::Assigned { .. }) => self.writes = true,
+            Some(Role::Assigned { target }) => {
+                self.writes = true;
+                let replaces = word == ReceiverWord::Itself
+                    && mention.scope == Scope::Body
+                    && std::ptr::eq(target, mention.expression);
+                if replaces && self.replaced_at.is_none() {
+                    self.replaced_at = Some(mention.expression.span);
+                }
+            }
             Some(Role::Receiver { object, method }) if std::ptr::eq(object, mention.expression) => {
                 if let ExpressionKind::Identifier(method, _) = &method.node {
                     match word {
-                        ReceiverWord::Itself => self.calls_on_self.push(method.as_str()),
+                        ReceiverWord::Itself => {
+                            (self.calls_on_self).push((method.as_str(), mention.expression.span))
+                        }
                         ReceiverWord::Super => self.calls_on_super.push(method.as_str()),
                     }
                 }

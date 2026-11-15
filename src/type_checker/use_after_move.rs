@@ -34,6 +34,7 @@ use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 use std::collections::{HashMap, HashSet};
 
+use super::body_writes::ReceiverWrites;
 use super::context::TypeDefinition;
 use super::escape_analysis::{
     call_builds_a_value, collect_pattern_bindings, free_callee, method_owner, method_summary,
@@ -327,11 +328,14 @@ struct OpenSite {
 
 /// What a call through a vtable hands over: which slot it reads, decided
 /// from the type table ([`DispatchTable`]), and which positions that slot
-/// owns ([`SlotConventions`]).
+/// owns ([`SlotConventions`]); beside it, the static calls that take their
+/// receiver's place and restore it, which hand the receiver over to no one
+/// ([`ReceiverWrites::replaces_receiver`]).
 #[derive(Clone, Copy)]
 pub struct VtableCalls<'a> {
     pub dispatch: &'a DispatchTable,
     pub conventions: &'a SlotConventions,
+    pub restored: &'a ReceiverWrites,
 }
 
 impl<'a> VtableCalls<'a> {
@@ -1884,6 +1888,16 @@ impl<'a> UseAfterMoveChecker<'a> {
         );
         match self.dispatched_slot_convention(callee, type_name, method_name) {
             Some(convention) => Some(slot_summary(summary.unwrap_or_default(), convention)),
+            None if self
+                .vtable_calls
+                .restored
+                .replaces_receiver(type_name, method_name) =>
+            {
+                summary.map(|mut summary| {
+                    summary.direct_escapes.remove(&0);
+                    summary
+                })
+            }
             None => summary,
         }
     }

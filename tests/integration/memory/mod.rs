@@ -52,6 +52,7 @@ pub mod reassignment;
 pub mod recycled_blocks;
 pub mod reference_cycles;
 pub mod release_by_runtime_class;
+pub mod replaced_receivers;
 pub mod runtime_closure_slots;
 pub mod runtime_writes;
 pub mod shared_receivers;

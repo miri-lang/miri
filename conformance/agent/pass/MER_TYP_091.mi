@@ -1,0 +1,28 @@
+// summary: Accepted counterpart of MER_TYP_091: the class method assigns the fields, and an enum method replaces its receiver.
+// expect-stdout: 0 empty
+use system.io
+
+class Counter
+    var n int
+
+    fn restart()
+        self.n = 0
+
+enum Slot
+    Full(int)
+    Empty
+
+    fn clear()
+        self = Slot.Empty
+
+    fn describe() String
+        match self
+            Slot.Full(n): return f"full {n}"
+            Slot.Empty: return "empty"
+
+fn main()
+    let counter = Counter(n: 3)
+    counter.restart()
+    var slot = Slot.Full(4)
+    slot.clear()
+    println(f"{counter.n} {slot.describe()}")

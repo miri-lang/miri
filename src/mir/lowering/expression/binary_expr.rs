@@ -27,8 +27,8 @@ use crate::mir::lowering::loops::{
     lower_compared_range_membership, lower_range_membership, range_value_element, MembershipTypes,
 };
 use crate::mir::lowering::method_dispatch::{
-    lower_method_call_with, operator_call_convention, operator_method_callee,
-    resolve_inherited_method, MethodArguments,
+    lend_restored_receiver, lower_method_call_with, operator_call_convention,
+    operator_method_callee, resolve_inherited_method, restored_receiver, MethodArguments,
 };
 use crate::mir::lowering::sequencing::lower_operand;
 use crate::type_checker::context::{MethodInfo, TypeDefinition};
@@ -137,6 +137,7 @@ pub(crate) fn try_lower_operator_trait_call(
         symbol,
         return_ty,
         kept,
+        restored_receiver: restored_receiver(ctx, &method, receiver_ty, method_name),
     };
     emit_binary_trait_call(ctx, body, result, call, span).map(Some)
 }
@@ -221,6 +222,8 @@ struct OperatorBody {
     symbol: Symbol,
     return_ty: Type,
     kept: Vec<bool>,
+    /// The receiver's type when the body restores its receiver.
+    restored_receiver: Option<Type>,
 }
 
 /// The operands + bookkeeping for emitting a binary-operator trait call.
@@ -249,6 +252,7 @@ fn emit_binary_trait_call(
         args,
         arg_locals,
         kept: &body.kept,
+        restored_receiver: body.restored_receiver.as_ref(),
         written,
         arg_watermark: call.arg_watermark,
     };
@@ -276,6 +280,9 @@ struct TraitCall<'k> {
     args: Vec<Operand>,
     arg_locals: Vec<Local>,
     kept: &'k [bool],
+    /// The receiver's type when the body restores its receiver
+    /// ([`lend_restored_receiver`]).
+    restored_receiver: Option<&'k Type>,
     written: Option<(&'k Expression, &'k Expression)>,
     arg_watermark: usize,
 }
@@ -295,6 +302,7 @@ fn emit_trait_call(
         mut args,
         arg_locals,
         kept,
+        restored_receiver,
         written,
         arg_watermark,
     } = call;
@@ -312,7 +320,20 @@ fn emit_trait_call(
     };
     let mut arg_modes = Vec::new();
     let handed = hand_over_kept_arguments(ctx, &handover, &mut args, &mut arg_modes)?;
+    let lent = match restored_receiver {
+        Some(ty) => Some(lend_restored_receiver(
+            ctx,
+            ty,
+            &mut args,
+            &mut arg_modes,
+            span,
+        )?),
+        None => None,
+    };
     emit_call_terminator(ctx, func, args, arg_modes, Vec::new(), destination, span);
+    if let Some(lent) = lent {
+        lent.finish(ctx, arg_watermark, span);
+    }
     release_after_kept_call(ctx, &handover, &arg_locals, &handed, span);
     Ok(())
 }

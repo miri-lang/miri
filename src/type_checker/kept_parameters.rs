@@ -81,6 +81,7 @@ use crate::ast::Parameter;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
+use super::body_writes::ReceiverWrites;
 use super::context::{resolve_method_source, MethodInfo, MethodSource, TypeDefinition};
 use super::diagnostics::shown_type_name;
 use super::escape_analysis::{EscapeSummary, FunctionId};
@@ -175,6 +176,8 @@ impl KeptSlots {
 
 /// What deciding the owned parameters reads of the checked program.
 pub(crate) struct KeepFacts<'a> {
+    /// The calls restoring their receiver, which never keep it.
+    pub restored: &'a ReceiverWrites,
     pub type_definitions: &'a HashMap<String, TypeDefinition>,
     /// The named types that are resources, decided once for the program.
     pub resources: &'a ResourceTypes,
@@ -390,7 +393,7 @@ impl ThunkKeeper {
 /// keeps, in operand order; `None` when it keeps none or has more than one
 /// calling convention ([`has_one_convention`]). A parameter declared `out` or optional is never kept: the
 /// first is the caller's binding, the second hands on no reference of its
-/// own.
+/// own. A receiver the method restores is the caller's binding as well.
 ///
 /// The escape summary of a method numbers its receiver 0 and each parameter
 /// a caller supplies from 1, a static method's included.
@@ -404,7 +407,9 @@ fn kept_method_positions(
     }
     let function = FunctionId::method(owner, &decl.name);
     let summary = facts.escape_summaries.get(&function)?;
-    let receiver = (!method.is_static).then(|| summary.directly_escapes(0));
+    let receiver = (!method.is_static).then(|| {
+        summary.directly_escapes(0) && !facts.restored.replaces_receiver(owner, &decl.name)
+    });
     let params = (decl.explicit_params().iter().enumerate())
         .map(|(index, param)| summary.directly_escapes(index + 1) && is_held_whole(param))
         .collect();

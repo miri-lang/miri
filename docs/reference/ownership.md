@@ -14,6 +14,7 @@ Miri manages memory with reference counting and inferred borrowing over copy-on-
 - A write to a value a closure or nested function captured (error, `MER_TYP_090`): a closure holds its own copy, so the write would be lost when the call ends
 - A `clone`, `compare`, `equals` or `hash` a container calls on its elements that keeps a resource it is handed (error, `MER_OWN_006`): the container only lends its elements, so the method cannot become their owner
 - A `drop` hook that keeps `self` — stores it, builds a value of it, captures it, or hands it to a callee that keeps it (error, `MER_OWN_007`): the instance is freed when its hook returns, so nothing may hold it after
+- `self = ...` in a method of a class, or in an enum's `init`, `drop`, `clone`, `compare`, `equals` or `hash` (error, `MER_TYP_091`): only an enum method replaces its receiver, writing through to the caller's place, and those methods run on a value nobody gets back
 
 ## Key Concepts
 

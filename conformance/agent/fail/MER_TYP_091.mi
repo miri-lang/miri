@@ -1,0 +1,14 @@
+// expect: MER_TYP_091
+// summary: Triggers MER_TYP_091: a class method assigns its whole receiver.
+use system.io
+
+class Counter
+    var n int
+
+    fn restart()
+        self = Counter(n: 0)
+
+fn main()
+    let counter = Counter(n: 3)
+    counter.restart()
+    println(f"{counter.n}")

@@ -7,12 +7,16 @@ use crate::ast::expression::Expression;
 use crate::ast::statement::RECEIVER_PARAM_NAME;
 use crate::ast::types::{STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::ast::{ExpressionKind, Type, TypeKind};
+use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::compiler_intrinsics::{copy_on_write_of, Intrinsic};
 use crate::mir::representation::{written_type_arguments, Representation};
 use crate::mir::symbol::Symbol;
-use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
+use crate::mir::{
+    ArgMode, Local, Operand, Place, PlaceElem, Rvalue, Statement, StatementKind, Terminator,
+    TerminatorKind,
+};
 use crate::type_checker::context::{
     class_ancestry, inherited_trait_requirement, resolve_method_source, trait_lineage,
     GenericDefinition, MethodInfo, MethodSource, TypeDefinition,
@@ -20,6 +24,7 @@ use crate::type_checker::context::{
 use crate::type_checker::runtime_settled::hands_a_parameter_derived_value;
 use crate::type_checker::utils::tuple_class_arguments;
 use crate::type_checker::value_class::LayoutScope;
+use crate::type_checker::TypeChecker;
 
 use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
@@ -332,6 +337,9 @@ pub(super) struct StaticMethodCall<'a> {
     pub method_info: &'a MethodInfo,
     /// The local the receiver operand reads, when it reads one.
     pub receiver_temp: Option<Local>,
+    /// The receiver's type when the callee takes the receiver's place and
+    /// restores it ([`restores_receiver`]).
+    pub restored_receiver: Option<Type>,
 }
 
 /// Emit a statically dispatched method call (a direct function call).
@@ -357,6 +365,7 @@ pub(super) fn emit_static_method_call(
         handover,
         method_info,
         receiver_temp,
+        restored_receiver,
     } = call;
     let LoweredMethodCall {
         args: mut call_args,
@@ -365,6 +374,16 @@ pub(super) fn emit_static_method_call(
     let mut arg_modes =
         super::dispatch::build_method_arg_modes(method_info, written_count, call_args.len());
     let handed = hand_over_kept_arguments(ctx, &handover, &mut call_args, &mut arg_modes)?;
+    let lent_receiver = match &restored_receiver {
+        Some(ty) => Some(lend_restored_receiver(
+            ctx,
+            ty,
+            &mut call_args,
+            &mut arg_modes,
+            span,
+        )?),
+        None => None,
+    };
     let arg_locals = super::dispatch::operand_locals(call_args.get(1..).unwrap_or_default());
     let func = Operand::function(symbol, span);
     let place = destination.clone();
@@ -372,8 +391,138 @@ pub(super) fn emit_static_method_call(
     if let Some(local) = receiver_temp.filter(|local| !handed.moved.contains(local)) {
         ctx.emit_temp_drop(local, handover.arg_watermark, span);
     }
+    if let Some(lent) = lent_receiver {
+        lent.finish(ctx, handover.arg_watermark, span);
+    }
     release_after_kept_call(ctx, &handover, &arg_locals, &handed, span);
     Ok(())
+}
+
+/// A receiver passed as an `out` argument, with what the call leaves to do
+/// once it returns ([`lend_restored_receiver`]).
+#[must_use]
+pub(crate) struct LentReceiver {
+    /// The temporary the call was handed instead of the receiver's own place.
+    held: Option<Local>,
+    /// The place `held` was taken from, restored with what the call left,
+    /// and whether it is a field holding a counted value.
+    taken_from: Option<(Place, bool)>,
+}
+
+impl LentReceiver {
+    /// Restores the place the receiver was taken from with the value the call
+    /// left in the temporary, or releases a temporary that stood for no place.
+    pub(crate) fn finish(self, ctx: &mut LoweringContext, watermark: usize, span: Span) {
+        match (self.held, self.taken_from) {
+            (Some(held), Some((place, is_counted_field))) => {
+                let restored = Rvalue::Use(Operand::Move(Place::new(held)));
+                let kind = if is_counted_field {
+                    StatementKind::Reassign(place, restored)
+                } else {
+                    StatementKind::Assign(place, restored)
+                };
+                ctx.push_statement(Statement { kind, span });
+            }
+            (Some(held), None) => ctx.emit_temp_drop(held, watermark, span),
+            (None, Some(_)) | (None, None) => {}
+        }
+    }
+}
+
+/// Whether `place`, holding a `ty`, ends at a field holding a counted value,
+/// which a store replaces by releasing the value it held, as an assignment
+/// to the field does; an element store releases the element it replaces
+/// itself.
+fn is_counted_field(ctx: &LoweringContext, place: &Place, ty: &Type) -> bool {
+    matches!(place.projection.last(), Some(PlaceElem::Field(_))) && ctx.is_counted(&ty.kind)
+}
+
+/// Passes a call's receiver, `args[0]`, as an `out` argument: the callee
+/// takes the receiver's place for the call and restores it with what it
+/// leaves there ([`restores_receiver`]). Every call of a body restoring its
+/// receiver passes it so, whoever emits the call.
+///
+/// A bare local of the body's own is passed as it is. A field, an element or
+/// a tuple position is taken into a temporary holding a reference of its
+/// own, handed to the call, and stored back once it returns. A parameter
+/// the body only lends, its own receiver included, holds a reference its
+/// caller owns, so the call is handed a copy, and so is a receiver naming no
+/// place; that copy is released once the call returns.
+pub(crate) fn lend_restored_receiver(
+    ctx: &mut LoweringContext,
+    receiver_ty: &Type,
+    args: &mut [Operand],
+    arg_modes: &mut Vec<ArgMode>,
+    span: Span,
+) -> Result<LentReceiver, LoweringError> {
+    let invariant =
+        |message| LoweringError::internal(DiagnosticCode::MirValidationFailed, message, span);
+    if arg_modes.is_empty() {
+        arg_modes.resize(args.len(), ArgMode::Borrowed);
+    }
+    let (Some(receiver), Some(mode)) = (args.first_mut(), arg_modes.first_mut()) else {
+        return Err(invariant(
+            "a method call restoring its receiver passes no receiver",
+        ));
+    };
+    if mode.hands_over_reference() {
+        return Err(invariant(
+            "a method call both restores and keeps its receiver",
+        ));
+    }
+    let lent = match receiver {
+        Operand::Copy(place) | Operand::Move(place)
+            if place.projection.is_empty() && !holds_a_lent_reference(ctx, place.local) =>
+        {
+            LentReceiver {
+                held: None,
+                taken_from: None,
+            }
+        }
+        Operand::Copy(place) | Operand::Move(place) if !place.projection.is_empty() => {
+            let is_counted_field = is_counted_field(ctx, place, receiver_ty);
+            LentReceiver {
+                taken_from: Some((place.clone(), is_counted_field)),
+                held: Some(hold_in_temporary(ctx, receiver, receiver_ty, span)),
+            }
+        }
+        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
+            LentReceiver {
+                held: Some(hold_in_temporary(ctx, receiver, receiver_ty, span)),
+                taken_from: None,
+            }
+        }
+    };
+    if let Some(held) = lent.held {
+        *receiver = Operand::Copy(Place::new(held));
+    }
+    *mode = ArgMode::Out;
+    Ok(lent)
+}
+
+/// Whether `local` is a parameter of the body being lowered holding a
+/// reference its caller owns: a lent parameter, or the receiver of a body
+/// that does not restore it.
+fn holds_a_lent_reference(ctx: &LoweringContext, local: Local) -> bool {
+    let signature = &ctx.body.signature;
+    let is_lent_receiver =
+        signature.receiver == Some(local) && signature.out_params.first() != Some(&true);
+    is_lent_receiver || ctx.body.is_lent_param(local)
+}
+
+/// A temporary of the call's own holding a copy of `operand`, a `ty`, with a
+/// reference of its own when the value is counted.
+fn hold_in_temporary(ctx: &mut LoweringContext, operand: &Operand, ty: &Type, span: Span) -> Local {
+    let held = ctx.push_temp(ty.clone(), span);
+    let copy = match operand {
+        Operand::Move(place) => Operand::Copy(place.clone()),
+        Operand::Copy(_) | Operand::Constant(_) | Operand::Function(_) => operand.clone(),
+    };
+    ctx.push_statement(Statement {
+        kind: StatementKind::Assign(Place::new(held), Rvalue::Use(copy)),
+        span,
+    });
+    held
 }
 
 /// A call the compiler makes on a value already held in an operand, rather
@@ -401,8 +550,15 @@ pub(crate) struct WrittenReceiver<'a> {
 /// The body a [`HeldReceiverCall`] reaches: the vtable slot a call on a value
 /// of its receiver type goes through, or the one body it names.
 enum HeldCallee {
-    Slot { slot: usize, kept: Vec<bool> },
-    Static { symbol: Symbol, kept: Vec<bool> },
+    Slot {
+        slot: usize,
+        kept: Vec<bool>,
+    },
+    Static {
+        symbol: Symbol,
+        kept: Vec<bool>,
+        restored_receiver: Option<Type>,
+    },
 }
 
 impl HeldCallee {
@@ -445,7 +601,12 @@ fn held_receiver_callee(
     }
     let (symbol, _) = operator_method_callee(ctx, receiver_ty, &owner, method_name, &method);
     let kept = operator_call_convention(ctx, receiver_ty, (&owner, method_name), &method);
-    Ok((HeldCallee::Static { symbol, kept }, method))
+    let callee = HeldCallee::Static {
+        symbol,
+        kept,
+        restored_receiver: restored_receiver(ctx, &method, receiver_ty, method_name),
+    };
+    Ok((callee, method))
 }
 
 /// The body a [`HeldReceiverCall`] reaches, resolved once for a caller that
@@ -543,13 +704,18 @@ pub(crate) fn emit_held_call_to(
             };
             emit_virtual_method_call(ctx, virtual_call, destination, span)
         }
-        HeldCallee::Static { symbol, .. } => {
+        HeldCallee::Static {
+            symbol,
+            restored_receiver,
+            ..
+        } => {
             let static_call = StaticMethodCall {
                 symbol: symbol.clone(),
                 call: lowered,
                 handover,
                 method_info: &method,
                 receiver_temp,
+                restored_receiver: restored_receiver.clone(),
             };
             emit_static_method_call(ctx, static_call, destination, span)
         }
@@ -881,15 +1047,41 @@ fn emit_method_call(
         arg_watermark: obj_watermark,
         destination: destination.local,
     };
+    let restored_receiver = restored_receiver(ctx, m.method_info, m.obj_ty, m.method_name);
     let static_call = StaticMethodCall {
         symbol,
         call,
         handover: handover.checked_against_method(m.method_info)?,
         method_info: m.method_info,
         receiver_temp: obj_temp_local,
+        restored_receiver,
     };
     emit_static_method_call(ctx, static_call, destination, *m.span)?;
     Ok(Some(op.clone()))
+}
+
+/// Whether the instance method `method`, called on a receiver of type
+/// `receiver_ty`, takes the receiver's place and restores it
+/// ([`crate::type_checker::TypeChecker::restores_receiver`]). Only an enum's
+/// method restores its receiver, and an enum neither extends nor is extended,
+/// so the receiver's type names the one body every call reaches. The body
+/// binding its receiver and every call of it read this one answer.
+pub(crate) fn restores_receiver(tc: &TypeChecker, receiver_ty: &Type, method: &str) -> bool {
+    extract_class_name(receiver_ty).is_some_and(|owner| tc.restores_receiver(&owner, method))
+}
+
+/// The receiver's type, `receiver_ty`, when a call of the instance method
+/// `info` named `name` restores its receiver ([`restores_receiver`]): what
+/// every site emitting a call of a method body reads to pass the receiver
+/// ([`lend_restored_receiver`]).
+pub(crate) fn restored_receiver(
+    ctx: &LoweringContext,
+    info: &MethodInfo,
+    receiver_ty: &Type,
+    name: &str,
+) -> Option<Type> {
+    (!info.is_static && restores_receiver(ctx.type_checker, receiver_ty, name))
+        .then(|| receiver_ty.clone())
 }
 
 /// The positions the body a statically dispatched call `m` names owns, read
@@ -1746,8 +1938,10 @@ fn prepare_method_self<'e>(
     (class_name, method_name): (&str, &str),
     span: Span,
 ) -> Result<(Receiver<'e>, Option<Local>), LoweringError> {
-    if let Some(cow) = call_writes_receiver(ctx, obj_ty, class_name, method_name) {
-        let (pending, temporary) = lower_pending_receiver(ctx, obj, Some((obj_ty, cow)), span)?;
+    let cow = call_writes_receiver(ctx, obj_ty, class_name, method_name);
+    if cow.is_some() || restores_receiver(ctx.type_checker, obj_ty, method_name) {
+        let cow = cow.map(|cow| (obj_ty, cow));
+        let (pending, temporary) = lower_pending_receiver(ctx, obj, cow, span)?;
         let temporary = temporary.map(|temporary| temporary.local());
         return Ok((Receiver::Pending(pending), temporary));
     }

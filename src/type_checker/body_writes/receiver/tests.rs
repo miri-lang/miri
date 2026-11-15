@@ -410,3 +410,94 @@ fn every_writer_lowering_intercepts_by_name_writes_its_receiver() {
         assert!(writes.writers.contains(&key), "{class}.{method} writes");
     }
 }
+
+/// The methods `source` declares that replace their receiver whole, as
+/// `Type.method`, sorted.
+fn replacers(source: &str) -> Vec<String> {
+    let program = parse(source);
+    let writes = ReceiverWrites::of(program.body.iter(), written_name, &list_runtime());
+    let mut names: Vec<String> = (writes.replacers.iter())
+        .map(|(owner, method)| format!("{owner}.{method}"))
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn assigning_the_whole_receiver_replaces_it_through_every_call_on_self() {
+    let found = replacers(
+        r#"
+enum Slot
+    Full(int)
+    Empty
+
+    fn clear()
+        self = Slot.Empty
+
+    fn reset()
+        self.clear()
+
+    fn show() int
+        return 0
+
+class Cell
+    var n int
+
+    fn init(n int)
+        self = Cell(n: n)
+
+    fn set_n(n int)
+        self.n = n
+"#,
+    );
+    assert_eq!(found, vec!["Slot.clear", "Slot.reset"]);
+}
+
+/// The enum methods `source` declares that replace their receiver where no
+/// call can restore it, as `Type.method`, sorted.
+fn refused_replacers(source: &str) -> Vec<String> {
+    let program = parse(source);
+    let writes = ReceiverWrites::of(program.body.iter(), written_name, &list_runtime());
+    let mut names: Vec<String> = (writes.refused.iter())
+        .map(|refused| format!("{}.{}", refused.owner, refused.method))
+        .collect();
+    names.sort();
+    names
+}
+
+const BUILT_AND_LENT_SLOT: &str = r#"
+enum Slot
+    Full(int)
+    Empty
+
+    fn init()
+        self = Slot.Empty
+
+    fn drop(self)
+        self.clear()
+
+    fn equals(other Slot) bool
+        self = Slot.Empty
+        return true
+
+    fn hash() int
+        self.clear()
+        return 0
+
+    fn clear()
+        self = Slot.Empty
+"#;
+
+#[test]
+fn the_methods_building_releasing_or_lent_to_a_container_never_restore_a_receiver() {
+    assert_eq!(replacers(BUILT_AND_LENT_SLOT), vec!["Slot.clear"]);
+}
+
+#[test]
+fn a_method_building_releasing_or_lent_to_a_container_that_replaces_is_refused() {
+    let found = refused_replacers(BUILT_AND_LENT_SLOT);
+    assert_eq!(
+        found,
+        vec!["Slot.drop", "Slot.equals", "Slot.hash", "Slot.init"]
+    );
+}

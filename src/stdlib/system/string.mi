@@ -77,12 +77,6 @@ public class String implements Equatable, Hashable, Comparable, Steppable, Addab
     @reads("s")
     runtime "core" fn miri_rt_string_next_scalar(s String) String
 
-    // Constructors
-
-    /// Creates a new empty string.
-    fn init() String
-        self = miri_rt_string_new()
-
     // Properties
 
     /// Returns the number of Unicode characters in the string.

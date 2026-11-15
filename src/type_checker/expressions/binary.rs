@@ -51,7 +51,7 @@ use crate::diagnostics::repair::ConcatPart;
 use crate::diagnostics::DiagnosticCode;
 use crate::diagnostics::RepairRequest;
 use crate::error::syntax::Span;
-use crate::type_checker::context::Context;
+use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::instantiation_requirements::WrittenLiterals;
 use crate::type_checker::operators::{missing_range_ordering_message, RangeMembershipRefusal};
@@ -874,7 +874,9 @@ impl TypeChecker {
             );
             return ast_factory::make_type(TypeKind::Error);
         };
-        if name != "self" && context.resolve_info(name).is_some() && !context.is_mutable(name) {
+        if name == "self" {
+            self.refuse_replacing_an_instance(span, context);
+        } else if context.resolve_info(name).is_some() && !context.is_mutable(name) {
             let is_constant = context.is_constant(name);
             let msg = if is_constant {
                 format!("Cannot assign to constant '{}'", name)
@@ -892,6 +894,31 @@ impl TypeChecker {
             }
         }
         self.infer_identifier(name, id_expr.span, id_expr.id, context)
+    }
+
+    /// Refuses `self = ...` in a method of anything but an enum: an instance
+    /// of a class holds its state in its fields, and a whole-receiver write
+    /// could reach no binding of the caller's.
+    fn refuse_replacing_an_instance(&mut self, span: Span, context: &Context) {
+        let (Some(owner), Some(method)) = (
+            context.current_class.as_deref(),
+            context.current_function.as_deref(),
+        ) else {
+            return;
+        };
+        let definition = (context.resolve_type_definition(owner))
+            .or_else(|| self.type_table.global_type_definitions.get(owner));
+        if matches!(definition, Some(TypeDefinition::Enum(_))) {
+            return;
+        }
+        self.report_error_with_help(
+            DiagnosticCode::TypReceiverReplaced,
+            format!(
+                "'{owner}.{method}' assigns its whole receiver: an instance of '{owner}' keeps its state in its fields, so `self = ...` is refused outside an enum"
+            ),
+            span,
+            "assign the fields instead (self.n = 0)".to_string(),
+        );
     }
 
     fn infer_assignment_to_member(

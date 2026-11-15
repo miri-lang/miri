@@ -14,7 +14,8 @@
 //! any closure or nested function, is
 //! - the target of an assignment, at any depth of fields and elements,
 //! - the receiver of a call of a method that writes a built-in collection
-//!   receiver, as [`super::ReceiverWrites`] reads it off the method's body,
+//!   receiver, or that assigns its receiver whole, as
+//!   [`super::ReceiverWrites`] reads it off the method's body,
 //! - an `out` argument, or
 //! - an argument a runtime entry point writes in place, as its declaration
 //!   states. A cast hands the runtime a value of its own and is not followed.
@@ -96,7 +97,7 @@ pub(super) fn writes_argument(
 }
 
 /// Whether calling `method` on `object` writes the built-in collection
-/// `object` is.
+/// `object` is, or assigns `object` whole.
 pub(super) fn writes_receiver(
     checker: &TypeChecker,
     object: &Expression,
@@ -108,6 +109,11 @@ pub(super) fn writes_receiver(
     let Some(ty) = checker.get_type(object.id) else {
         return false;
     };
+    if let TypeKind::Custom(name, _) = &ty.kind {
+        if checker.receiver_writes.replaces_receiver(name, method) {
+            return true;
+        }
+    }
     let Some(collection) = ty.kind.as_builtin_collection() else {
         return false;
     };

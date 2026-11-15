@@ -965,12 +965,15 @@ fn lower_class_method_body(
     }
 
     // Remaining explicit parameters (registered in variable_map).
-    // For instance methods, ABI param 0 is `self` (never `out`); explicit params follow at 1..=N.
+    // For instance methods, ABI param 0 is `self`, `out` when the method restores it; explicit
+    // params follow at 1..=N.
     // For static methods, explicit params start at 0.
     // The allocator is appended below as a non-out ABI param.
     let mut out_params = Vec::with_capacity(params.len() + 2);
     if has_self {
-        out_params.push(false); // self is never `out`
+        out_params.push(method_dispatch::restores_receiver(
+            tc, &self_type, &decl.name,
+        ));
     }
     for param in params.iter() {
         let written = apply_generic_sub(&resolve_declared_annotation(tc, &param.typ), subs);
