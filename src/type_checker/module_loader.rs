@@ -32,6 +32,9 @@ pub struct ModuleSource {
     pub path: String,
     /// The file's text, which the module's spans index.
     pub text: String,
+    /// Whether the file was found under a standard-library root rather than
+    /// beside the program.
+    pub is_library: bool,
 }
 
 /// Tracks module loading state, visibility, and metadata.
@@ -99,6 +102,10 @@ pub struct ModuleLoader {
     /// Every imported module's file, in the order loading finished, which is
     /// the order of their [`SourceId`]s.
     pub imported_sources: Vec<Arc<ModuleSource>>,
+    /// The statements each imported module contributed to the checker's
+    /// imported statements, by index range, beside the module's file: a
+    /// pass reading a module's bodies together reads them here.
+    pub imported_bodies: Vec<(Arc<ModuleSource>, std::ops::Range<usize>)>,
     /// Every function the program's own file declares, its types' methods
     /// included, by statement id: the declarations whose spans index the
     /// program's file.
@@ -169,6 +176,7 @@ impl ModuleLoader {
             pre_registered_types: HashSet::new(),
             declaration_sources: HashMap::new(),
             imported_sources: Vec::new(),
+            imported_bodies: Vec::new(),
             program_declarations: HashSet::new(),
             private_type_identities: HashMap::new(),
             qualified_type_names: HashMap::new(),

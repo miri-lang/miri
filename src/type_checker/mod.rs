@@ -1042,6 +1042,7 @@ impl TypeChecker {
             resources: self.resource_types(),
             callees: &self.fn_analysis.declared_callees,
             modules: &self.fn_analysis.declaring_modules,
+            names: self.declared_names(),
         };
         context.escape_summaries = escape_analysis::compute_escape_summaries(
             &program.body,
@@ -1051,11 +1052,60 @@ impl TypeChecker {
         );
     }
 
+    /// Records which arguments and reads consume a resource, over the
+    /// program's bodies and every imported module's, and refuses each use
+    /// after one.
+    ///
+    /// An imported module is checked as the program is, its statements
+    /// together: a callee keeping a resource owns it wherever it is
+    /// declared, and lowering hands an owned value on by `move` only where
+    /// its consumption is recorded. A refusal in a module is rendered
+    /// against the module's file; its warnings are not reported, as no
+    /// hygiene note is on an imported file.
+    ///
+    /// The standard library is exempt from one refusal: a use after an open
+    /// site (a value of the class's `T`, a default's `Self`). That refusal
+    /// is raised at every instance the program builds rather than at the
+    /// methods it calls, so a library collection would refuse every program
+    /// holding a resource in it; lowering still keeps a funded copy at every
+    /// open site some path reaches a use from, so no copy reads a value it
+    /// moved.
+    ///
+    /// TODO: refuse a use after an open site at the copies the program
+    /// reaches ([`Self::reached_program`]); the standard library's exemption
+    /// goes once the refusal is raised there.
     fn run_pass_use_after_move(&mut self, program: &Program, context: &Context) {
         if !self.diagnostics.is_empty() {
             return;
         }
-        let findings = use_after_move::UseAfterMoveChecker::new(
+        let mut findings = self.use_after_move_checker(context).check_program(program);
+        self.diagnostics
+            .extend_warnings(std::mem::take(&mut findings.warnings));
+        self.record_consumption(findings, None);
+        let imported: Vec<_> = (self.modules.imported_bodies.iter())
+            .map(|(file, statements)| {
+                let statements = self.imported_statements.get(statements.clone());
+                let mut findings = (self.use_after_move_checker(context))
+                    .check_statements(statements.unwrap_or_default());
+                if file.is_library {
+                    findings.open_refusals.clear();
+                }
+                let is_refused = !findings.errors.is_empty() || !findings.open_refusals.is_empty();
+                let source = is_refused.then(|| (file.path.clone(), file.text.clone()));
+                (findings, source)
+            })
+            .collect();
+        for (findings, source) in imported {
+            self.record_consumption(findings, source);
+        }
+    }
+
+    /// The consumption check over the checked program's facts.
+    fn use_after_move_checker<'a>(
+        &'a self,
+        context: &'a Context,
+    ) -> use_after_move::UseAfterMoveChecker<'a> {
+        use_after_move::UseAfterMoveChecker::new(
             self,
             &self.type_table.types,
             &self.type_table.global_type_definitions,
@@ -1065,27 +1115,50 @@ impl TypeChecker {
             self.resource_types(),
         )
         .with_iteration_plans(&self.iteration_plans)
-        .check_program(program);
-        self.diagnostics.extend_errors(findings.errors);
-        self.diagnostics.extend_warnings(findings.warnings);
-        self.consumed_arguments.extend(findings.consumed_arguments);
+        .with_declared_names(self.declared_names())
+    }
+
+    /// Keeps what the consumption check found in one file, or one
+    /// declaration of an imported file: its consumed arguments, and its
+    /// refusals, each rendered against `source` when the file is imported.
+    /// Its warnings are the caller's to report.
+    fn record_consumption(
+        &mut self,
+        findings: use_after_move::UseAfterMoveFindings,
+        source: Option<(String, String)>,
+    ) {
+        let use_after_move::UseAfterMoveFindings {
+            mut errors,
+            consumed_arguments,
+            mut open_refusals,
+            warnings: _,
+        } = findings;
+        let refused =
+            (errors.iter_mut()).chain(open_refusals.iter_mut().map(|open| &mut open.error));
+        for error in refused.filter(|error| error.source_override.is_none()) {
+            error.source_override.clone_from(&source);
+        }
+        self.diagnostics.extend_errors(errors);
+        self.consumed_arguments.extend(consumed_arguments);
         let copies = open_consumption::Copies {
             type_definitions: &self.type_table.global_type_definitions,
             resources: self.resource_types(),
             instantiations: self.ownership_instantiations(),
         };
-        let refusals = open_consumption::refusals_at_copies(findings.open_refusals, &copies);
+        let refusals = open_consumption::refusals_at_copies(open_refusals, &copies);
         self.diagnostics.extend_errors(refusals);
     }
 
-    /// Decides which resource parameters each of the program's own
-    /// top-level functions owns ([`kept_parameters`]), from the converged
-    /// escape summaries, and then which positions each vtable slot owns
-    /// ([`slot_conventions`]), which the consumption check reads.
+    /// Decides which resource parameters each top-level function and method
+    /// owns ([`kept_parameters`]), the program's and every imported
+    /// module's, from the converged escape summaries, and then which
+    /// positions each vtable slot owns ([`slot_conventions`]), which the
+    /// consumption check reads.
     ///
-    /// Only the program's bodies are decided: the consumption check walks
-    /// those alone, and an owned parameter needs its consumption recorded to
-    /// be handed on by `move`. A program already refused decides nothing:
+    /// Where a function is declared does not change what it owns: the
+    /// consumption check walks imported bodies as it walks the program's,
+    /// so an owned parameter of either is handed on by `move`. A program
+    /// already refused decides nothing:
     /// its escape summaries and types may be incomplete, and no MIR is
     /// lowered from it.
     fn run_pass_kept_parameters(&mut self, program: &Program, context: &Context) {
@@ -1100,13 +1173,20 @@ impl TypeChecker {
             resources: self.resource_types(),
             escape_summaries: &context.escape_summaries,
             modules: &self.fn_analysis.declaring_modules,
+            names: self.declared_names(),
         };
         let decision = kept_parameters::decide_kept_parameters(
-            top_level_statements(program),
+            top_level_statements(program).chain(&self.imported_statements),
             (&facts, &self.thunk_bodies),
         );
         self.kept_parameters = decision.kept;
-        self.diagnostics.extend_errors(decision.refusals);
+        let refusals = (decision.refusals.into_iter())
+            .map(|(declaration, mut error)| {
+                error.source_override = self.declaration_source(declaration);
+                error
+            })
+            .collect();
+        self.diagnostics.extend_errors(refusals);
         self.slot_conventions = slot_conventions::decide_slot_conventions(
             type_definitions,
             &self.kept_parameters,

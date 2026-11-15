@@ -75,6 +75,7 @@ use crate::runtime_effects::RuntimeEffects;
 use super::context::{class_implements_trait, resolve_method_source, MethodSource, TypeDefinition};
 use super::function_analysis::{DeclaredFunction, ModuleId};
 use super::statements::returns::collect_tail_statements;
+use super::type_identities::DeclaredNames;
 use super::utils::{is_auto_copy, Instantiations, ResourceTypes};
 use super::TypeChecker;
 
@@ -1163,8 +1164,8 @@ pub(crate) fn compute_escape_summaries<'a>(
 
     // Step 1: collect all user function definitions.
     let mut fn_defs: HashMap<FunctionId, FunctionDef<'_>> = HashMap::new();
-    collect_function_defs(program, &mut fn_defs, None, facts.modules, true);
-    collect_function_defs(imported, &mut fn_defs, None, facts.modules, false);
+    collect_function_defs(program, &mut fn_defs, None, facts, true);
+    collect_function_defs(imported, &mut fn_defs, None, facts, false);
 
     if fn_defs.is_empty() {
         return summaries;
@@ -1205,14 +1206,15 @@ pub(crate) fn compute_escape_summaries<'a>(
 
 /// Collects every function body in `stmts`: a free function under the
 /// declaration it is ([`FunctionId::Declared`]), and a method — a trait's
-/// default included — under the type that declares it.
+/// default included — under the identity of the type that declares it.
 fn collect_function_defs<'a>(
     stmts: impl IntoIterator<Item = &'a Statement>,
     fn_defs: &mut HashMap<FunctionId, FunctionDef<'a>>,
     class_name: Option<&str>,
-    modules: &HashMap<usize, ModuleId>,
+    facts: &ProgramFacts<'_>,
     located: bool,
 ) {
+    let modules = facts.modules;
     for stmt in stmts {
         match &stmt.node {
             StatementKind::FunctionDeclaration(decl) => {
@@ -1247,18 +1249,18 @@ fn collect_function_defs<'a>(
                 );
             }
             StatementKind::Class(cd) => {
-                if let Some(cls) = extract_name_from_expr(&cd.name) {
-                    collect_function_defs(&cd.body, fn_defs, Some(&cls), modules, located);
+                if let Some(cls) = facts.names.declared(&cd.name) {
+                    collect_function_defs(&cd.body, fn_defs, Some(cls), facts, located);
                 }
             }
             StatementKind::Struct(name_expr, _, _, methods, _, _)
             | StatementKind::Trait(name_expr, _, _, methods, _) => {
-                if let Some(s) = extract_name_from_expr(name_expr) {
-                    collect_function_defs(methods, fn_defs, Some(&s), modules, located);
+                if let Some(s) = facts.names.declared(name_expr) {
+                    collect_function_defs(methods, fn_defs, Some(s), facts, located);
                 }
             }
             StatementKind::Block(stmts) => {
-                collect_function_defs(stmts, fn_defs, class_name, modules, located);
+                collect_function_defs(stmts, fn_defs, class_name, facts, located);
             }
             _ => {}
         }
@@ -1279,21 +1281,6 @@ fn synthetic_self_param() -> Parameter {
         default_value: None,
         is_out: false,
         residency: None,
-    }
-}
-
-/// Extracts a plain class/struct name string from a declaration name expression.
-fn extract_name_from_expr(expr: &Expression) -> Option<String> {
-    match &expr.node {
-        ExpressionKind::Identifier(name, _) => Some(name.clone()),
-        ExpressionKind::TypeDeclaration(inner, _, _, _) => {
-            if let ExpressionKind::Identifier(name, _) = &inner.node {
-                Some(name.clone())
-            } else {
-                None
-            }
-        }
-        _ => None,
     }
 }
 
@@ -1695,6 +1682,9 @@ pub(crate) struct ProgramFacts<'a> {
     /// The module each top-level function declaration is made in, by
     /// statement id.
     pub(crate) modules: &'a HashMap<usize, ModuleId>,
+    /// The identity each type declaration registers its type under, which
+    /// a method's summary is keyed by.
+    pub(crate) names: DeclaredNames<'a>,
 }
 
 /// The locals of a body, by scope: a name declared in a scope is dropped when

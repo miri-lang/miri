@@ -266,7 +266,16 @@ pub fn miri_run_with_env_multiple(input: &str, env_vars: &[(&str, &str)]) -> Com
 /// as the working directory. `MIRI_STDLIB_PATH` is set to the project's own
 /// stdlib so it remains accessible even when CWD changes.
 pub fn miri_run_project(files: &[(&str, &str)]) -> CompilerResult {
-    miri_project(files, "run")
+    miri_project(files, "run", &[])
+}
+
+/// Run a multi-file Miri project with `env_vars` set on the compiler on top
+/// of the defaults [`miri_run_project`] sets.
+pub fn miri_run_project_with_env(
+    files: &[(&str, &str)],
+    env_vars: &[(&str, &str)],
+) -> CompilerResult {
+    miri_project(files, "run", env_vars)
 }
 
 /// Type-check a multi-file Miri project, without building or running it.
@@ -274,11 +283,16 @@ pub fn miri_run_project(files: &[(&str, &str)]) -> CompilerResult {
 /// The warnings a file earns are decided by the type checker, so a test about
 /// one need not pay for a link and a process launch to read it.
 pub fn miri_check_project(files: &[(&str, &str)]) -> CompilerResult {
-    miri_project(files, "check")
+    miri_project(files, "check", &[])
 }
 
-/// Runs `command` over a multi-file project written into a temporary directory.
-fn miri_project(files: &[(&str, &str)], command: &str) -> CompilerResult {
+/// Runs `command` over a multi-file project written into a temporary
+/// directory, with `env_vars` set on top of the defaults.
+fn miri_project(
+    files: &[(&str, &str)],
+    command: &str,
+    env_vars: &[(&str, &str)],
+) -> CompilerResult {
     use std::fs;
     use tempfile::tempdir;
 
@@ -309,6 +323,7 @@ fn miri_project(files: &[(&str, &str)], command: &str) -> CompilerResult {
         .env("MIRI_VERIFY_MIR", "1")
         .env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
         // Prevent linker-override env vars from leaking in from concurrent tests.
+        .envs(env_vars.iter().copied())
         .env_remove("MIRI_CC")
         .env_remove("CC")
         .current_dir(temp_dir.path())

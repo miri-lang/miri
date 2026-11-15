@@ -42,6 +42,7 @@ use super::iteration_plan::{IterationPlan, IterationPlans};
 use super::kept_parameters::declared_type_name;
 use super::open_consumption::{OpenBody, OpenRefusal};
 use super::slot_conventions::SlotConventions;
+use super::type_identities::DeclaredNames;
 use super::utils::{hands_on_a_reference, runs_drop_hook, ResourceTypes};
 use crate::ast::captures::collect_lambda_captures;
 
@@ -340,6 +341,9 @@ pub struct UseAfterMoveChecker<'a> {
     resources: &'a ResourceTypes,
     /// How each `for` statement walks its value, by the statement's id.
     iteration_plans: Option<&'a IterationPlans>,
+    /// The identity each type declaration registers its type under, which
+    /// an open body is named by; read off the written name when absent.
+    names: Option<DeclaredNames<'a>>,
     errors: Vec<TypeError>,
     warnings: Vec<Diagnostic>,
     /// Names currently bound as parameters or `let`/`var` locals.  Used to
@@ -435,6 +439,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             slot_conventions,
             resources,
             iteration_plans: None,
+            names: None,
             errors: vec![],
             warnings: vec![],
             fn_bindings: HashSet::new(),
@@ -460,9 +465,35 @@ impl<'a> UseAfterMoveChecker<'a> {
         self
     }
 
-    pub fn check_program(mut self, program: &Program) -> UseAfterMoveFindings {
+    /// This checker naming each declared type by the identity `names`
+    /// records for it, so a body of a type a module keeps private is named
+    /// as the type checker registered the type.
+    pub(crate) fn with_declared_names(mut self, names: DeclaredNames<'a>) -> Self {
+        self.names = Some(names);
+        self
+    }
+
+    /// The identity the type declaration named by `name` registers its type
+    /// under.
+    fn declared_name<'e>(&self, name: &'e Expression) -> Option<&'e str>
+    where
+        'a: 'e,
+    {
+        match &self.names {
+            Some(names) => names.declared(name),
+            None => declared_type_name(name),
+        }
+    }
+
+    pub fn check_program(self, program: &Program) -> UseAfterMoveFindings {
+        self.check_statements(&program.body)
+    }
+
+    /// Runs the analysis on `statements`, the top level of a file or one
+    /// declaration of it, and returns what it found.
+    pub fn check_statements(mut self, statements: &[Statement]) -> UseAfterMoveFindings {
         let mut consumed: HashMap<String, ConsumedInfo> = HashMap::new();
-        self.check_block(&program.body, &mut consumed);
+        self.check_block(statements, &mut consumed);
         UseAfterMoveFindings {
             errors: self.errors,
             warnings: self.warnings,
@@ -520,7 +551,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.check_open_method_bodies(&class_data.body, |_| open.clone());
             }
             StatementKind::Trait(name, _, _, methods, _) => {
-                let trait_name = declared_type_name(name).map(str::to_string);
+                let trait_name = self.declared_name(name).map(str::to_string);
                 self.check_open_method_bodies(methods, |method| {
                     let trait_name = trait_name.clone()?;
                     let method = method.to_string();
@@ -569,7 +600,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// The body a method of the class named by `name` is, when the class
     /// declares type parameters: compiled once per instantiation.
     fn generic_class_body(&self, name: &Expression) -> Option<OpenBody> {
-        let class = declared_type_name(name)?;
+        let class = self.declared_name(name)?;
         let parameters: Vec<String> = (self.type_definitions.get(class)?.generics()?.iter())
             .map(|generic| generic.name.clone())
             .collect();

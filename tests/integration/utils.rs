@@ -447,6 +447,28 @@ pub fn assert_project_runs_with_output(files: &[(&str, &str)], expected_output: 
     }
 }
 
+/// Assert that a multi-file project prints exactly `expected` under
+/// `MIRI_HEAP_GUARD=1` with the guard silent: the project counterpart of
+/// [`assert_heap_guard_output`].
+pub fn assert_project_heap_guard_output(files: &[(&str, &str)], expected: &str) {
+    use crate::utils::miri_run_project_with_env;
+
+    let result = miri_run_project_with_env(files, &[("MIRI_HEAP_GUARD", "1")]);
+
+    if !result.success || result.stderr.contains("MIRI_HEAP_GUARD:") {
+        panic!(
+            "Expected a clean project run under the heap guard, but got:\n{}",
+            result.output()
+        );
+    }
+    assert_eq!(
+        result.stdout.trim(),
+        expected.trim(),
+        "project output under the heap guard differs:\n{}",
+        result.output()
+    );
+}
+
 /// The type checker's report on a multi-file project, whatever it says.
 pub fn check_project_report(files: &[(&str, &str)]) -> String {
     use crate::utils::miri_check_project;

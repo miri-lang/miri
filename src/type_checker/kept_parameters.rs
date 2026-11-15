@@ -25,10 +25,11 @@
 //!   refused where it is declared ([`thunk_keeper_refusal`]);
 //! - a generic function, or a method declaring type parameters of its own;
 //! - a method of an enum, which the escape analysis does not summarize;
-//! - a `gpu`, `async` or `parallel` function, and one with no body;
-//! - a function an imported module declares. The consumption check walks the
-//!   program's own bodies only, so an imported body records no consumed
-//!   argument and could not hand an owned parameter on by `move`.
+//! - a `gpu`, `async` or `parallel` function, and one with no body.
+//!
+//! Where a function is declared does not change what it owns: one an
+//! imported module declares, the standard library's included, owns what it
+//! keeps as one the program declares does.
 //!
 //! An `out` parameter is the caller's binding itself and is never owned.
 //!
@@ -82,9 +83,11 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
 use super::context::{resolve_method_source, MethodInfo, MethodSource, TypeDefinition};
+use super::diagnostics::shown_type_name;
 use super::escape_analysis::{EscapeSummary, FunctionId};
 use super::function_analysis::{DeclaredFunction, ModuleId};
 use super::thunk_methods::ThunkBodies;
+use super::type_identities::DeclaredNames;
 use super::utils::{hands_on_a_reference, ResourceTypes};
 
 /// For each top-level function owning a resource parameter, which of its
@@ -178,13 +181,17 @@ pub(crate) struct KeepFacts<'a> {
     pub escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
     /// The module declaring each top-level function, by statement id.
     pub modules: &'a HashMap<usize, ModuleId>,
+    /// The identity each type declaration and written type resolved to,
+    /// which a method is keyed by and a parameter's type is read at.
+    pub names: DeclaredNames<'a>,
 }
 
 /// What deciding the owned parameters finds: the table, and a refusal for
-/// each method a runtime thunk calls that keeps a resource it is handed.
+/// each method a runtime thunk calls that keeps a resource it is handed,
+/// beside the id of the statement declaring the method.
 pub(crate) struct KeptDecision {
     pub kept: KeptParameters,
-    pub refusals: Vec<TypeError>,
+    pub refusals: Vec<(usize, TypeError)>,
 }
 
 /// The owned resource parameters of every top-level function, and of every
@@ -215,7 +222,7 @@ fn collect_kept_parameters(
         }
         return;
     }
-    if let Some((owner, methods)) = declared_methods(statement) {
+    if let Some((owner, methods)) = declared_methods(statement, &facts.0.names) {
         for method in methods {
             collect_kept_method(owner, method, facts, decision);
         }
@@ -239,20 +246,25 @@ fn collect_kept_parameters(
     }
 }
 
-/// The name of the class or trait `statement` declares, with the statements
-/// of its body; `None` for any other statement.
+/// The identity of the class or trait `statement` declares, with the
+/// statements of its body; `None` for any other statement. A type a module
+/// keeps private is keyed by its qualified identity, so it never shares a
+/// method's key with a type of the same written name in another file.
 ///
 /// TODO: an enum's methods can own a receiver they keep only once the escape
 /// analysis summarizes them; until then no enum method is seen keeping
 /// anything, and every call to one lends its receiver.
-fn declared_methods(statement: &Statement) -> Option<(&str, &[Statement])> {
+fn declared_methods<'s>(
+    statement: &'s Statement,
+    names: &DeclaredNames<'s>,
+) -> Option<(&'s str, &'s [Statement])> {
     if let StatementKind::Trait(name, _, _, methods, _) = &statement.node {
-        return Some((declared_type_name(name)?, methods.as_slice()));
+        return Some((names.declared(name)?, methods.as_slice()));
     }
     let StatementKind::Class(class) = &statement.node else {
         return None;
     };
-    Some((declared_type_name(&class.name)?, class.body.as_slice()))
+    Some((names.declared(&class.name)?, class.body.as_slice()))
 }
 
 /// The name a type declaration's name expression spells, its type
@@ -291,7 +303,7 @@ fn collect_kept_method(
         let refusal = thunk_keeper_refusal(owner, (decl, method), &positions, facts);
         decision
             .refusals
-            .extend(refusal.map(|error| error.at(statement)));
+            .extend(refusal.map(|error| (statement.id, error.at(statement))));
         return;
     }
     decision
@@ -317,15 +329,13 @@ fn thunk_keeper_refusal(
             hands_on_a_reference(&receiver_kind, facts.type_definitions, facts.resources);
         ("self", hands_on)
     });
-    let params = (decl.explicit_params().iter()).map(|param| {
-        let hands_on = is_handed_on(param, facts.type_definitions, facts.resources);
-        (param.name.as_str(), hands_on)
-    });
+    let params = (decl.explicit_params().iter())
+        .map(|param| (param.name.as_str(), is_declared_handed_on(param, facts)));
     let (name, _) = (receiver.into_iter().chain(params).zip(kept))
         .find(|((_, hands_on), &is_kept)| is_kept && *hands_on)?
         .0;
     Some(ThunkKeeper {
-        owner: owner.to_string(),
+        owner: shown_type_name(owner).to_string(),
         method: decl.name.clone(),
         kept: name.to_string(),
     })
@@ -486,8 +496,7 @@ fn owned_parameters(
     }
     let summary = (facts.escape_summaries).get(&FunctionId::Declared(function.clone()))?;
     let is_owned = |(index, param): (usize, &Parameter)| {
-        summary.directly_escapes(index)
-            && is_handed_on(param, facts.type_definitions, facts.resources)
+        summary.directly_escapes(index) && is_declared_handed_on(param, facts)
     };
     (decl.params.iter().enumerate().any(is_owned))
         .then(|| decl.params.iter().enumerate().map(is_owned).collect())
@@ -501,10 +510,25 @@ fn is_handed_on(
     type_definitions: &HashMap<String, TypeDefinition>,
     resources: &ResourceTypes,
 ) -> bool {
+    held_kind(param).is_some_and(|kind| hands_on_a_reference(kind, type_definitions, resources))
+}
+
+/// [`is_handed_on`] for a parameter a declaration writes, its type read at
+/// the identity checking resolved it to.
+fn is_declared_handed_on(param: &Parameter, facts: &KeepFacts<'_>) -> bool {
+    held_kind(param).is_some_and(|kind| {
+        let kind = facts.names.written_kind(&param.typ, kind);
+        hands_on_a_reference(&kind, facts.type_definitions, facts.resources)
+    })
+}
+
+/// The type `param` declares, when it holds a whole value
+/// ([`is_held_whole`]).
+fn held_kind(param: &Parameter) -> Option<&TypeKind> {
     let ExpressionKind::Type(declared, false) = &param.typ.node else {
-        return false;
+        return None;
     };
-    is_held_whole(param) && hands_on_a_reference(&declared.kind, type_definitions, resources)
+    is_held_whole(param).then_some(&declared.kind)
 }
 
 /// Whether `param` holds a whole value a call can hand over: declared

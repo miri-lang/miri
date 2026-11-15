@@ -431,3 +431,71 @@ fn a_binding_at_a_base_extended_in_another_module_handed_twice_is_reported() {
         "MER_OWN_003",
     );
 }
+
+const MODULE_DERIVED: &str = concat!(
+    "use system.io\n",
+    "\n",
+    "struct DerivedShelf\n",
+    "    slot Base?\n",
+    "\n",
+    "public class Base\n",
+    "    public var id int\n",
+    "    fn init(id int)\n",
+    "        self.id = id\n",
+    "    fn shelve(n int) int\n",
+    "        println(f\"base {self.id}\")\n",
+    "        return n\n",
+    "\n",
+    "public class Derived extends Base\n",
+    "    fn init(id int)\n",
+    "        super.init(id)\n",
+    "    fn drop(self)\n",
+    "        println(f\"closed derived {self.id}\")\n",
+    "    fn shelve(n int) int\n",
+    "        if true\n",
+    "            let _shelf = DerivedShelf(slot: Some(self))\n",
+    "            println(\"shelved\")\n",
+    "        println(\"leaving shelve\")\n",
+    "        return n\n",
+);
+
+fn main_importing_derived(main: &str) -> String {
+    format!("use system.io\nuse local.bases.{{Base, Derived}}\n\n{main}")
+}
+
+/// A hooked subclass declared in an imported module fills the base's slot
+/// as one declared in the program does: the slot owns the receiver, and the
+/// keeper releases it inside the call.
+#[test]
+fn a_hooked_subclass_from_another_module_is_released_by_the_keeper() {
+    let main = main_importing_derived(concat!(
+        "fn run(b Base)\n",
+        "    println(f\"{b.shelve(1)}\")\n",
+        "    println(\"after\")\n",
+        "\n",
+        "fn main()\n",
+        "    run(Derived(1))\n",
+        "    run(Base(2))\n",
+        "    println(\"end\")\n",
+    ));
+    assert_project_heap_guard_output(
+        &[("main.mi", &main), ("bases.mi", MODULE_DERIVED)],
+        "shelved\nclosed derived 1\nleaving shelve\n1\nafter\nbase 2\n1\nafter\nend",
+    );
+}
+
+/// A binding at a base whose hooked subclass another module declares is
+/// refused a second call through a slot owning the receiver.
+#[test]
+fn a_binding_at_a_base_with_a_hooked_subclass_from_another_module_handed_twice_is_reported() {
+    let main = main_importing_derived(concat!(
+        "fn main()\n",
+        "    let b Base = Derived(1)\n",
+        "    println(f\"{b.shelve(1)}\")\n",
+        "    println(f\"{b.shelve(2)}\")\n",
+    ));
+    assert_project_compiler_error(
+        &[("main.mi", &main), ("bases.mi", MODULE_DERIVED)],
+        "MER_OWN_003",
+    );
+}

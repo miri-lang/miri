@@ -514,7 +514,7 @@ impl TypeChecker {
         }
 
         self.modules.current_source_override = old_source_override;
-        self.record_declaration_sources(path_str, file_path, source, module_ast);
+        let file = self.record_declaration_sources(path_str, file_path, source, module_ast);
         self.record_module_symbols(path_str);
         self.record_module_declared_names(path_str, module_ast);
         self.register_module_alias(path_str, alias);
@@ -522,26 +522,32 @@ impl TypeChecker {
             crate::type_checker::ModuleId::imported(path_str),
             module_ast,
         );
+        let start = self.imported_statements.len();
         self.imported_statements.extend(module_ast.body.clone());
+        let statements = start..self.imported_statements.len();
+        self.modules.imported_bodies.push((file, statements));
         self.modules.current_module = old_module;
     }
 
     /// Remembers `file_path` as the file of every function the module declares,
     /// its types' methods included, so a lowering diagnostic raised on one of
-    /// their bodies is rendered against the file its span indexes.
+    /// their bodies is rendered against the file its span indexes. Returns
+    /// the module's file.
     fn record_declaration_sources(
         &mut self,
         path_str: &str,
         file_path: &Path,
         source: &str,
         module_ast: &Program,
-    ) {
+    ) -> std::sync::Arc<ModuleSource> {
+        let is_library = (stdlib_roots().iter()).any(|root| file_path.starts_with(root));
         let file = std::sync::Arc::new(ModuleSource {
             id: SourceId::new(self.modules.imported_sources.len() + 1),
             module: crate::type_checker::ModuleId::imported(path_str),
             name: module_listing_name(path_str),
             path: file_path.to_string_lossy().to_string(),
             text: source.to_string(),
+            is_library,
         });
         self.modules
             .imported_sources
@@ -553,6 +559,7 @@ impl TypeChecker {
                 .declaration_sources
                 .insert(id, std::sync::Arc::clone(&file));
         }
+        file
     }
 
     /// Remembers every function the program's own file declares, its types'

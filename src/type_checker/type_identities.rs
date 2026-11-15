@@ -19,6 +19,8 @@ use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::diagnostics::shown_type_name;
 use crate::type_checker::module_loader::PROGRAM_MODULE;
 use crate::type_checker::TypeChecker;
+use std::borrow::Cow;
+use std::collections::HashMap;
 
 impl TypeChecker {
     /// The identity the type declared by `name_expr` with `visibility` in the
@@ -419,5 +421,51 @@ pub(crate) fn type_components(kind: &TypeKind) -> (Vec<&Type>, Option<&Type>) {
         | TypeKind::Generic(..)
         | TypeKind::Void
         | TypeKind::Error => (Vec::new(), None),
+    }
+}
+
+/// The identity each type declaration and each written type resolved to,
+/// read back by the passes that key a method by its type: a type a module
+/// keeps private is registered under a qualified identity, so its methods
+/// never share a key with a type of the same written name elsewhere.
+#[derive(Clone, Copy)]
+pub(crate) struct DeclaredNames<'a> {
+    qualified: &'a HashMap<usize, String>,
+}
+
+impl<'a> DeclaredNames<'a> {
+    /// The identity the type declaration whose name expression is `name`
+    /// registers its type under; `None` when `name` spells no type name.
+    pub(crate) fn declared<'e>(&self, name: &'e Expression) -> Option<&'e str>
+    where
+        'a: 'e,
+    {
+        match self.qualified.get(&name.id) {
+            Some(identity) => Some(identity),
+            None => crate::type_checker::kept_parameters::declared_type_name(name),
+        }
+    }
+
+    /// `kind`, written in the type expression `written`, with its name
+    /// spelled as the identity checking resolved it to.
+    pub(crate) fn written_kind<'k>(
+        &self,
+        written: &Expression,
+        kind: &'k TypeKind,
+    ) -> Cow<'k, TypeKind> {
+        if let (TypeKind::Custom(_, args), Some(identity)) = (kind, self.qualified.get(&written.id))
+        {
+            return Cow::Owned(TypeKind::Custom(identity.clone(), args.clone()));
+        }
+        Cow::Borrowed(kind)
+    }
+}
+
+impl TypeChecker {
+    /// The identities every type declaration and written type resolved to.
+    pub(crate) fn declared_names(&self) -> DeclaredNames<'_> {
+        DeclaredNames {
+            qualified: &self.modules.qualified_type_names,
+        }
     }
 }
