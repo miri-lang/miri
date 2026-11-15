@@ -1825,44 +1825,14 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
-    /// Builds the "consumed because" chain by following `escape_next_hops`
-    /// through the escape summaries: one note per step, at the place that
-    /// takes it.
-    ///
-    /// Starts at `sink` / `param_idx` and follows hops until reaching a sink
-    /// or a function with no hop data. Empty when no chain info is
-    /// available — always so for a dynamic function value, which has no
-    /// summary.
+    /// The "consumed because" chain of `sink` keeping its parameter
+    /// `param_idx` ([`consumed_because_chain`]). Empty for a dynamic function
+    /// value, which has no summary.
     fn build_chain(&self, sink: &Sink, param_idx: usize) -> Vec<RelatedNote> {
-        let mut notes = Vec::new();
         let Sink::Function(callee_fn) = sink else {
-            return notes;
+            return Vec::new();
         };
-        let mut current_fn = callee_fn.clone();
-        let mut current_param = param_idx;
-        let mut visited = std::collections::HashSet::new();
-        while visited.insert((current_fn.clone(), current_param)) {
-            let Some(site) = (self.escape_summaries.get(&current_fn))
-                .and_then(|summary| summary.escape_next_hops.get(&current_param))
-            else {
-                break;
-            };
-            let message = format!(
-                "consumed because {} \u{2192} {}",
-                current_fn,
-                step(&site.hop)
-            );
-            notes.push(RelatedNote {
-                message,
-                span: site.span,
-            });
-            let EscapeNextHop::Call { callee, param_slot } = &site.hop else {
-                break;
-            };
-            current_fn = callee.clone();
-            current_param = *param_slot;
-        }
-        notes
+        consumed_because_chain(self.escape_summaries, callee_fn, param_idx)
     }
 
     fn extract_callee_name(&self, callee: &Expression) -> String {
@@ -2096,6 +2066,40 @@ fn given_away_capture_error(name: &str, span: Span) -> TypeError {
         repair: None,
         related: Vec::new(),
     }
+}
+
+/// The "consumed because" chain of `function` keeping its parameter
+/// `param`, read off `escape_next_hops` through the escape summaries: one
+/// note per step, at the place that takes it.
+///
+/// Follows hops until reaching a sink or a function with no hop data; empty
+/// when `function` records no place keeping `param`.
+pub(crate) fn consumed_because_chain(
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+    function: &FunctionId,
+    param: usize,
+) -> Vec<RelatedNote> {
+    let mut notes = Vec::new();
+    let mut current = (function.clone(), param);
+    let mut visited = HashSet::new();
+    while visited.insert(current.clone()) {
+        let (current_fn, current_param) = &current;
+        let Some(site) = (summaries.get(current_fn))
+            .and_then(|summary| summary.escape_next_hops.get(current_param))
+        else {
+            break;
+        };
+        let message = format!("consumed because {current_fn} \u{2192} {}", step(&site.hop));
+        notes.push(RelatedNote {
+            message,
+            span: site.span,
+        });
+        let EscapeNextHop::Call { callee, param_slot } = &site.hop else {
+            break;
+        };
+        current = (callee.clone(), *param_slot);
+    }
+    notes
 }
 
 /// What one step of a "consumed because" chain says the function does.

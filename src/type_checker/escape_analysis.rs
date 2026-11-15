@@ -74,6 +74,7 @@ use crate::runtime_effects::RuntimeEffects;
 
 use super::context::{class_implements_trait, resolve_method_source, MethodSource, TypeDefinition};
 use super::function_analysis::{DeclaredFunction, ModuleId};
+use super::hook_receivers::declares_drop_hook;
 use super::statements::returns::collect_tail_statements;
 use super::type_identities::DeclaredNames;
 use super::utils::{is_auto_copy, Instantiations, ResourceTypes};
@@ -1257,6 +1258,17 @@ fn collect_function_defs<'a>(
             | StatementKind::Trait(name_expr, _, _, methods, _) => {
                 if let Some(s) = facts.names.declared(name_expr) {
                     collect_function_defs(methods, fn_defs, Some(s), facts, located);
+                }
+            }
+            // An enum's methods are not summarized (see the kept-parameter
+            // decision); its drop hook is, so the hook's receiver check reads
+            // it as it reads a class's.
+            StatementKind::Enum(name_expr, _, _, methods, _, _) => {
+                if let Some(e) = facts.names.declared(name_expr) {
+                    let hooks: Vec<&Statement> = (methods.iter())
+                        .filter(|method| declares_drop_hook(method))
+                        .collect();
+                    collect_function_defs(hooks, fn_defs, Some(e), facts, located);
                 }
             }
             StatementKind::Block(stmts) => {

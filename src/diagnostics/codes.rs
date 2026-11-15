@@ -1131,7 +1131,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
-    // OWN — Ownership and resource management (6 codes: 001-006)
+    // OWN — Ownership and resource management (7 codes: 001-007)
     "OWN",
     "001",
     OwnResourceNotConsumedAtScopeExit,
@@ -1171,6 +1171,13 @@ diagnostics!(
     "006",
     OwnThunkMethodKeepsValue,
     "Element Method Keeps a Value",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "OWN",
+    "007",
+    OwnHookReceiverEscapes,
+    "Drop Hook Keeps Its Receiver",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

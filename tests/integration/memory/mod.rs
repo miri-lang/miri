@@ -24,6 +24,7 @@ pub mod generic_managed_type_arguments;
 pub mod generic_resource_instantiations;
 pub mod generics;
 pub mod heap_guard;
+pub mod hook_receiver_escapes;
 pub mod kept_base_class_calls;
 pub mod kept_default_and_generic_methods;
 pub mod kept_function_values;

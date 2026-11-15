@@ -62,6 +62,7 @@ pub(crate) mod generics;
 mod gpu_buffer_init;
 mod gpu_integer_width;
 mod hidden_types;
+mod hook_receivers;
 pub(crate) mod hygiene;
 pub mod instantiation_limits;
 pub(crate) mod instantiation_requirements;

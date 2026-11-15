@@ -1,0 +1,16 @@
+// expect: MER_OWN_007
+// summary: Triggers MER_OWN_007: a drop hook builds a value holding self.
+struct Shelf
+    slot Tag?
+
+class Tag
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        let _kept = Shelf(slot: Some(self))
+        println(f"dropped {self.id}")
+
+fn main()
+    let a = Tag(1)
+    println(f"{a.id}")

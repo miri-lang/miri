@@ -13,6 +13,7 @@ Miri manages memory with reference counting and inferred borrowing over copy-on-
 - A store that puts an object back into one of its own fields — the object itself, a closure capturing it, or a value holding it (error, `MER_TYP_081`): reference counting never frees a cycle
 - A write to a value a closure or nested function captured (error, `MER_TYP_090`): a closure holds its own copy, so the write would be lost when the call ends
 - A `clone`, `compare`, `equals` or `hash` a container calls on its elements that keeps a resource it is handed (error, `MER_OWN_006`): the container only lends its elements, so the method cannot become their owner
+- A `drop` hook that keeps `self` — stores it, builds a value of it, captures it, or hands it to a callee that keeps it (error, `MER_OWN_007`): the instance is freed when its hook returns, so nothing may hold it after
 
 ## Key Concepts
 

@@ -86,6 +86,7 @@ use super::context::{resolve_method_source, MethodInfo, MethodSource, TypeDefini
 use super::diagnostics::shown_type_name;
 use super::escape_analysis::{EscapeSummary, FunctionId};
 use super::function_analysis::{DeclaredFunction, ModuleId};
+use super::hook_receivers::{declares_drop_hook, receiver_escape_refusal};
 use super::thunk_methods::ThunkBodies;
 use super::type_identities::DeclaredNames;
 use super::utils::{hands_on_a_reference, ResourceTypes};
@@ -228,6 +229,12 @@ fn collect_kept_parameters(
         }
         return;
     }
+    if let StatementKind::Enum(name, _, _, methods, _, _) = &statement.node {
+        if let Some(owner) = facts.0.names.declared(name) {
+            collect_hook_refusals(owner, methods, facts.0.escape_summaries, decision);
+        }
+        return;
+    }
     let (facts, _) = facts;
     let kept = &mut decision.kept;
     let StatementKind::FunctionDeclaration(decl) = &statement.node else {
@@ -243,6 +250,23 @@ fn collect_kept_parameters(
     if let Some(owned) = owned_parameters(decl, &function, facts) {
         kept.by_declaration.insert(statement.id, owned);
         kept.declarations.insert(function, statement.id);
+    }
+}
+
+/// Refuses each drop hook among the methods of the enum `owner` that keeps
+/// its receiver. An enum's other methods keep nothing: the escape analysis
+/// summarizes only its hook.
+fn collect_hook_refusals(
+    owner: &str,
+    methods: &[Statement],
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+    decision: &mut KeptDecision,
+) {
+    for hook in methods.iter().filter(|method| declares_drop_hook(method)) {
+        let refusal = receiver_escape_refusal(owner, hook, summaries);
+        decision
+            .refusals
+            .extend(refusal.map(|error| (hook.id, error)));
     }
 }
 
@@ -281,7 +305,9 @@ pub(crate) fn declared_type_name(name: &Expression) -> Option<&str> {
 
 /// Records the parameters the method `statement` declares in `owner`'s body
 /// keeps, when it keeps any. A method a runtime thunk calls keeps none: one
-/// whose body keeps a resource it is handed is refused instead.
+/// whose body keeps a resource it is handed is refused instead. A drop hook
+/// lends its receiver and keeps nothing; one whose body keeps its receiver is
+/// refused ([`receiver_escape_refusal`]).
 fn collect_kept_method(
     owner: &str,
     statement: &Statement,
@@ -293,6 +319,13 @@ fn collect_kept_method(
     };
     let declarations = decision.kept.methods.entry(owner.to_string()).or_default();
     (declarations.entry(decl.name.clone()).or_default()).push(statement.id);
+    if decl.is_drop_hook() {
+        let refusal = receiver_escape_refusal(owner, statement, facts.escape_summaries);
+        decision
+            .refusals
+            .extend(refusal.map(|error| (statement.id, error)));
+        return;
+    }
     let Some(method) = slot_method(owner, &decl.name, facts.type_definitions) else {
         return;
     };

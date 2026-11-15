@@ -1,0 +1,22 @@
+// summary: Accepted counterpart of MER_OWN_007: a drop hook copies the plain data out of self and lends self to a reader.
+// expect-stdout: 1
+// expect-stdout: read 1
+// expect-stdout: dropped 1
+struct Record
+    id int
+
+fn read(t Tag) int
+    return t.id
+
+class Tag
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        let kept = Record(id: self.id)
+        println(f"read {read(self)}")
+        println(f"dropped {kept.id}")
+
+fn main()
+    let a = Tag(1)
+    println(f"{a.id}")

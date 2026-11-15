@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 118
+## Error fixtures (`fail/`) — 119
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -32,6 +32,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_OWN_004 | Triggers MER_OWN_004: Unused Value. |
 | MER_OWN_005 | Triggers MER_OWN_005: Drop of a Borrowed Value. |
 | MER_OWN_006 | Triggers MER_OWN_006: an equals a container calls on its elements keeps its parameter. |
+| MER_OWN_007 | Triggers MER_OWN_007: a drop hook builds a value holding self. |
 | MER_PAR_001 | Triggers MER_PAR_001: Unexpected Token. |
 | MER_PAR_001_colon_annotation | Colon-style type annotation (Rust-like syntax, not Miri). |
 | MER_PAR_001_arrow_return_type | Arrow-style return type (Rust-like syntax, not Miri). |
@@ -152,7 +153,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 125
+## Accepted fixtures (`pass/`) — 128
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -186,6 +187,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_OWN_004 | Accepted counterpart of MER_OWN_004: Unused Value does not fire. |
 | MER_OWN_005 | Accepted counterpart of MER_OWN_005: dropping a local the scope owns runs its hook once. |
 | MER_OWN_006 | Accepted counterpart of MER_OWN_006: equals only reads its parameter, and a method called by name keeps it. |
+| MER_OWN_007 | Accepted counterpart of MER_OWN_007: a drop hook copies the plain data out of self and lends self to a reader. |
 | MER_PAR_001 | Correct type annotation syntax without colon |
 | MER_PAR_002 | Accepted counterpart of MER_PAR_002: Unexpected End of File does not fire. |
 | MER_PAR_003 | Accepted counterpart of MER_PAR_003: Invalid Type Declaration does not fire. |
