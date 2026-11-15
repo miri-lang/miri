@@ -1,0 +1,18 @@
+// expect: MER_OWN_006
+// summary: Triggers MER_OWN_006: an equals a container calls on its elements keeps its parameter.
+class Tag
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"dropped {self.id}")
+    public fn equals(other Tag) bool
+        let _kept = Shelf(slot: Some(other))
+        return true
+
+struct Shelf
+    slot Tag?
+
+fn main()
+    let a = Tag(1)
+    println(f"{a.id}")

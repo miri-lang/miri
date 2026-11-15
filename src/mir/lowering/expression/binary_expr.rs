@@ -17,13 +17,18 @@ use crate::mir::{
 use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
+use crate::mir::lowering::dispatch::emit_call_terminator;
 use crate::mir::lowering::dispatch::{conform_lookup_operand, conform_operand_to_slot};
 use crate::mir::lowering::helpers::resolve_type;
+use crate::mir::lowering::kept_parameters::{
+    hand_over_kept_arguments, release_after_kept_call, KeptCall,
+};
 use crate::mir::lowering::loops::{
     lower_compared_range_membership, lower_range_membership, range_value_element, MembershipTypes,
 };
 use crate::mir::lowering::method_dispatch::{
-    lower_method_call_with, operator_method_callee, resolve_inherited_method, MethodArguments,
+    lower_method_call_with, operator_call_convention, operator_method_callee,
+    resolve_inherited_method, MethodArguments,
 };
 use crate::mir::lowering::sequencing::lower_operand;
 use crate::type_checker::context::{MethodInfo, TypeDefinition};
@@ -43,21 +48,55 @@ fn try_lower_binary_trait_method(
     let Some(receiver_ty) = binary_trait_receiver_type(ctx, lhs) else {
         return Ok(None);
     };
-    try_lower_operator_trait_call(
+    let ExpressionKind::Binary(_, _, rhs) = &expr.node else {
+        return Ok(None);
+    };
+    let operands = OperatorOperands {
+        lhs_op,
+        rhs_op,
+        written: Some((lhs, rhs)),
+    };
+    let lowered = try_lower_operator_trait_call(
         ctx,
         &receiver_ty,
         op,
-        OperatorOperands { lhs_op, rhs_op },
+        operands,
         expr.span,
         dest,
         arg_watermark,
-    )
+    )?;
+    if lowered.is_some() {
+        end_consumed_operands(ctx, (lhs, rhs), expr.span)?;
+    }
+    Ok(lowered)
+}
+
+/// End every binding the operator `lhs op rhs` consumed that the call did
+/// not take over by `move`, where the operator consumed it, as a written
+/// call ends its consumed arguments.
+fn end_consumed_operands(
+    ctx: &mut LoweringContext,
+    (lhs, rhs): (&Expression, &Expression),
+    span: Span,
+) -> Result<(), LoweringError> {
+    let operands = std::slice::from_ref(rhs);
+    for (_, local) in
+        crate::mir::lowering::variable::consumed_operand_locals(ctx, Some(lhs), operands)?
+    {
+        crate::mir::lowering::variable::end_consumed_binding(ctx, local, span);
+    }
+    Ok(())
 }
 
 /// The two values an operator is applied to.
-pub(crate) struct OperatorOperands {
+pub(crate) struct OperatorOperands<'e> {
     pub lhs_op: Operand,
     pub rhs_op: Operand,
+    /// The operands as the program wrote them, the left one the call's
+    /// receiver, whose bindings the call may consume; `None` for an operator
+    /// the compiler applies to values already held — a compound assignment's,
+    /// a parameter guard's, a pattern's — which consumes no binding.
+    pub written: Option<(&'e Expression, &'e Expression)>,
 }
 
 /// Lower `op` as a call to the trait method the type of `receiver_ty` defines
@@ -88,14 +127,17 @@ pub(crate) fn try_lower_operator_trait_call(
     };
     let (symbol, return_ty) =
         operator_method_callee(ctx, receiver_ty, &owner, method_name, &method);
-
+    let kept = operator_call_convention(ctx, receiver_ty, (&owner, method_name), &method);
     let call = BinTraitCall {
-        lhs_op: operands.lhs_op,
-        rhs_op: operands.rhs_op,
+        operands,
         dest,
         arg_watermark,
     };
-    let body = OperatorBody { symbol, return_ty };
+    let body = OperatorBody {
+        symbol,
+        return_ty,
+        kept,
+    };
     emit_binary_trait_call(ctx, body, result, call, span).map(Some)
 }
 
@@ -173,16 +215,17 @@ pub(crate) fn operator_method_body(
     }
 }
 
-/// The body an operator calls: its symbol and what it returns.
+/// The body an operator calls: its symbol, what it returns, and the
+/// positions it owns, in operand order with the receiver first.
 struct OperatorBody {
     symbol: Symbol,
     return_ty: Type,
+    kept: Vec<bool>,
 }
 
 /// The operands + bookkeeping for emitting a binary-operator trait call.
-struct BinTraitCall {
-    lhs_op: Operand,
-    rhs_op: Operand,
+struct BinTraitCall<'e> {
+    operands: OperatorOperands<'e>,
     dest: Option<Place>,
     arg_watermark: usize,
 }
@@ -192,43 +235,86 @@ fn emit_binary_trait_call(
     ctx: &mut LoweringContext,
     body: OperatorBody,
     result: TraitResult,
-    call: BinTraitCall,
+    call: BinTraitCall<'_>,
     span: Span,
 ) -> Result<Operand, LoweringError> {
-    let (call_args, arg_locals) = build_trait_call_args(ctx, call.lhs_op, call.rhs_op);
+    let OperatorOperands {
+        lhs_op,
+        rhs_op,
+        written,
+    } = call.operands;
+    let (args, arg_locals) = build_trait_call_args(ctx, lhs_op, rhs_op);
+    let trait_call = TraitCall {
+        func: Operand::function(body.symbol, span),
+        args,
+        arg_locals,
+        kept: &body.kept,
+        written,
+        arg_watermark: call.arg_watermark,
+    };
     let return_ty = body.return_ty;
-    let func_op = Operand::function(body.symbol, span);
-
     let adapt = match result {
         TraitResult::AsReturned => {
-            return return_method_call(
-                ctx,
-                func_op,
-                call_args,
-                arg_locals,
-                return_ty,
-                span,
-                call.dest,
-                call.arg_watermark,
-            )
+            return return_method_call(ctx, trait_call, return_ty, call.dest, span)
         }
         TraitResult::Negated => ResultAdaptation::Negate,
         TraitResult::AgainstZero(bin_op) => ResultAdaptation::CompareToZero(bin_op),
     };
+    let adapted = AdaptedCall {
+        return_ty,
+        adapt,
+        dest: call.dest,
+    };
+    return_adapted_method_call(ctx, trait_call, adapted, span)
+}
 
-    return_adapted_method_call(
-        ctx,
-        func_op,
-        call_args,
+/// The call an operator makes to the method answering it: the body, its
+/// operands, the locals they read, the positions the body owns, and the
+/// operands as written.
+struct TraitCall<'k> {
+    func: Operand,
+    args: Vec<Operand>,
+    arg_locals: Vec<Local>,
+    kept: &'k [bool],
+    written: Option<(&'k Expression, &'k Expression)>,
+    arg_watermark: usize,
+}
+
+/// Emits `call` into `destination`, handing the body each operand at a
+/// position it owns, as a written call hands its arguments
+/// ([`hand_over_kept_arguments`]), then releases every temporary the call did
+/// not take over and ends what it did.
+fn emit_trait_call(
+    ctx: &mut LoweringContext,
+    call: TraitCall<'_>,
+    destination: Place,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let TraitCall {
+        func,
+        mut args,
         arg_locals,
-        AdaptedCall {
-            return_ty,
-            adapt,
-            dest: call.dest,
-            arg_watermark: call.arg_watermark,
-        },
+        kept,
+        written,
+        arg_watermark,
+    } = call;
+    let (receiver, written_args) = match written {
+        Some((lhs, rhs)) => (Some(lhs), std::slice::from_ref(rhs)),
+        None => (None, &[][..]),
+    };
+    let handover = KeptCall {
         span,
-    )
+        receiver,
+        kept,
+        args: written_args,
+        arg_watermark,
+        destination: destination.local,
+    };
+    let mut arg_modes = Vec::new();
+    let handed = hand_over_kept_arguments(ctx, &handover, &mut args, &mut arg_modes)?;
+    emit_call_terminator(ctx, func, args, arg_modes, Vec::new(), destination, span);
+    release_after_kept_call(ctx, &handover, &arg_locals, &handed, span);
+    Ok(())
 }
 
 /// Build `[lhs, rhs, alloc?]` and the list of arg locals (for temp cleanup).
@@ -267,7 +353,6 @@ struct AdaptedCall {
     return_ty: Type,
     adapt: ResultAdaptation,
     dest: Option<Place>,
-    arg_watermark: usize,
 }
 
 /// Emit the trait call into a temp, then assign the operator's own result from
@@ -275,33 +360,12 @@ struct AdaptedCall {
 /// operators.
 fn return_adapted_method_call(
     ctx: &mut LoweringContext,
-    func_op: Operand,
-    call_args: Vec<Operand>,
-    arg_locals: Vec<crate::mir::place::Local>,
+    trait_call: TraitCall<'_>,
     call: AdaptedCall,
     span: Span,
 ) -> Result<Operand, LoweringError> {
     let method_temp = ctx.push_temp(call.return_ty.clone(), span);
-    let after_call_bb = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args: call_args,
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(method_temp),
-            target: Some(after_call_bb),
-        },
-        span,
-    ));
-    ctx.set_current_block(after_call_bb);
-
-    for &local in &arg_locals {
-        if local != method_temp {
-            ctx.emit_temp_drop(local, call.arg_watermark, span);
-        }
-    }
+    emit_trait_call(ctx, trait_call, Place::new(method_temp), span)?;
 
     // The adapted result is a boolean whatever the method returned, so the
     // holding temp is typed from the operator rather than from the method.
@@ -340,16 +404,14 @@ pub(crate) fn zero_operand(span: Span) -> Operand {
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Emit the trait call into `dest`, or a temp of the method's return type,
+/// whose value is the operator's.
 fn return_method_call(
     ctx: &mut LoweringContext,
-    func_op: Operand,
-    call_args: Vec<Operand>,
-    arg_locals: Vec<crate::mir::place::Local>,
+    trait_call: TraitCall<'_>,
     return_ty: Type,
-    span: Span,
     dest: Option<Place>,
-    arg_watermark: usize,
+    span: Span,
 ) -> Result<Operand, LoweringError> {
     let (destination, ret_op) = if let Some(d) = dest {
         (d.clone(), Operand::Copy(d))
@@ -358,28 +420,7 @@ fn return_method_call(
         let p = Place::new(temp);
         (p.clone(), Operand::Copy(p))
     };
-    let dest_local = destination.local;
-    let target_bb = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args: call_args,
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination,
-            target: Some(target_bb),
-        },
-        span,
-    ));
-    ctx.set_current_block(target_bb);
-
-    for &local in &arg_locals {
-        if local != dest_local {
-            ctx.emit_temp_drop(local, arg_watermark, span);
-        }
-    }
-
+    emit_trait_call(ctx, trait_call, destination, span)?;
     Ok(ret_op)
 }
 
@@ -534,7 +575,11 @@ pub(crate) fn lower_compare_call(
 ) -> Result<Operand, LoweringError> {
     match ctx.type_checker.ordering_of(lhs_ty) {
         Some(ValueOrdering::Method) => {
-            let operands = OperatorOperands { lhs_op, rhs_op };
+            let operands = OperatorOperands {
+                lhs_op,
+                rhs_op,
+                written: None,
+            };
             try_lower_operator_trait_call(ctx, lhs_ty, op, operands, span, None, arg_watermark)?
                 .ok_or_else(|| unordered_operand(lhs_ty, span))
         }

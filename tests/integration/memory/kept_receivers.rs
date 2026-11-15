@@ -672,11 +672,11 @@ fn main()
     );
 }
 
-/// A method the compiler calls for an operator is reached without a written
-/// call, and every such call lends: the operator's receiver keeps the late
-/// order, released by the caller after the expression.
+/// An operator is a call to the method it dispatches to, which owns the
+/// receiver it keeps: the receiver is released where the shelf holding it
+/// ends, inside the method.
 #[test]
-fn an_operator_method_keeping_its_receiver_still_lends_it() {
+fn an_operator_method_keeping_its_receiver_owns_it() {
     assert_heap_guard_output(
         r#"
 use system.ops
@@ -704,14 +704,14 @@ fn main()
     let c = a + b
     println(f"sum {c.id}")
 "#,
-        "on shelf\nleaving concat\nsum 3\nclosed 3\nclosed 2\nclosed 1",
+        "on shelf\nclosed 1\nleaving concat\nsum 3\nclosed 3\nclosed 2",
     );
 }
 
-/// A method named `next` is one a `for` loop calls without a written call,
-/// so it lends its receiver even where it is called by name.
+/// A method named `next` that no loop calls is an ordinary method: called by
+/// name, it owns the receiver it keeps, released where its shelf ends.
 #[test]
-fn a_next_method_keeping_its_receiver_still_lends_it() {
+fn a_next_method_called_by_name_owns_the_receiver_it_keeps() {
     assert_heap_guard_output(
         &with_handle(
             r#"
@@ -737,7 +737,7 @@ fn main()
     println("after")
 "#,
         ),
-        "ticked\nleaving next\nclosed ticker 1\nafter",
+        "ticked\nclosed ticker 1\nleaving next\nafter",
     );
 }
 

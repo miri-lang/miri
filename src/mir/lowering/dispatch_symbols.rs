@@ -20,7 +20,6 @@
 //! class inherits from a trait default is not what a set or map matches by.
 
 use super::method_dispatch::{instantiated_callee, resolve_inherited_method};
-use crate::ast::implicit_methods::THUNK_METHOD_NAMES;
 use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{Type, CLONE_METHOD_NAME};
 use crate::mir::symbol::Symbol;
@@ -28,6 +27,7 @@ use crate::type_checker::context::{
     class_ancestry, resolve_method_source, MethodSource, TypeDefinition,
 };
 use crate::type_checker::slot_conventions::SlotConventions;
+use crate::type_checker::thunk_methods::{thunk_body, ThunkQuestion};
 use crate::type_checker::utils::has_drop_hook;
 pub use crate::type_checker::vtable_selectors::collect_vtable_methods;
 use crate::type_checker::vtable_selectors::{class_fills, trait_hierarchy};
@@ -303,14 +303,12 @@ pub fn clone_method_symbol(type_name: &str, type_defs: &HashMap<String, TypeDefi
 }
 
 /// Every function symbol codegen names without a MIR call carrying it, for
-/// every class: the drop hook and the `clone` and element methods its runtime
-/// thunks call. A vtable slot is named only where a reached body constructs an
-/// instance and a reached virtual call reads it, so
+/// every class: the drop hook, and the body each runtime thunk calls to copy,
+/// order, match or hash its elements, which the type checker answers
+/// ([`thunk_body`]) for the thunks and the ownership verdict alike. A vtable
+/// slot is named only where a reached body constructs an instance and a
+/// reached virtual call reads it, so
 /// [`super::vtable_demand::VtableDemand`] reads those off the lowered bodies.
-///
-/// A thunk's own predicate can still skip a class, so this may name a body no
-/// thunk ends up calling; that costs one body compiled needlessly, never one
-/// missing at link time.
 pub fn synthesized_references(type_defs: &HashMap<String, TypeDefinition>) -> HashSet<Symbol> {
     let mut symbols = HashSet::new();
     for (type_name, definition) in type_defs {
@@ -319,9 +317,9 @@ pub fn synthesized_references(type_defs: &HashMap<String, TypeDefinition>) -> Ha
         };
         symbols.extend(drop_hook_symbol(type_name, type_defs));
         symbols.extend(
-            THUNK_METHOD_NAMES
-                .iter()
-                .filter_map(|method| inherited_method_symbol(type_defs, type_name, method)),
+            (ThunkQuestion::ALL.into_iter())
+                .filter(|&question| thunk_body(type_name, question, type_defs).is_some())
+                .map(|question| method_symbol(type_defs, type_name, question.method_name())),
         );
     }
     symbols

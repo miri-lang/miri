@@ -1471,6 +1471,7 @@ fn emit_guard_trait_comparison(
     let operands = crate::mir::lowering::expression::binary_expr::OperatorOperands {
         lhs_op: Operand::Copy(Place::new(comparison.param_local)),
         rhs_op: comparison.guard_val,
+        written: None,
     };
     let lowered = crate::mir::lowering::expression::binary_expr::try_lower_operator_trait_call(
         ctx,

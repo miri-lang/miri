@@ -25,8 +25,7 @@ use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
 use super::expression::unshare::{lent_parameter_write, TemporaryRoot};
 use super::generic_method_calls::{bound_by_position, GenericMethodSite};
 use super::kept_parameters::{
-    hand_over_kept_arguments, refuse_lending_to_a_keeper, release_after_kept_call,
-    slot_call_convention, KeptCall,
+    hand_over_kept_arguments, release_after_kept_call, slot_call_convention, KeptCall,
 };
 use super::written_receiver::{lower_pending_receiver, Receiver};
 use super::{apply_generic_sub, LoweringContext};
@@ -378,29 +377,51 @@ pub(super) fn emit_static_method_call(
 
 /// A call the compiler makes on a value already held in an operand, rather
 /// than one written in the source: the receiver's type, the method's name,
-/// and the operands the call passes, the receiver first.
+/// the operands the call passes, the receiver first, and where the receiver
+/// operand was lowered from, when the call may consume it.
 pub(crate) struct HeldReceiverCall<'a> {
     pub receiver_ty: &'a Type,
     pub method_name: &'a str,
     pub args: Vec<Operand>,
+    pub written_receiver: Option<WrittenReceiver<'a>>,
 }
 
-/// Emit `call` into `destination`, dispatched the way a written call on a
-/// value of its receiver type is: through the vtable when the receiver is a
-/// trait or a class that has one, so the instance's own body answers, and to
-/// the body a written call names otherwise. The arguments are borrowed, as a
-/// written call's are.
-pub(crate) fn emit_held_receiver_method_call(
+/// Where a held call's receiver operand came from, when the call may take
+/// it: the expression it was lowered from, which names the binding the call
+/// may consume (`None` for a value the compiler moved into a temporary of its
+/// own to give the call), and the first local its lowering made: a temporary
+/// at or past it is the call's own, handed over or released once the call
+/// returns.
+pub(crate) struct WrittenReceiver<'a> {
+    pub expr: Option<&'a Expression>,
+    pub watermark: usize,
+}
+
+/// The body a [`HeldReceiverCall`] reaches: the vtable slot a call on a value
+/// of its receiver type goes through, or the one body it names.
+enum HeldCallee {
+    Slot { slot: usize, kept: Vec<bool> },
+    Static { symbol: Symbol, kept: Vec<bool> },
+}
+
+impl HeldCallee {
+    /// The positions the body owns, in operand order with the receiver
+    /// first; empty when it owns none.
+    fn kept(&self) -> &[bool] {
+        match self {
+            HeldCallee::Slot { kept, .. } | HeldCallee::Static { kept, .. } => kept,
+        }
+    }
+}
+
+/// The body a call of `method_name` on a `receiver_ty` value reaches, as a
+/// written call on such a value reaches it, with the method's signature.
+fn held_receiver_callee(
     ctx: &mut LoweringContext,
-    call: HeldReceiverCall,
-    destination: &Place,
+    receiver_ty: &Type,
+    method_name: &str,
     span: Span,
-) -> Result<(), LoweringError> {
-    let HeldReceiverCall {
-        receiver_ty,
-        method_name,
-        mut args,
-    } = call;
+) -> Result<(HeldCallee, MethodInfo), LoweringError> {
     let unresolved = || held_receiver_method_missing(receiver_ty, method_name, span);
     let class_name = crate::type_checker::named_class(&receiver_ty.kind).ok_or_else(unresolved)?;
     let (owner, method) =
@@ -413,70 +434,125 @@ pub(crate) fn emit_held_receiver_method_call(
                 )
             })
             .ok_or_else(unresolved)?;
-    let arg_types: Vec<Type> = method
-        .params
-        .iter()
+    if let Some((slot, root)) = dispatch_slot(ctx, class_name, method_name) {
+        let arg_types: Vec<Type> = (method.params.iter())
+            .map(|(_, declared)| super::read_self_as(declared, receiver_ty))
+            .collect();
+        let operand_types = std::iter::once(receiver_ty).chain(&arg_types);
+        let kept = slot_call_convention(ctx, (root, method_name), operand_types);
+        return Ok((HeldCallee::Slot { slot, kept }, method));
+    }
+    let (symbol, _) = operator_method_callee(ctx, receiver_ty, &owner, method_name, &method);
+    let kept = operator_call_convention(ctx, receiver_ty, (&owner, method_name), &method);
+    Ok((HeldCallee::Static { symbol, kept }, method))
+}
+
+/// The body a [`HeldReceiverCall`] reaches, resolved once for a caller that
+/// asks whether it owns the receiver before lowering the receiver.
+pub(crate) struct HeldCallTarget {
+    callee: HeldCallee,
+    method: MethodInfo,
+}
+
+impl HeldCallTarget {
+    /// The body a call of `method_name` on a `receiver_ty` value reaches, as
+    /// a written call on such a value reaches it.
+    pub(crate) fn of(
+        ctx: &mut LoweringContext,
+        receiver_ty: &Type,
+        method_name: &str,
+        span: Span,
+    ) -> Result<Self, LoweringError> {
+        let (callee, method) = held_receiver_callee(ctx, receiver_ty, method_name, span)?;
+        Ok(HeldCallTarget { callee, method })
+    }
+
+    /// Whether the body owns the call's receiver.
+    pub(crate) fn owns_receiver(&self) -> bool {
+        self.callee.kept().first() == Some(&true)
+    }
+}
+
+/// [`emit_held_call_to`] the body a written call on a value of the call's
+/// receiver type reaches.
+pub(crate) fn emit_held_receiver_method_call(
+    ctx: &mut LoweringContext,
+    call: HeldReceiverCall,
+    destination: &Place,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let target = HeldCallTarget::of(ctx, call.receiver_ty, call.method_name, span)?;
+    emit_held_call_to(ctx, call, target, destination, span)
+}
+
+/// Emit `call` into `destination`, to `target`: through the vtable when the
+/// receiver is a trait or a class that has one, so the instance's own body
+/// answers, and to the body a written call names otherwise.
+///
+/// The call follows the convention of the body or slot it reaches, as a
+/// written call does: an operand at a position it owns is handed over by
+/// `move` when it is the binding `written_receiver` names and the call
+/// consumes, or a temporary only the call releases, and as a funded copy
+/// otherwise, the caller keeping its own.
+pub(crate) fn emit_held_call_to(
+    ctx: &mut LoweringContext,
+    call: HeldReceiverCall,
+    HeldCallTarget { callee, method }: HeldCallTarget,
+    destination: &Place,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let HeldReceiverCall {
+        receiver_ty,
+        method_name: _,
+        mut args,
+        written_receiver,
+    } = call;
+    let arg_types: Vec<Type> = (method.params.iter())
         .map(|(_, declared)| super::read_self_as(declared, receiver_ty))
         .collect();
     let written_count = args.len().saturating_sub(1);
     if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
         args.push(Operand::Copy(Place::new(alloc_local)));
     }
-    let arg_watermark = ctx.body.local_decls.len();
+    let arg_watermark =
+        (written_receiver.as_ref()).map_or(ctx.body.local_decls.len(), |written| written.watermark);
+    let receiver_temp = (written_receiver.as_ref())
+        .and_then(|_| super::dispatch::operand_locals(args.get(..1).unwrap_or_default()).pop());
     let lowered = LoweredMethodCall {
         args,
         written_count,
     };
-    if let Some((slot, root)) = dispatch_slot(ctx, class_name, method_name) {
-        let operand_types = std::iter::once(receiver_ty).chain(&arg_types);
-        let convention = slot_call_convention(ctx, (root, method_name), operand_types);
-        refuse_lending_to_an_owning_slot(&convention, (class_name, method_name), span)?;
-        let virtual_call = VirtualMethodCall {
-            slot,
-            call: lowered,
-            handover: KeptCall::lending(span, (arg_watermark, destination.local)),
-            method_info: &method,
-            arg_types: &arg_types,
-            receiver_temp: None,
-        };
-        return emit_virtual_method_call(ctx, virtual_call, destination, span);
-    }
-    let (symbol, _) = operator_method_callee(ctx, receiver_ty, &owner, method_name, &method);
-    refuse_lending_to_a_keeper(ctx, (&owner, method_name), span)?;
-    let static_call = StaticMethodCall {
-        symbol,
-        call: lowered,
-        handover: KeptCall::lending(span, (arg_watermark, destination.local)),
-        method_info: &method,
-        receiver_temp: None,
-    };
-    emit_static_method_call(ctx, static_call, destination, span)
-}
-
-/// Refuses a call the compiler makes where the program wrote none — one that
-/// lends every operand — through a vtable slot owning a position, which
-/// every body filling it would release though no caller handed it one.
-///
-/// The type checker keeps no parameter of a method the compiler calls so
-/// ([`crate::ast::implicit_methods::is_called_without_a_written_call`]), so
-/// no slot of one owns any; this holds each such call site to that.
-fn refuse_lending_to_an_owning_slot(
-    convention: &[bool],
-    (receiver, method): (&str, &str),
-    span: Span,
-) -> Result<(), LoweringError> {
-    if !convention.contains(&true) {
-        return Ok(());
-    }
-    let message = format!(
-        "the compiler calls `{receiver}.{method}` through a vtable slot owning a parameter, \
-         lending it"
-    );
-    Err(LoweringError::internal(
-        crate::diagnostics::DiagnosticCode::MirValidationFailed,
-        message,
+    let handover = KeptCall {
         span,
-    ))
+        receiver: written_receiver.and_then(|written| written.expr),
+        kept: callee.kept(),
+        args: &[],
+        arg_watermark,
+        destination: destination.local,
+    };
+    match &callee {
+        HeldCallee::Slot { slot, .. } => {
+            let virtual_call = VirtualMethodCall {
+                slot: *slot,
+                call: lowered,
+                handover,
+                method_info: &method,
+                arg_types: &arg_types,
+                receiver_temp,
+            };
+            emit_virtual_method_call(ctx, virtual_call, destination, span)
+        }
+        HeldCallee::Static { symbol, .. } => {
+            let static_call = StaticMethodCall {
+                symbol: symbol.clone(),
+                call: lowered,
+                handover,
+                method_info: &method,
+                receiver_temp,
+            };
+            emit_static_method_call(ctx, static_call, destination, span)
+        }
+    }
 }
 
 /// The vtable slot a call of `method_name` on a `class_name` receiver goes
@@ -864,42 +940,62 @@ fn resolved_generic_method_symbol(
 }
 
 /// The type each parameter of the method `m` calls is passed at: its declared
-/// type with `Self` read as the receiver and the owner's parameters at the
-/// arguments the receiver reaches it at.
+/// type with `Self` read as the receiver, the owner's parameters at the
+/// arguments the receiver reaches it at, and a generic method's own at what
+/// the call binds ([`instantiated_parameter_types`]).
 fn method_argument_types(
     ctx: &LoweringContext,
     m: &ResolvedMethod,
 ) -> Result<Vec<Type>, LoweringError> {
+    let mut method_subs = Vec::new();
+    if m.method_info.declares_type_parameters() {
+        if let Some(args) = ctx.instantiated_call_mapping(m.call_expr_id) {
+            method_subs = bound_by_position(m.method_name, &m.method_info.generics, args, *m.span)?;
+        }
+    }
+    let callee = (m.obj_ty, m.defining_class, m.method_name);
+    Ok(instantiated_parameter_types(
+        ctx,
+        callee,
+        m.method_info,
+        method_subs,
+    ))
+}
+
+/// The type each parameter of `method_name`, which `defining` declares as
+/// `method_info`, is passed at on a receiver of type `obj_ty`: its declared
+/// type with `Self` read as the receiver, the owner's parameters at the
+/// arguments the receiver reaches it at, and the method's own at
+/// `method_subs`.
+fn instantiated_parameter_types(
+    ctx: &LoweringContext,
+    (obj_ty, defining, method_name): (&Type, &str, &str),
+    method_info: &MethodInfo,
+    method_subs: Vec<(String, Type)>,
+) -> Vec<Type> {
     let defs = ctx.type_checker.type_definitions();
-    let (owner, owner_subs) = receiver_instantiation(ctx, m.obj_ty)
-        .and_then(|(name, resolved)| instantiated_callee(defs, &name, &resolved, m.method_name))
+    let (owner, owner_subs) = receiver_instantiation(ctx, obj_ty)
+        .and_then(|(name, resolved)| instantiated_callee(defs, &name, &resolved, method_name))
         .map(|callee| (callee.owner, callee.owner_subs))
         .unwrap_or_else(|| {
-            let subs = trait_receiver_substitution(ctx, m.obj_ty, m.defining_class);
-            (m.defining_class.to_string(), subs)
+            let subs = trait_receiver_substitution(ctx, obj_ty, defining);
+            (defining.to_string(), subs)
         });
     // The body's own substitution: a trait default reads the trait's
     // parameters at what the class's clauses pin, not at a class parameter
-    // that happens to share a name. A generic method's own parameters read
-    // at what the call binds.
+    // that happens to share a name.
     let mut body_subs =
-        instantiation_substitution(ctx.type_checker, &owner, m.method_name, &owner_subs);
-    if m.method_info.declares_type_parameters() {
-        if let Some(args) = ctx.instantiated_call_mapping(m.call_expr_id) {
-            let method_subs =
-                bound_by_position(m.method_name, &m.method_info.generics, args, *m.span)?;
-            body_subs.to_mut().extend(method_subs);
-        }
+        instantiation_substitution(ctx.type_checker, &owner, method_name, &owner_subs);
+    if !method_subs.is_empty() {
+        body_subs.to_mut().extend(method_subs);
     }
-    Ok(m.method_info
-        .params
-        .iter()
+    (method_info.params.iter())
         .map(|(_, declared)| {
-            let at_receiver = super::read_self_as(declared, m.obj_ty);
+            let at_receiver = super::read_self_as(declared, obj_ty);
             let instantiated = apply_generic_sub(&at_receiver, &body_subs);
             super::variable::canonical_declared_type(ctx.type_checker, &instantiated)
         })
-        .collect())
+        .collect()
 }
 
 /// The arguments a call through a trait-typed receiver binds the trait's own
@@ -1331,6 +1427,33 @@ pub(crate) fn operator_method_callee(
             method.return_type.clone(),
         ),
     }
+}
+
+/// The positions the body a call the compiler makes of `method_name` on a
+/// `receiver_ty` value names ([`operator_method_callee`]) owns, read at the
+/// types that body is compiled at, as a written call to it reads them
+/// ([`static_call_convention`]): its receiver at the class the copy is
+/// compiled for, else at `owner` named bare, and each parameter at the type
+/// the receiver passes it at. Empty when the body owns none.
+pub(crate) fn operator_call_convention(
+    ctx: &LoweringContext,
+    receiver_ty: &Type,
+    (owner, method_name): (&str, &str),
+    method: &MethodInfo,
+) -> Vec<bool> {
+    let mono = resolve_generic_class_monomorph(ctx, receiver_ty, method_name, method);
+    let (owner, self_type) = mono.map_or_else(
+        || {
+            let bare = TypeKind::Custom(owner.to_string(), None);
+            (owner.to_string(), Type::new(bare, receiver_ty.span))
+        },
+        |mono| (mono.owner, mono.self_type),
+    );
+    let receiver = (!method.is_static).then_some(self_type);
+    let callee = (receiver_ty, owner.as_str(), method_name);
+    let arg_types = instantiated_parameter_types(ctx, callee, method, Vec::new());
+    (ctx.type_checker)
+        .kept_parameters_of_method_at((&owner, method_name), receiver.iter().chain(&arg_types))
 }
 
 /// Resolve a generic-class method call to its per-instantiation monomorphized

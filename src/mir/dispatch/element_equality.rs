@@ -91,12 +91,11 @@ pub fn element_hash_symbol(
         Some(TypeDefinition::Struct(definition)) => &definition.generics,
         Some(TypeDefinition::Enum(definition)) => &definition.generics,
         Some(TypeDefinition::Class(definition))
-            if crate::type_checker::context::class_method_declaration(
+            if crate::type_checker::thunk_methods::is_asked_of(
                 name,
-                crate::ast::types::EQUALS_METHOD_NAME,
+                crate::type_checker::thunk_methods::ThunkQuestion::Hash,
                 type_defs,
-            )
-            .is_some() =>
+            ) =>
         {
             &definition.generics
         }

@@ -12,12 +12,13 @@ Miri manages memory with reference counting and inferred borrowing over copy-on-
 - Discarding values that must be used (types marked `@must_use`)
 - A store that puts an object back into one of its own fields — the object itself, a closure capturing it, or a value holding it (error, `MER_TYP_081`): reference counting never frees a cycle
 - A write to a value a closure or nested function captured (error, `MER_TYP_090`): a closure holds its own copy, so the write would be lost when the call ends
+- A `clone`, `compare`, `equals` or `hash` a container calls on its elements that keeps a resource it is handed (error, `MER_OWN_006`): the container only lends its elements, so the method cannot become their owner
 
 ## Key Concepts
 
 - **Three kinds, decided by the type alone**: a value (structs, tuples, collections, strings, class instances without a hook), a resource (a class or enum whose release may run a `drop` hook, and anything containing one), and no reference. What must be reached from many places and changed through any of them is a handle into an arena one owner holds
 - **Bitwise values**: A value with only fixed-size, bitwise fields is plain bytes, copied on assignment
-- **A call lends**: The callee reads its arguments and the caller keeps them. Whole-program inference decides which callees keep an argument; only a resource argument the callee keeps is consumed by the call, and a call through a function value the compiler cannot see into counts as keeping it. The rule is the same at the top level of a file as inside a function
+- **A call lends**: The callee reads its arguments and the caller keeps them. Whole-program inference decides which callees keep an argument; only a resource argument the callee keeps is consumed by the call, and a call through a function value the compiler cannot see into counts as keeping it. The rule is the same at the top level of a file as inside a function, and the same for the calls an operator or a `for` loop makes: `a + b` consumes `b` exactly when `a.concat(b)` would, and `for x in c` consumes `c` when its `iterator()` keeps it
 - **`out`**: Declared on the parameter (`fn bump(n out int)`) and spelled at the call (`bump(out n)`). It names a place rooted at a `var` (the variable, a field, an element, an optional payload bound `Some(var cur)`), written through at most one `out` path per call; no other operand of the call may lend a value containing that place, and an operand naming a sibling sees the value from before the call. The place is taken for the call and restored on every exit
 - **Methods**: A method may be called on any binding, `let` included. A method that writes its receiver, called on a lent parameter, writes the caller's value, which is taken for the call and restored after it
 - **Loop bindings**: `for e in es` binds the element `es[i]`; assigning through `e` needs `es` writable, calling a method on `e` does not

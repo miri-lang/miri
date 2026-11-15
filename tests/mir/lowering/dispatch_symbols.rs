@@ -615,19 +615,47 @@ fn method_symbol_names_the_declaring_class_else_the_type_itself() {
     );
 }
 
-/// Every method a container's thunk asks of an element, and its `clone`, is
-/// a body codegen names without a MIR call.
+/// `equals` matching an `Item` against another, as a container's thunk
+/// calls it.
+fn element_equals() -> MethodInfo {
+    let item = Type::new(TypeKind::Custom("Item".to_string(), None), span());
+    MethodInfo {
+        params: vec![("other".to_string(), item)],
+        is_out_flags: vec![false],
+        return_type: Type::new(TypeKind::Boolean, span()),
+        ..method(false, false)
+    }
+}
+
+/// `item` beside the two traits a container asks `compare` and `clone` of.
+fn defs_with_item(item: ClassDefinition) -> HashMap<String, TypeDefinition> {
+    make_defs([
+        ("Item".to_string(), TypeDefinition::Class(item)),
+        (
+            "Comparable".to_string(),
+            TypeDefinition::Trait(trait_def("Comparable", &[], &[])),
+        ),
+        (
+            "Cloneable".to_string(),
+            TypeDefinition::Trait(trait_def("Cloneable", &[], &[])),
+        ),
+    ])
+}
+
+/// Every body a container's thunk calls on a class element is a body
+/// codegen names without a MIR call: the `compare` of a `Comparable`
+/// class, the `clone` of a `Cloneable` one, and an `equals` matching an
+/// element against another.
 #[test]
-fn synthesized_references_names_each_element_method_and_clone_a_class_declares() {
-    let methods: Vec<(&str, MethodInfo)> = ELEMENT_METHOD_NAMES
-        .into_iter()
-        .chain(["clone"])
-        .map(|name| (name, method(false, false)))
-        .collect();
-    let item = class("Item", None, &[], &methods, false);
-    let defs = make_defs([("Item".to_string(), TypeDefinition::Class(item))]);
-    let symbols = synthesized_references(&defs);
-    for name in ELEMENT_METHOD_NAMES.into_iter().chain(["clone"]) {
+fn synthesized_references_names_each_body_a_thunk_calls() {
+    let methods = [
+        ("compare", method(false, false)),
+        ("clone", method(false, false)),
+        ("equals", element_equals()),
+    ];
+    let item = class("Item", None, &["Comparable", "Cloneable"], &methods, false);
+    let symbols = synthesized_references(&defs_with_item(item));
+    for name in ["compare", "clone", "equals"] {
         assert!(
             symbols
                 .iter()
@@ -635,6 +663,24 @@ fn synthesized_references_names_each_element_method_and_clone_a_class_declares()
             "{name}: {symbols:?}"
         );
     }
+}
+
+/// A method merely named like one a thunk calls is not named: `compare`
+/// and `clone` of a class implementing neither trait, and an `equals` that
+/// does not match an element against another.
+#[test]
+fn synthesized_references_skips_a_method_only_named_like_a_thunk_body() {
+    let methods: Vec<(&str, MethodInfo)> = ELEMENT_METHOD_NAMES
+        .into_iter()
+        .chain(["clone"])
+        .map(|name| (name, method(false, false)))
+        .collect();
+    let item = class("Item", None, &[], &methods, false);
+    let symbols = synthesized_references(&defs_with_item(item));
+    assert!(
+        !(symbols.iter()).any(|symbol| symbol.link_name().starts_with("miri.Item.")),
+        "{symbols:?}"
+    );
 }
 
 fn instantiation_kind(source: &str, class: &str, method: &str, param: &str) -> Option<TypeKind> {

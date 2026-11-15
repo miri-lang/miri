@@ -1,0 +1,23 @@
+// summary: Accepted counterpart of MER_OWN_006: equals only reads its parameter, and a method called by name keeps it.
+// expect-stdout: true
+// expect-stdout: dropped 1
+// expect-stdout: dropped 1
+class Tag
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"dropped {self.id}")
+    public fn equals(other Tag) bool
+        return self.id == other.id
+    public fn shelve(other Tag) bool
+        let _kept = Shelf(slot: Some(other))
+        return true
+
+struct Shelf
+    slot Tag?
+
+fn main()
+    let a = Tag(1)
+    let b = Tag(1)
+    println(f"{a == b}")

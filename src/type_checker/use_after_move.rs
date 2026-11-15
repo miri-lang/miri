@@ -22,8 +22,9 @@
 //! the copies reading it as one ([`super::open_consumption`]).
 
 use crate::ast::expression::{ExpressionKind, LeftHandSideExpression};
+use crate::ast::implicit_methods::MEMBERSHIP_METHOD_NAME;
 use crate::ast::statement::{BindingResidency, StatementKind, WhileStatementType, DROP_HOOK_NAME};
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{Type, TypeKind, ITERATOR_METHOD_NAME};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::{Diagnostic, RelatedNote, Severity};
@@ -37,6 +38,7 @@ use super::escape_analysis::{
     returned_tails, EscapeNextHop, EscapeSummary, FunctionId,
 };
 use super::function_analysis::DeclaredFunction;
+use super::iteration_plan::{IterationPlan, IterationPlans};
 use super::kept_parameters::declared_type_name;
 use super::open_consumption::{OpenBody, OpenRefusal};
 use super::slot_conventions::SlotConventions;
@@ -336,6 +338,8 @@ pub struct UseAfterMoveChecker<'a> {
     slot_conventions: &'a SlotConventions,
     /// The named types that are resources, decided once for the program.
     resources: &'a ResourceTypes,
+    /// How each `for` statement walks its value, by the statement's id.
+    iteration_plans: Option<&'a IterationPlans>,
     errors: Vec<TypeError>,
     warnings: Vec<Diagnostic>,
     /// Names currently bound as parameters or `let`/`var` locals.  Used to
@@ -430,6 +434,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             callees,
             slot_conventions,
             resources,
+            iteration_plans: None,
             errors: vec![],
             warnings: vec![],
             fn_bindings: HashSet::new(),
@@ -447,6 +452,14 @@ impl<'a> UseAfterMoveChecker<'a> {
     }
 
     /// Runs the analysis on a complete program and returns what it found.
+    /// This checker reading how each `for` statement walks its value from
+    /// `plans`, so a loop calling an `iterator()` that keeps its receiver
+    /// consumes the value it walks.
+    pub(crate) fn with_iteration_plans(mut self, plans: &'a IterationPlans) -> Self {
+        self.iteration_plans = Some(plans);
+        self
+    }
+
     pub fn check_program(mut self, program: &Program) -> UseAfterMoveFindings {
         let mut consumed: HashMap<String, ConsumedInfo> = HashMap::new();
         self.check_block(&program.body, &mut consumed);
@@ -481,8 +494,14 @@ impl<'a> UseAfterMoveChecker<'a> {
             StatementKind::While(cond, body, kind) => {
                 self.check_while_stmt(cond, body, kind, consumed);
             }
-            StatementKind::For(decls, iter, body) | StatementKind::GpuFrame(decls, iter, body) => {
-                self.check_for_stmt(decls, iter, body, consumed);
+            StatementKind::For(decls, iter, body) => {
+                self.check_expr(iter, consumed);
+                self.consume_walked_iterable(stmt.id, iter, consumed);
+                self.check_for_stmt(decls, body, consumed);
+            }
+            StatementKind::GpuFrame(decls, iter, body) => {
+                self.check_expr(iter, consumed);
+                self.check_for_stmt(decls, body, consumed);
             }
             StatementKind::Forall {
                 vars: decls,
@@ -490,7 +509,8 @@ impl<'a> UseAfterMoveChecker<'a> {
                 body,
                 ..
             } => {
-                self.check_for_stmt(decls, iter, body, consumed);
+                self.check_expr(iter, consumed);
+                self.check_for_stmt(decls, body, consumed);
             }
             StatementKind::GpuFrameBlock(block) => {
                 self.check_stmt(block, consumed);
@@ -825,14 +845,47 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.errors.extend(new_errors);
     }
 
+    /// Consumes the value the `for` statement `statement` walks when the
+    /// loop hands it to an `iterator()` that keeps it, as the written call
+    /// `iterable.iterator()` does: the loop is a call to the body, or the
+    /// vtable slot, the value's type dispatches `iterator()` to.
+    fn consume_walked_iterable(
+        &mut self,
+        statement: usize,
+        iter: &Expression,
+        consumed: &mut Consumed,
+    ) {
+        let plan = self.iteration_plans.and_then(|plans| plans.get(&statement));
+        let Some(IterationPlan::Protocol(_)) = plan else {
+            return;
+        };
+        let iterable = walked_value(iter);
+        let Some(TypeKind::Custom(type_name, _)) = self.types.get(&iterable.id).map(|ty| &ty.kind)
+        else {
+            return;
+        };
+        let Some(summary) = self.receiver_call_summary(type_name, ITERATOR_METHOD_NAME) else {
+            return;
+        };
+        if summary.directly_escapes(0) {
+            let has_summary = |id: &FunctionId| self.escape_summaries.contains_key(id);
+            let owner = method_owner(
+                type_name,
+                ITERATOR_METHOD_NAME,
+                &has_summary,
+                self.type_definitions,
+            )
+            .unwrap_or_else(|| FunctionId::method(type_name, ITERATOR_METHOD_NAME));
+            self.consume_resource_arg(iterable, &Sink::Function(owner), 0, consumed);
+        }
+    }
+
     fn check_for_stmt(
         &mut self,
         decls: &[crate::ast::statement::VariableDeclaration],
-        iter: &Expression,
         body: &Statement,
         consumed: &mut Consumed,
     ) {
-        self.check_expr(iter, consumed);
         let prev_bindings = self.fn_bindings.clone();
         let prev_gpu = self.gpu_bindings.clone();
         let prev_owned = self.owned_locals.clone();
@@ -958,7 +1011,12 @@ impl<'a> UseAfterMoveChecker<'a> {
             }
             ExpressionKind::Call(callee, args) => self.check_call_expr(callee, args, consumed),
             ExpressionKind::Member(obj, _) => self.check_expr(obj, consumed),
-            ExpressionKind::Binary(l, _, r) | ExpressionKind::Logical(l, _, r) => {
+            ExpressionKind::Binary(l, op, r) => {
+                self.check_expr(l, consumed);
+                self.check_expr(r, consumed);
+                self.consume_operator_operands((l, op, r), consumed);
+            }
+            ExpressionKind::Logical(l, _, r) => {
                 self.check_expr(l, consumed);
                 self.check_expr(r, consumed);
             }
@@ -1340,9 +1398,48 @@ impl<'a> UseAfterMoveChecker<'a> {
             is_dynamic_fn,
             consumed,
         );
+        let receiver = match &callee.node {
+            ExpressionKind::Member(object, _) => Some(object.as_ref()),
+            _ => None,
+        };
+        let passed = receiver.into_iter().chain(args.iter().map(argument_value));
+        self.refuse_a_kept_resource_passed_again(passed, &fn_name, &consumed_before, consumed);
+    }
+
+    /// Consumes each operand of `left op right` that the method the operator
+    /// dispatches to keeps, as the written call it stands for does
+    /// ([`operator_call`]): `left.method(right)`, or `right.contains(left)`
+    /// for `in`.
+    fn consume_operator_operands(
+        &mut self,
+        (left, op, right): (&Expression, &BinaryOp, &Expression),
+        consumed: &mut Consumed,
+    ) {
+        let Some((method, [receiver, argument])) = operator_call(left, op, right) else {
+            return;
+        };
+        let Some(TypeKind::Custom(type_name, _)) = self.types.get(&receiver.id).map(|ty| &ty.kind)
+        else {
+            return;
+        };
+        let has_summary = |id: &FunctionId| self.escape_summaries.contains_key(id);
+        let Some(body) = method_owner(type_name, method, &has_summary, self.type_definitions)
+        else {
+            return;
+        };
+        let Some(summary) = self.escape_summaries.get(&body).cloned() else {
+            return;
+        };
+        let consumed_before: HashSet<String> = consumed.keys().cloned().collect();
+        let sink = Sink::Function(body);
+        for (position, operand) in [receiver, argument].into_iter().enumerate() {
+            if summary.directly_escapes(position) {
+                self.consume_resource_arg(operand, &sink, position, consumed);
+            }
+        }
+        let fn_name = sink.to_string();
         self.refuse_a_kept_resource_passed_again(
-            callee,
-            args,
+            [receiver, argument],
             &fn_name,
             &consumed_before,
             consumed,
@@ -1422,20 +1519,15 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// another position, kept or lent. A resource has one owner, so the call
     /// cannot keep it twice, and it cannot lend a view of the value it keeps.
     /// Reported at the second position it is passed at.
-    fn refuse_a_kept_resource_passed_again(
+    fn refuse_a_kept_resource_passed_again<'e>(
         &mut self,
-        callee: &Expression,
-        args: &[Expression],
+        operands: impl IntoIterator<Item = &'e Expression>,
         fn_name: &str,
         consumed_before: &HashSet<String>,
         consumed: &HashMap<String, ConsumedInfo>,
     ) {
-        let receiver = match &callee.node {
-            ExpressionKind::Member(object, _) => Some(object.as_ref()),
-            _ => None,
-        };
         let mut seen: HashSet<&str> = HashSet::new();
-        for passed in receiver.into_iter().chain(args.iter().map(argument_value)) {
+        for passed in operands {
             let ExpressionKind::Identifier(name, _) = &passed.node else {
                 continue;
             };
@@ -1773,6 +1865,28 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
+    /// The summary a call the compiler makes of `method_name` on a value of
+    /// type `type_name` reaches: the vtable slot it dispatches through, as a
+    /// written call on the value does, or the bodies it may run.
+    fn receiver_call_summary(&self, type_name: &str, method_name: &str) -> Option<EscapeSummary> {
+        let summary = method_summary(
+            type_name,
+            method_name,
+            self.escape_summaries,
+            self.type_definitions,
+        );
+        match self
+            .slot_conventions
+            .dispatched_root(type_name, method_name)
+        {
+            Some(root) => {
+                let convention = self.slot_conventions.of(root, method_name);
+                Some(slot_summary(summary.unwrap_or_default(), convention))
+            }
+            None => summary,
+        }
+    }
+
     /// The positions the vtable slot a method call `callee` reads owns, when
     /// the call reads one: its receiver, of type `type_name`, dispatches
     /// `method_name` through a vtable, and is not `super`, which names one
@@ -1811,6 +1925,21 @@ impl<'a> UseAfterMoveChecker<'a> {
     }
 }
 
+/// The method `left op right` calls and its operands in call order, the
+/// receiver first: `left.method(right)` for an operator dispatching to a
+/// method, and `right.contains(left)` for `in`.
+fn operator_call<'e>(
+    left: &'e Expression,
+    op: &BinaryOp,
+    right: &'e Expression,
+) -> Option<(&'static str, [&'e Expression; 2])> {
+    if matches!(op, BinaryOp::In) {
+        return Some((MEMBERSHIP_METHOD_NAME, [right, left]));
+    }
+    let method = crate::ast::implicit_methods::operator_method_name(op)?;
+    Some((method, [left, right]))
+}
+
 /// `summary` with the parameters it keeps replaced by the positions a vtable
 /// slot owns, `convention`, in operand order with the receiver first: what a
 /// call through the slot consumes, whichever body answers it.
@@ -1820,6 +1949,15 @@ fn slot_summary(mut summary: EscapeSummary, convention: &[bool]) -> EscapeSummar
         .map(|(position, _)| position)
         .collect();
     summary
+}
+
+/// The value a `for` loop's iterable expression walks: the value itself,
+/// which the parser may wrap as an iterable-object range.
+fn walked_value(iter: &Expression) -> &Expression {
+    if let ExpressionKind::Range(value, _, RangeExpressionType::IterableObject) = &iter.node {
+        return value;
+    }
+    iter
 }
 
 /// Drop from `state` every name in `names`, bound afresh where they are

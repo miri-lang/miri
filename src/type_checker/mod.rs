@@ -85,6 +85,7 @@ pub(crate) mod runtime_settled;
 pub mod slot_conventions;
 mod source_arithmetic;
 pub mod statements;
+pub mod thunk_methods;
 pub(crate) mod trait_self;
 mod type_identities;
 pub(crate) mod type_mismatch;
@@ -211,6 +212,10 @@ pub struct TypeChecker {
     /// The resource parameters each function owns, which both sides of a
     /// call read; see [`kept_parameters::KeptParameters`].
     pub kept_parameters: kept_parameters::KeptParameters,
+    /// The bodies a container's runtime thunk calls, which the ownership
+    /// verdict refuses to let keep a value and the pipeline emits for the
+    /// thunk; see [`thunk_methods::ThunkBodies`].
+    pub thunk_bodies: thunk_methods::ThunkBodies,
     /// The positions each vtable slot owns, which every call through the
     /// slot and every body filling it read; see
     /// [`slot_conventions::SlotConventions`].
@@ -410,6 +415,7 @@ impl TypeChecker {
             held_operands: body_writes::HeldOperands::default(),
             consumed_arguments: use_after_move::ConsumedArguments::default(),
             kept_parameters: kept_parameters::KeptParameters::default(),
+            thunk_bodies: thunk_methods::ThunkBodies::default(),
             slot_conventions: slot_conventions::SlotConventions::default(),
             runtime_effects: HashMap::new(),
             call_generic_mappings: HashMap::new(),
@@ -1058,6 +1064,7 @@ impl TypeChecker {
             &self.slot_conventions,
             self.resource_types(),
         )
+        .with_iteration_plans(&self.iteration_plans)
         .check_program(program);
         self.diagnostics.extend_errors(findings.errors);
         self.diagnostics.extend_warnings(findings.warnings);
@@ -1085,6 +1092,8 @@ impl TypeChecker {
         if !self.diagnostics.is_empty() {
             return;
         }
+        self.thunk_bodies =
+            thunk_methods::ThunkBodies::of(&self.type_table.global_type_definitions);
         let type_definitions = &self.type_table.global_type_definitions;
         let facts = kept_parameters::KeepFacts {
             type_definitions,
@@ -1092,8 +1101,12 @@ impl TypeChecker {
             escape_summaries: &context.escape_summaries,
             modules: &self.fn_analysis.declaring_modules,
         };
-        self.kept_parameters =
-            kept_parameters::decide_kept_parameters(top_level_statements(program), &facts);
+        let decision = kept_parameters::decide_kept_parameters(
+            top_level_statements(program),
+            (&facts, &self.thunk_bodies),
+        );
+        self.kept_parameters = decision.kept;
+        self.diagnostics.extend_errors(decision.refusals);
         self.slot_conventions = slot_conventions::decide_slot_conventions(
             type_definitions,
             &self.kept_parameters,

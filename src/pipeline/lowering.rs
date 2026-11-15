@@ -1262,44 +1262,28 @@ impl Pipeline {
 
     /// Whether this method is what a container calls on its elements.
     ///
-    /// A List or Array sorts through the ordering method of a class that orders
-    /// its values, a Set or Map matches elements through the `equals` a class
-    /// defines and places them by the `hash` it defines beside it, and every
-    /// container copies a `Cloneable` class's elements through its `clone`. Both are reached through a thunk codegen registers on the
-    /// container, which is a reference no MIR body carries — so scanning call
-    /// sites never finds it, and the instantiation it needs has to be emitted on
-    /// the strength of the class declaring the capability.
+    /// A container copies, orders, matches and places a class's elements
+    /// through a thunk codegen registers on it, which is a reference no MIR
+    /// body carries — so scanning call sites never finds it, and the body it
+    /// calls has to be emitted on the strength of the type checker's answer
+    /// to which bodies a thunk calls ([`ThunkBodies`]), the same answer that
+    /// emits the thunk.
+    ///
+    /// [`ThunkBodies`]: crate::type_checker::thunk_methods::ThunkBodies
     fn is_element_method_body(
         result: &PipelineResult,
         class_name: &str,
         method_name: &str,
     ) -> bool {
-        use crate::ast::types::ORDERING_TRAIT_NAME;
-        use crate::type_checker::context::{class_implements_trait, class_method_declaration};
         let definitions = result.type_checker.type_definitions();
-        let [ordering, equals] = mir::lowering::dispatch_symbols::ELEMENT_METHOD_NAMES;
         // An enum's own `equals` is what `==` on it, and a set or map holding
         // it, compare through: the synthesized structural equality calls it.
-        let hash = crate::ast::types::HASH_METHOD_NAME;
         if let Some(TypeDefinition::Enum(enum_def)) = definitions.get(class_name) {
-            return (method_name == equals || method_name == hash)
-                && enum_def.methods.contains_key(method_name);
+            let is_equality = method_name == crate::ast::types::EQUALS_METHOD_NAME
+                || method_name == crate::ast::types::HASH_METHOD_NAME;
+            return is_equality && enum_def.methods.contains_key(method_name);
         }
-        if !matches!(definitions.get(class_name), Some(TypeDefinition::Class(_))) {
-            return false;
-        }
-        if method_name == ordering {
-            return class_implements_trait(class_name, ORDERING_TRAIT_NAME, definitions);
-        }
-        if method_name == crate::ast::types::CLONE_METHOD_NAME {
-            return class_implements_trait(
-                class_name,
-                crate::ast::types::CLONEABLE_TRAIT_NAME,
-                definitions,
-            );
-        }
-        let declares = |method| class_method_declaration(class_name, method, definitions).is_some();
-        (method_name == equals || method_name == hash) && declares(equals) && declares(method_name)
+        (result.type_checker.thunk_bodies).is_compiled_under(class_name, method_name)
     }
 
     /// Lower every body the program reaches, each under the symbol it is

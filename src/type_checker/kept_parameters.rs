@@ -18,8 +18,11 @@
 //! every parameter instead, and its callers keep releasing a consumed
 //! argument after the call:
 //!
-//! - a constructor, a drop hook, and a method the compiler calls without a
-//!   written call: a runtime thunk's, an operator's, a loop's;
+//! - a constructor and a drop hook, which building and releasing an
+//!   instance runs;
+//! - a method a container's runtime thunk calls ([`ThunkBodies`]), which the
+//!   runtime hands borrowed elements. One keeping a resource it is handed is
+//!   refused where it is declared ([`thunk_keeper_refusal`]);
 //! - a generic function, or a method declaring type parameters of its own;
 //! - a method of an enum, which the escape analysis does not summarize;
 //! - a `gpu`, `async` or `parallel` function, and one with no body;
@@ -28,6 +31,10 @@
 //!   argument and could not hand an owned parameter on by `move`.
 //!
 //! An `out` parameter is the caller's binding itself and is never owned.
+//!
+//! A call the compiler makes where the program wrote none — an operator's,
+//! a `for` loop's — is a call like any other, and the method it reaches
+//! owns what it keeps.
 //!
 //! A method's receiver is a parameter like any other: a method keeping its
 //! instance — storing it, returning it, handing it to a keeper — owns it.
@@ -68,14 +75,16 @@
 use std::collections::HashMap;
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::implicit_methods::is_called_without_a_written_call;
 use crate::ast::statement::{FunctionDeclarationData, Statement, StatementKind};
 use crate::ast::types::{FunctionTypeData, TypeKind};
 use crate::ast::Parameter;
+use crate::diagnostics::DiagnosticCode;
+use crate::error::type_error::{TypeError, TypeErrorKind};
 
 use super::context::{resolve_method_source, MethodInfo, MethodSource, TypeDefinition};
 use super::escape_analysis::{EscapeSummary, FunctionId};
 use super::function_analysis::{DeclaredFunction, ModuleId};
+use super::thunk_methods::ThunkBodies;
 use super::utils::{hands_on_a_reference, ResourceTypes};
 
 /// For each top-level function owning a resource parameter, which of its
@@ -171,37 +180,49 @@ pub(crate) struct KeepFacts<'a> {
     pub modules: &'a HashMap<usize, ModuleId>,
 }
 
+/// What deciding the owned parameters finds: the table, and a refusal for
+/// each method a runtime thunk calls that keeps a resource it is handed.
+pub(crate) struct KeptDecision {
+    pub kept: KeptParameters,
+    pub refusals: Vec<TypeError>,
+}
+
 /// The owned resource parameters of every top-level function, and of every
 /// method of a class, among `statements`.
 pub(crate) fn decide_kept_parameters<'a>(
     statements: impl IntoIterator<Item = &'a Statement>,
-    facts: &KeepFacts<'_>,
-) -> KeptParameters {
-    let mut kept = KeptParameters::default();
+    facts: (&KeepFacts<'_>, &ThunkBodies),
+) -> KeptDecision {
+    let mut decision = KeptDecision {
+        kept: KeptParameters::default(),
+        refusals: Vec::new(),
+    };
     for statement in statements {
-        collect_kept_parameters(statement, facts, &mut kept);
+        collect_kept_parameters(statement, facts, &mut decision);
     }
-    kept.forget_ambiguous_methods();
-    kept
+    decision.kept.forget_ambiguous_methods();
+    decision
 }
 
 fn collect_kept_parameters(
     statement: &Statement,
-    facts: &KeepFacts<'_>,
-    kept: &mut KeptParameters,
+    facts: (&KeepFacts<'_>, &ThunkBodies),
+    decision: &mut KeptDecision,
 ) {
     if let StatementKind::Block(statements) = &statement.node {
         for inner in statements {
-            collect_kept_parameters(inner, facts, kept);
+            collect_kept_parameters(inner, facts, decision);
         }
         return;
     }
     if let Some((owner, methods)) = declared_methods(statement) {
         for method in methods {
-            collect_kept_method(owner, method, facts, kept);
+            collect_kept_method(owner, method, facts, decision);
         }
         return;
     }
+    let (facts, _) = facts;
+    let kept = &mut decision.kept;
     let StatementKind::FunctionDeclaration(decl) = &statement.node else {
         return;
     };
@@ -247,17 +268,18 @@ pub(crate) fn declared_type_name(name: &Expression) -> Option<&str> {
 }
 
 /// Records the parameters the method `statement` declares in `owner`'s body
-/// keeps, when it keeps any.
+/// keeps, when it keeps any. A method a runtime thunk calls keeps none: one
+/// whose body keeps a resource it is handed is refused instead.
 fn collect_kept_method(
     owner: &str,
     statement: &Statement,
-    facts: &KeepFacts<'_>,
-    kept: &mut KeptParameters,
+    (facts, thunk_bodies): (&KeepFacts<'_>, &ThunkBodies),
+    decision: &mut KeptDecision,
 ) {
     let StatementKind::FunctionDeclaration(decl) = &statement.node else {
         return;
     };
-    let declarations = kept.methods.entry(owner.to_string()).or_default();
+    let declarations = decision.kept.methods.entry(owner.to_string()).or_default();
     (declarations.entry(decl.name.clone()).or_default()).push(statement.id);
     let Some(method) = slot_method(owner, &decl.name, facts.type_definitions) else {
         return;
@@ -265,12 +287,91 @@ fn collect_kept_method(
     let Some(positions) = kept_method_positions(owner, (decl, method), facts) else {
         return;
     };
-    kept.kept_by_methods.insert(statement.id, positions);
+    if thunk_bodies.contains(owner, &decl.name) {
+        let refusal = thunk_keeper_refusal(owner, (decl, method), &positions, facts);
+        decision
+            .refusals
+            .extend(refusal.map(|error| error.at(statement)));
+        return;
+    }
+    decision
+        .kept
+        .kept_by_methods
+        .insert(statement.id, positions);
+}
+
+/// The refusal of the method `decl` of `owner`, which a runtime thunk calls,
+/// keeping a resource it is handed: the first position of `kept`, in operand
+/// order, whose declared type hands its reference on. `None` when every
+/// position it keeps holds a value of no such type, which the runtime may
+/// lend it.
+fn thunk_keeper_refusal(
+    owner: &str,
+    (decl, method): (&FunctionDeclarationData, &MethodInfo),
+    kept: &[bool],
+    facts: &KeepFacts<'_>,
+) -> Option<ThunkKeeper> {
+    let receiver_kind = TypeKind::Custom(owner.to_string(), None);
+    let receiver = (!method.is_static).then(|| {
+        let hands_on =
+            hands_on_a_reference(&receiver_kind, facts.type_definitions, facts.resources);
+        ("self", hands_on)
+    });
+    let params = (decl.explicit_params().iter()).map(|param| {
+        let hands_on = is_handed_on(param, facts.type_definitions, facts.resources);
+        (param.name.as_str(), hands_on)
+    });
+    let (name, _) = (receiver.into_iter().chain(params).zip(kept))
+        .find(|((_, hands_on), &is_kept)| is_kept && *hands_on)?
+        .0;
+    Some(ThunkKeeper {
+        owner: owner.to_string(),
+        method: decl.name.clone(),
+        kept: name.to_string(),
+    })
+}
+
+/// A method a runtime thunk calls that keeps the resource it is handed as
+/// `kept`.
+struct ThunkKeeper {
+    owner: String,
+    method: String,
+    kept: String,
+}
+
+impl ThunkKeeper {
+    /// The refusal, reported at the declaration `statement`.
+    fn at(self, statement: &Statement) -> TypeError {
+        let ThunkKeeper {
+            owner,
+            method,
+            kept,
+        } = self;
+        TypeError {
+            kind: TypeErrorKind::Coded {
+                code: DiagnosticCode::OwnThunkMethodKeepsValue,
+                message: format!(
+                    "'{owner}.{method}' keeps '{kept}', but a container calls '{method}' on \
+                     elements it only lends, so it cannot keep one"
+                ),
+                help: Some(format!(
+                    "make '{method}' only read '{kept}', and keep the value in a method the \
+                     program calls by name"
+                )),
+                expected: None,
+                actual: None,
+            },
+            span: statement.span,
+            source_override: None,
+            repair: None,
+            related: Vec::new(),
+        }
+    }
 }
 
 /// Which parameters the method `decl` of `owner`, registered as `method`,
-/// keeps, in operand order; `None` when it keeps none or is called where no
-/// call is written. A parameter declared `out` or optional is never kept: the
+/// keeps, in operand order; `None` when it keeps none or has more than one
+/// calling convention ([`has_one_convention`]). A parameter declared `out` or optional is never kept: the
 /// first is the caller's binding, the second hands on no reference of its
 /// own.
 ///
@@ -281,7 +382,7 @@ fn kept_method_positions(
     (decl, method): (&FunctionDeclarationData, &MethodInfo),
     facts: &KeepFacts<'_>,
 ) -> Option<Vec<bool>> {
-    if !is_called_by_written_call(&decl.name, method) || !has_one_body(decl) {
+    if !has_one_convention(decl, method) || !has_one_body(decl) {
         return None;
     }
     let function = FunctionId::method(owner, &decl.name);
@@ -353,14 +454,12 @@ fn slot_method<'d>(
     }
 }
 
-/// Whether every call to the method `name` is written, naming it or reading
-/// a vtable slot, rather than made by a runtime thunk, an operator or a loop:
-/// no constructor, no generic method, and a name the compiler calls nothing
-/// by.
-fn is_called_by_written_call(name: &str, method: &MethodInfo) -> bool {
-    !method.is_constructor
-        && !method.declares_type_parameters()
-        && !is_called_without_a_written_call(name)
+/// Whether every call to the method `decl`, registered as `method`, passes
+/// its operands one way: not a constructor or a drop hook, which building
+/// and releasing an instance runs, and not a method declaring type
+/// parameters of its own.
+fn has_one_convention(decl: &FunctionDeclarationData, method: &MethodInfo) -> bool {
+    !method.is_constructor && !decl.is_drop_hook() && !method.declares_type_parameters()
 }
 
 /// Whether `decl` has one body every call runs: a host function with a body

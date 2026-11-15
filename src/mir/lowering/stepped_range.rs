@@ -23,7 +23,10 @@ use super::expression::range_expr::written_inclusivity;
 use super::loops::{
     assign, goto, lower_range_pass, range_value_parts, switch_on, EndTest, PassBlocks, WrittenRange,
 };
-use super::method_dispatch::{emit_held_receiver_method_call, HeldReceiverCall};
+use super::method_dispatch::{
+    emit_held_call_to, emit_held_receiver_method_call, HeldCallTarget, HeldReceiverCall,
+    WrittenReceiver,
+};
 use super::{emit_diverging_intrinsic_and_seal, lower_expression, LoweringContext};
 
 /// A `for` loop over a range whose values step through their own methods:
@@ -272,6 +275,7 @@ fn switch_on_order(
             Operand::Copy(Place::new(stepped.var)),
             Operand::Copy(Place::new(stepped.end)),
         ],
+        written_receiver: None,
     };
     emit_held_receiver_method_call(ctx, call, &Place::new(order), *span)?;
     let holds = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
@@ -286,20 +290,43 @@ fn switch_on_order(
 }
 
 /// Replace the loop variable by its `successor()`: the new value is held in
-/// the variable, and the one it replaces is released.
+/// the variable, and the one it replaces is released, or handed to a
+/// `successor` that keeps its receiver, which then owns it.
 fn emit_successor_step(
     ctx: &mut LoweringContext,
     stepped: &SteppedLoop,
     span: &Span,
 ) -> Result<(), LoweringError> {
     let watermark = ctx.body.local_decls.len();
-    let method = (SUCCESSOR_METHOD_NAME, stepped.element.clone());
-    let next = call_element_method(ctx, stepped, method, stepped.var, span)?;
+    let target = HeldCallTarget::of(ctx, &stepped.element, SUCCESSOR_METHOD_NAME, *span)?;
+    let gives_up_the_value = target.owns_receiver();
+    let receiver = if gives_up_the_value {
+        let taken = ctx.push_temp(stepped.element.clone(), *span);
+        let rvalue = Rvalue::Use(Operand::Move(Place::new(stepped.var)));
+        assign(ctx, taken, rvalue, span);
+        taken
+    } else {
+        stepped.var
+    };
+    let next = ctx.push_temp(stepped.element.clone(), *span);
+    let call = HeldReceiverCall {
+        receiver_ty: &stepped.element,
+        method_name: SUCCESSOR_METHOD_NAME,
+        args: vec![Operand::Copy(Place::new(receiver))],
+        written_receiver: gives_up_the_value.then_some(WrittenReceiver {
+            expr: None,
+            watermark,
+        }),
+    };
+    emit_held_call_to(ctx, call, target, &Place::new(next), *span)?;
+    let next_value = Rvalue::Use(Operand::Copy(Place::new(next)));
+    let store = if gives_up_the_value {
+        StatementKind::Assign(Place::new(stepped.var), next_value)
+    } else {
+        StatementKind::Reassign(Place::new(stepped.var), next_value)
+    };
     ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Reassign(
-            Place::new(stepped.var),
-            Rvalue::Use(Operand::Copy(Place::new(next))),
-        ),
+        kind: store,
         span: *span,
     });
     ctx.emit_temp_drop(next, watermark, *span);
@@ -321,6 +348,7 @@ fn call_element_method(
         receiver_ty: &stepped.element,
         method_name: name,
         args: vec![Operand::Copy(Place::new(receiver))],
+        written_receiver: None,
     };
     emit_held_receiver_method_call(ctx, call, &Place::new(result), *span)?;
     Ok(result)

@@ -15,13 +15,11 @@
 
 use super::{TypeFacts, ValueLayout};
 use crate::ast::type_arguments::TypeArgument;
-use crate::ast::types::{
-    is_trait_self, BuiltinCollectionKind, Type, TypeKind, ORDERING_TRAIT_NAME, STRING_TYPE_NAME,
-};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, STRING_TYPE_NAME};
 use crate::mir::dispatch::ELEMENT_METHOD_NAMES;
 use crate::mir::option_layout::LayoutScope;
 use crate::mir::symbol::{Symbol, ThunkKind};
-use crate::type_checker::context::{MethodInfo, TypeDefinition};
+use crate::type_checker::thunk_methods::{thunk_body, ThunkQuestion};
 use std::collections::HashSet;
 
 /// A question a container asks two of its elements, answered by a method the
@@ -45,6 +43,14 @@ impl ElementQuestion {
         match self {
             ElementQuestion::Compare => ThunkKind::Compare,
             ElementQuestion::Equals => ThunkKind::Equals,
+        }
+    }
+
+    /// The question a thunk asks, as the ownership verdict names it.
+    pub fn thunk_question(self) -> ThunkQuestion {
+        match self {
+            ElementQuestion::Compare => ThunkQuestion::Compare,
+            ElementQuestion::Equals => ThunkQuestion::Equals,
         }
     }
 
@@ -148,7 +154,9 @@ impl TypeFacts {
         ))
     }
 
-    /// Whether elements of `type_name` answer `question` themselves.
+    /// Whether elements of `type_name` answer `question` themselves: a thunk
+    /// calls a body of their class for it
+    /// ([`crate::type_checker::thunk_methods::thunk_body`]).
     ///
     /// Only a class does: a value type's bytes already answer it, and an enum
     /// may be stored as a bare discriminant the thunk's null guard would
@@ -156,20 +164,7 @@ impl TypeFacts {
     /// equality the pipeline synthesizes from their `==` instead, which calls
     /// an enum's own `equals` where it declares one.
     pub fn answers(&self, type_name: &str, question: ElementQuestion) -> bool {
-        let Some(TypeDefinition::Class(_)) = self.definitions().get(type_name) else {
-            return false;
-        };
-        match question {
-            ElementQuestion::Compare => {
-                self.implements(type_name, ORDERING_TRAIT_NAME)
-                    && self
-                        .inherited_method(type_name, question.method_name())
-                        .is_some_and(|method| !method.is_abstract)
-            }
-            ElementQuestion::Equals => self
-                .method_body(type_name, question.method_name())
-                .is_some_and(|(declaring, method)| is_element_equality(declaring, method)),
-        }
+        thunk_body(type_name, question.thunk_question(), self.definitions()).is_some()
     }
 
     /// Whether a `type_name` element is copied through its own `clone`: the
@@ -179,15 +174,12 @@ impl TypeFacts {
         self.implements(type_name, crate::ast::types::CLONEABLE_TRAIT_NAME)
     }
 
-    /// Whether a clone thunk is emitted for `type_name`: it is cloneable and
-    /// not an abstract class, whose `clone` may have no compiled body for a
-    /// thunk to call.
+    /// Whether a clone thunk is emitted for `type_name`: a thunk copies its
+    /// elements through a `clone` body
+    /// ([`crate::type_checker::thunk_methods::thunk_body`]); an abstract class
+    /// has none of its own to call.
     pub fn has_clone_thunk(&self, type_name: &str) -> bool {
-        let is_abstract = matches!(
-            self.definitions().get(type_name),
-            Some(TypeDefinition::Class(class)) if class.is_abstract
-        );
-        !is_abstract && self.is_cloneable(type_name)
+        thunk_body(type_name, ThunkQuestion::Clone, self.definitions()).is_some()
     }
 
     /// The instantiation of `class_name` whose element-method thunk is
@@ -276,27 +268,6 @@ fn float_width(kind: &TypeKind) -> Option<FloatWidth> {
     } else {
         None
     }
-}
-
-/// True when `method` is an `equals` a container can call on two elements of
-/// `type_name`: it has a body, takes one value of the class itself and answers
-/// with a boolean. A trait default declares that value as the trait's `Self`,
-/// which is the class the default is lowered for.
-///
-/// The thunk hands the method two element pointers, so a method declared over
-/// some other parameter type would read an element as a value it is not.
-fn is_element_equality(type_name: &str, method: &MethodInfo) -> bool {
-    let [(_, param_ty)] = method.params.as_slice() else {
-        return false;
-    };
-    let takes_own_type = matches!(
-        &param_ty.kind,
-        TypeKind::Custom(name, _) if name == type_name
-    ) || is_trait_self(&param_ty.kind);
-    !method.is_abstract
-        && !method.is_static
-        && takes_own_type
-        && matches!(method.return_type.kind, TypeKind::Boolean)
 }
 
 /// The layout of an element of `kind` matched through the field-wise thunks

@@ -426,8 +426,15 @@ fn setup_loop_variable(
 
 /// The bodies a `for` loop over a class walked by position calls.
 struct IterableMethods {
-    length: Symbol,
-    element_at: Symbol,
+    length: PositionalMethod,
+    element_at: PositionalMethod,
+}
+
+/// A body a `for` loop walking a class by position calls, with the
+/// positions it owns, in operand order with the receiver first.
+struct PositionalMethod {
+    symbol: Symbol,
+    kept: Vec<bool>,
 }
 
 /// The bodies a `for` loop walking `access` calls, or `None` when the
@@ -453,39 +460,79 @@ fn resolve_iterable_methods(
     })
 }
 
-/// The symbol a `for` loop over a `receiver_ty` value of class `class_name`
-/// calls for `method_name`.
+/// The body a `for` loop over a `receiver_ty` value of class `class_name`
+/// calls for `method_name`, with the positions it owns.
 ///
 /// A class that inherits the method gets no copy of it: the body belongs to the
 /// nearest ancestor that declares it, which [`operator_method_callee`] names at
 /// the type arguments the `extends` chain gives it. A class that declares or
 /// overrides the method answers for itself, so each method is resolved
 /// separately — an override of one does not move another.
-pub(super) fn iterable_method_symbol(
+fn iterable_method_symbol(
     ctx: &mut LoweringContext,
     receiver_ty: &Type,
     class_name: &str,
     method_name: &str,
-) -> Symbol {
+) -> PositionalMethod {
     let declared = crate::type_checker::context::class_method_declaration(
         class_name,
         method_name,
         ctx.type_checker.type_definitions(),
     )
     .map(|(owner, method)| (owner.to_string(), method.clone()));
-    match declared {
-        Some((owner, method)) => {
-            super::method_dispatch::operator_method_callee(
-                ctx,
-                receiver_ty,
-                &owner,
-                method_name,
-                &method,
-            )
-            .0
-        }
-        None => Symbol::method(class_name, &[], method_name, &[]),
+    let Some((owner, method)) = declared else {
+        let symbol = Symbol::method(class_name, &[], method_name, &[]);
+        return PositionalMethod {
+            symbol,
+            kept: Vec::new(),
+        };
+    };
+    let (symbol, _) = super::method_dispatch::operator_method_callee(
+        ctx,
+        receiver_ty,
+        &owner,
+        method_name,
+        &method,
+    );
+    let callee = (owner.as_str(), method_name);
+    let kept = super::method_dispatch::operator_call_convention(ctx, receiver_ty, callee, &method);
+    PositionalMethod { symbol, kept }
+}
+
+/// Calls `method` with `args` into `destination`. The loop holds every
+/// operand it passes, so an operand at a position the body owns is handed
+/// over as a funded copy, the loop keeping its own.
+fn emit_positional_call(
+    ctx: &mut LoweringContext,
+    method: &PositionalMethod,
+    mut args: Vec<Operand>,
+    destination: crate::mir::Local,
+    span: &Span,
+) -> Result<(), LoweringError> {
+    // A class method body, which takes the implicit allocator.
+    if let Some(&allocator) = ctx.variable_map.get("allocator") {
+        args.push(Operand::Copy(Place::new(allocator)));
     }
+    let handover = super::kept_parameters::KeptCall {
+        span: *span,
+        receiver: None,
+        kept: &method.kept,
+        args: &[],
+        arg_watermark: ctx.body.local_decls.len(),
+        destination,
+    };
+    let mut arg_modes = Vec::new();
+    let handed = super::kept_parameters::hand_over_kept_arguments(
+        ctx,
+        &handover,
+        &mut args,
+        &mut arg_modes,
+    )?;
+    let func = Operand::function(method.symbol.clone(), *span);
+    let place = Place::new(destination);
+    super::dispatch::emit_call_terminator(ctx, func, args, arg_modes, Vec::new(), place, *span);
+    super::kept_parameters::end_handed_over(ctx, &handed, *span);
+    Ok(())
 }
 
 /// Emit length check and loop header condition.
@@ -497,35 +544,16 @@ fn emit_loop_length(
     list_local: crate::mir::Local,
     iterable: Option<&IterableMethods>,
     span: &Span,
-) {
+) -> Result<(), LoweringError> {
     let Some(methods) = iterable else {
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::Assign(Place::new(len_temp), Rvalue::Len(Place::new(list_local))),
             span: *span,
         });
-        return;
+        return Ok(());
     };
-    let func_op = Operand::function(methods.length.clone(), *span);
-    // A class method is a body this compilation lowers, never a runtime export,
-    // so it always takes the implicit trailing allocator.
-    let mut args = vec![Operand::Copy(Place::new(list_local))];
-    if let Some(&allocator) = ctx.variable_map.get("allocator") {
-        args.push(Operand::Copy(Place::new(allocator)));
-    }
-    let after_len_bb = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args,
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(len_temp),
-            target: Some(after_len_bb),
-        },
-        *span,
-    ));
-    ctx.set_current_block(after_len_bb);
+    let args = vec![Operand::Copy(Place::new(list_local))];
+    emit_positional_call(ctx, &methods.length, args, len_temp, span)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -540,7 +568,7 @@ fn emit_loop_header(
     span: &Span,
 ) -> Result<(), LoweringError> {
     let len_temp = ctx.push_temp(idx_ty.clone(), *span);
-    emit_loop_length(ctx, len_temp, list_local, iterable, span);
+    emit_loop_length(ctx, len_temp, list_local, iterable, span)?;
 
     let cond_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
     ctx.push_statement(crate::mir::Statement {
@@ -574,34 +602,14 @@ fn emit_element_at_call(
     loop_var: crate::mir::Local,
     list_local: crate::mir::Local,
     idx_var: crate::mir::Local,
-    element_at_symbol: &Symbol,
+    element_at: &PositionalMethod,
     span: &Span,
-) {
-    let func_op = Operand::function(element_at_symbol.clone(), *span);
-    let after_elem_bb = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args: {
-                let mut args = vec![
-                    Operand::Copy(Place::new(list_local)),
-                    Operand::Copy(Place::new(idx_var)),
-                ];
-                // A class method body, which takes the implicit allocator.
-                if let Some(&allocator) = ctx.variable_map.get("allocator") {
-                    args.push(Operand::Copy(Place::new(allocator)));
-                }
-                args
-            },
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(loop_var),
-            target: Some(after_elem_bb),
-        },
-        *span,
-    ));
-    ctx.set_current_block(after_elem_bb);
+) -> Result<(), LoweringError> {
+    let args = vec![
+        Operand::Copy(Place::new(list_local)),
+        Operand::Copy(Place::new(idx_var)),
+    ];
+    emit_positional_call(ctx, element_at, args, loop_var, span)
 }
 
 /// Copy the pass's index into the loop's second variable.
@@ -628,7 +636,7 @@ fn emit_loop_body_element_load(
     idx_var: crate::mir::Local,
     iterable: Option<&IterableMethods>,
     span: &Span,
-) {
+) -> Result<(), LoweringError> {
     let loop_var = bindings.element;
     if let Some(methods) = iterable {
         emit_element_at_call(
@@ -638,7 +646,7 @@ fn emit_loop_body_element_load(
             idx_var,
             &methods.element_at,
             span,
-        );
+        )?;
     } else {
         let mut indexed_place = Place::new(list_local);
         indexed_place
@@ -656,6 +664,7 @@ fn emit_loop_body_element_load(
     if let Some(secondary) = bindings.secondary {
         emit_secondary_loop_var(ctx, secondary, idx_var, span);
     }
+    Ok(())
 }
 
 /// Lower one pass of the loop: load its bindings, then run the body.
@@ -682,7 +691,7 @@ fn lower_loop_pass(
         });
         ctx.register_scope_temp(local);
     }
-    emit_loop_body_element_load(ctx, bindings, list_local, idx_var, iterable, span);
+    emit_loop_body_element_load(ctx, bindings, list_local, idx_var, iterable, span)?;
     lower_statement(ctx, body)?;
     ctx.pop_scope(*span);
     Ok(())

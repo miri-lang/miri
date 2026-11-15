@@ -36,7 +36,11 @@ use crate::type_checker::ProtocolWalk;
 use super::loops::{
     assign, bind_loop_variables, goto, lower_loop_iterable, new_latch_block, LoopBindings,
 };
-use super::method_dispatch::{emit_held_receiver_method_call, HeldReceiverCall};
+use super::method_dispatch::{
+    emit_held_call_to, emit_held_receiver_method_call, HeldCallTarget, HeldReceiverCall,
+    WrittenReceiver,
+};
+use super::sequencing::lower_operand;
 use super::{lower_statement, LoweringContext};
 
 /// A `for` loop over a value its plan walks through an iterator.
@@ -67,8 +71,7 @@ pub(super) fn lower_for_through_iterator(
     let iterable_ty = ctx.recorded_type(lowered.iterable.id);
     let second_ty = second_variable_type(&lowered, span)?;
     let bindings = bind_loop_variables(ctx, span, lowered.decls, &iterable_ty, second_ty);
-    let source = lower_loop_iterable(ctx, lowered.iterable, iterable_ty.clone(), span)?;
-    let iterator = start_iterator(ctx, &lowered.walk, source, iterable_ty, span)?;
+    let iterator = start_iterator(ctx, &lowered, iterable_ty, span)?;
 
     let header = ctx.new_basic_block();
     let body_bb = ctx.new_basic_block();
@@ -150,14 +153,17 @@ fn second_variable_type(
     }
 }
 
-/// Call the iterable's `iterator()` on `source` into a temp the loop's scope
-/// owns, so the iterator is released when the loop ends however it ends. The
-/// call is dispatched as a written `c.iterator()` is, reaching a subclass's
-/// override.
+/// Call the iterable's `iterator()` into a temp the loop's scope owns, so the
+/// iterator is released when the loop ends however it ends. The call is
+/// dispatched as a written `c.iterator()` is, reaching a subclass's override.
+///
+/// The call is a call like a written one: an `iterator()` keeping its
+/// receiver owns the iterable, so the loop hands it over, consuming the
+/// binding it names or the temporary it built; one keeping nothing is lent
+/// the iterable, held in a temp of the loop's scope for the whole loop.
 fn start_iterator(
     ctx: &mut LoweringContext,
-    walk: &ProtocolWalk,
-    source: Local,
+    lowered: &IteratorLoop<'_>,
     iterable_ty: Option<Type>,
     span: &Span,
 ) -> Result<Local, LoweringError> {
@@ -169,14 +175,32 @@ fn start_iterator(
             *span,
         )
     })?;
-    let iterator = ctx.push_temp(walk.iterator.clone(), *span);
+    let iterable = lowered.iterable;
+    let target = HeldCallTarget::of(ctx, &receiver_ty, ITERATOR_METHOD_NAME, *span)?;
+    let (source, written_receiver) = if target.owns_receiver() {
+        let watermark = ctx.body.local_decls.len();
+        let source = lower_operand(ctx, iterable)?;
+        let written = WrittenReceiver {
+            expr: Some(iterable),
+            watermark,
+        };
+        (source, Some(written))
+    } else {
+        let held = lower_loop_iterable(ctx, iterable, Some(receiver_ty.clone()), span)?;
+        (Operand::Copy(Place::new(held)), None)
+    };
+    let iterator = ctx.push_temp(lowered.walk.iterator.clone(), *span);
     ctx.register_scope_temp(iterator);
     let call = HeldReceiverCall {
         receiver_ty: &receiver_ty,
         method_name: ITERATOR_METHOD_NAME,
-        args: vec![Operand::Copy(Place::new(source))],
+        args: vec![source],
+        written_receiver,
     };
-    emit_held_receiver_method_call(ctx, call, &Place::new(iterator), *span)?;
+    emit_held_call_to(ctx, call, target, &Place::new(iterator), *span)?;
+    for (_, local) in super::variable::consumed_operand_locals(ctx, Some(iterable), &[])? {
+        super::variable::end_consumed_binding(ctx, local, *span);
+    }
     Ok(iterator)
 }
 
@@ -199,6 +223,7 @@ fn call_iterator_method(
         receiver_ty: &walk.iterator,
         method_name: method,
         args: vec![Operand::Copy(Place::new(iterator))],
+        written_receiver: None,
     };
     emit_held_receiver_method_call(ctx, call, &Place::new(result), *span)?;
     Ok(result)

@@ -119,6 +119,7 @@ fn emit_string_equality_test(
             ty: string_ty.clone(),
             literal: crate::ast::literal::Literal::String(text.to_string()),
         })),
+        written: None,
     };
     let arg_watermark = ctx.body.local_decls.len();
     let lowered = try_lower_operator_trait_call(

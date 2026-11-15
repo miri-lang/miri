@@ -358,19 +358,6 @@ impl<'a> KeptCall<'a> {
             self.span,
         ))
     }
-
-    /// A call the compiler makes where the program wrote none, to a callee
-    /// owning no parameter: it lends every operand.
-    pub(crate) fn lending(span: Span, (arg_watermark, destination): (usize, Local)) -> Self {
-        KeptCall {
-            span,
-            receiver: None,
-            kept: &[],
-            args: &[],
-            arg_watermark,
-            destination,
-        }
-    }
 }
 
 /// The positions a call through the value `callee` evaluates to, `func`,
@@ -715,13 +702,14 @@ pub(crate) fn end_handed_over(ctx: &mut LoweringContext, handed: &HandedOver, sp
     }
 }
 
-/// Refuses a call the compiler makes where the program wrote none — one that
-/// lends every operand — to the method `method` of `owner` when that method
-/// owns a parameter, which it would release though no caller handed it one.
+/// Refuses a call lowered without its callee's convention — one lending
+/// every operand — to the method `method` of `owner` when that method owns a
+/// parameter, which it would release though no caller handed it one.
 ///
-/// The type checker keeps no parameter of a method the compiler calls so
-/// ([`crate::ast::implicit_methods::is_called_without_a_written_call`]);
-/// this holds each such call site to that decision.
+/// Every call an operator or a `for` loop makes follows its callee's
+/// convention ([`hand_over_kept_arguments`]). Two sites still lend, a string
+/// concatenation and a zero-argument method read as a property, and this
+/// holds each to a callee owning nothing.
 pub(crate) fn refuse_lending_to_a_keeper(
     ctx: &LoweringContext,
     (owner, method): (&str, &str),

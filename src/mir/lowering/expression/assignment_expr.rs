@@ -851,6 +851,7 @@ fn combine_compound_operands(
     let operands = crate::mir::lowering::expression::binary_expr::OperatorOperands {
         lhs_op: lhs_op.clone(),
         rhs_op: rhs_op.clone(),
+        written: None,
     };
     // A method call already leaves its result in a temp of the method's own
     // return type. Copying that into a second temp would take a reference the

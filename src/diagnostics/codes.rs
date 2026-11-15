@@ -1131,7 +1131,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
-    // OWN — Ownership and resource management (5 codes: 001-005)
+    // OWN — Ownership and resource management (6 codes: 001-006)
     "OWN",
     "001",
     OwnResourceNotConsumedAtScopeExit,
@@ -1164,6 +1164,13 @@ diagnostics!(
     "005",
     OwnDropOfBorrowedValue,
     "Drop of a Borrowed Value",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "OWN",
+    "006",
+    OwnThunkMethodKeepsValue,
+    "Element Method Keeps a Value",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
