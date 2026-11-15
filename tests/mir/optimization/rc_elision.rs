@@ -732,6 +732,37 @@ mod owned_transfers {
         assert_eq!(found.len(), 1, "the read after the hand-over: {found:?}");
     }
 
+    /// `_2 = _3.slot(L)` through a vtable, `L` handed over, continuing at bb1.
+    fn virtual_call_handing_over_l() -> TerminatorKind {
+        TerminatorKind::VirtualCall {
+            vtable_slot: 0,
+            args: vec![Operand::Copy(place(3)), Operand::Copy(place(1))],
+            arg_modes: vec![ArgMode::Borrowed, ArgMode::Owned],
+            param_types: vec![Some(string_ty())],
+            destination: place(2),
+            target: Some(BasicBlock(1)),
+        }
+    }
+
+    #[test]
+    fn a_dying_argument_a_virtual_call_owns_hands_its_own_reference_over() {
+        let mut blocks = handing_over(vec![decref(1), storage_dead(1)]);
+        blocks[0].terminator = Some(Terminator {
+            kind: virtual_call_handing_over_l(),
+            span: span(),
+        });
+        let mut body = caller(string_ty(), blocks);
+        elide_rc(&mut body, &OwnershipFacts::default());
+        assert_eq!(rc_ops_on_l(&body), 0, "{body}");
+        let handed = match &body.basic_blocks[0].terminator.as_ref().map(|t| &t.kind) {
+            Some(TerminatorKind::VirtualCall { args, .. }) => args.get(1),
+            _ => None,
+        };
+        assert_eq!(handed, Some(&Operand::Move(place(1))), "{body}");
+        let clean = miri::mir::verify::verify_moved_out(&body);
+        assert!(clean.is_empty(), "{clean:?}");
+    }
+
     #[test]
     fn an_argument_passed_twice_keeps_its_retain() {
         let mut blocks = handing_over(vec![decref(1), storage_dead(1)]);

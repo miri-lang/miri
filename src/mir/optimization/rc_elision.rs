@@ -449,7 +449,7 @@ struct OwnedTransfer {
 /// Spell the argument `transfer` cancels as a move of the local it passes.
 fn spell_as_move(body: &mut Body, transfer: &OwnedTransfer) {
     let terminator = body.basic_blocks[transfer.block].terminator.as_mut();
-    if let Some(TerminatorKind::Call { args, .. }) =
+    if let Some(TerminatorKind::Call { args, .. } | TerminatorKind::VirtualCall { args, .. }) =
         terminator.map(|terminator| &mut terminator.kind)
     {
         if let Some(argument) = args.get_mut(transfer.position) {
@@ -469,13 +469,22 @@ fn owned_transfers_from(
     predecessors: &[usize],
 ) -> Vec<OwnedTransfer> {
     let data = &body.basic_blocks[block];
-    let Some(TerminatorKind::Call {
-        args,
-        arg_modes,
-        destination,
-        target: Some(target),
-        ..
-    }) = data.terminator.as_ref().map(|terminator| &terminator.kind)
+    let Some(
+        TerminatorKind::Call {
+            args,
+            arg_modes,
+            destination,
+            target: Some(target),
+            ..
+        }
+        | TerminatorKind::VirtualCall {
+            args,
+            arg_modes,
+            destination,
+            target: Some(target),
+            ..
+        },
+    ) = data.terminator.as_ref().map(|terminator| &terminator.kind)
     else {
         return Vec::new();
     };
@@ -523,17 +532,8 @@ fn passes_an_owned_argument(body: &Body) -> bool {
     body.basic_blocks
         .iter()
         .filter_map(|block| block.terminator.as_ref())
-        .any(|terminator| match &terminator.kind {
-            TerminatorKind::Call { arg_modes, .. } => {
-                arg_modes.iter().any(|mode| mode.hands_over_reference())
-            }
-            TerminatorKind::VirtualCall { .. }
-            | TerminatorKind::GpuLaunch { .. }
-            | TerminatorKind::Goto { .. }
-            | TerminatorKind::SwitchInt { .. }
-            | TerminatorKind::Return
-            | TerminatorKind::Unreachable => false,
-        })
+        .filter_map(|terminator| terminator.passed_arguments())
+        .any(|(_, arg_modes)| arg_modes.iter().any(|mode| mode.hands_over_reference()))
 }
 
 /// Whether `local` is one the body owns and RC insertion releases, whose last

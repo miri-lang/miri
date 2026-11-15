@@ -1557,6 +1557,7 @@ impl Pipeline {
         // jumping through a null slot.
         result.vtable_fills = called.vtables.fills();
         result.withheld_methods = withheld;
+        Self::refuse_unlowered_fills(result, bodies)?;
         let mut reached = Self::reached_class_instances(result, reach, called, symbols);
         reached.extend(generic_copy_instances(
             result.type_checker.type_definitions(),
@@ -1564,6 +1565,28 @@ impl Pipeline {
         ));
         result.reached_instances = reached;
         Self::refuse_unchecked_compiled_instances(result, reach, symbols)
+    }
+
+    /// Fails closed when a vtable slot is filled with a body lowering never
+    /// compiled and that is not withheld at its instance: codegen would write
+    /// the address of a function no part of the program defines, which no
+    /// rule checks outside a verifying build.
+    fn refuse_unlowered_fills(
+        result: &PipelineResult,
+        bodies: &[LoweredBody],
+    ) -> Result<(), CompilerError> {
+        let lowered: HashSet<&Symbol> = bodies.iter().map(|lowered| &lowered.symbol).collect();
+        let Some((vtable, slot)) = result
+            .vtable_fills
+            .unlowered_fill(|symbol| lowered.contains(symbol), &result.withheld_methods)
+        else {
+            return Ok(());
+        };
+        Err(CompilerError::Internal(format!(
+            "slot {} of `{vtable}` is filled with `{}` for `{}`, but no body of that name was \
+             lowered and the method is not withheld at its instance",
+            slot.slot, slot.symbol, slot.method
+        )))
     }
 
     /// The generic class instances lowering compiled a body for in its own

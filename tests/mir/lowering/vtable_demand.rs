@@ -593,3 +593,46 @@ fn a_spelled_vtable_slot_handing_back_an_optional_of_its_parameter_is_filled() {
         vec!["miri.Impl$String.find"]
     );
 }
+
+mod unlowered_fills {
+    //! A filled slot must name a body lowering compiled, or a method withheld
+    //! at its instance whose slot keeps the runtime trap.
+
+    use miri::mir::lowering::vtable_demand::{FilledSlot, VtableFills};
+    use miri::mir::symbol::Symbol;
+    use miri::type_checker::ModuleId;
+    use std::collections::HashSet;
+
+    fn filled_with(symbol: &Symbol) -> VtableFills {
+        let slot = FilledSlot {
+            slot: 0,
+            method: "take".to_string(),
+            symbol: symbol.clone(),
+        };
+        [("vtable.Box".to_string(), vec![slot])]
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn a_slot_filled_with_a_body_never_lowered_is_found() {
+        let missing = Symbol::declared_function(&ModuleId::Program, "never_lowered");
+        let fills = filled_with(&missing);
+        let found = fills.unlowered_fill(|_| false, &HashSet::new());
+        assert_eq!(
+            found.map(|(vtable, slot)| (vtable, slot.symbol.clone())),
+            Some(("vtable.Box", missing))
+        );
+    }
+
+    #[test]
+    fn a_slot_filled_with_a_lowered_or_withheld_body_is_not_found() {
+        let lowered = Symbol::declared_function(&ModuleId::Program, "lowered");
+        let fills = filled_with(&lowered);
+        assert!(fills
+            .unlowered_fill(|symbol| symbol == &lowered, &HashSet::new())
+            .is_none());
+        let withheld = HashSet::from([lowered.clone()]);
+        assert!(fills.unlowered_fill(|_| false, &withheld).is_none());
+    }
+}

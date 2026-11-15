@@ -259,6 +259,19 @@ impl VtableFills {
         self.slots.values_mut().flatten()
     }
 
+    /// The first filled slot, with its vtable's symbol, pointing at a body
+    /// `is_lowered` does not know and `withheld` does not name: a slot codegen
+    /// would write an address no body of the program defines.
+    pub fn unlowered_fill(
+        &self,
+        is_lowered: impl Fn(&Symbol) -> bool,
+        withheld: &std::collections::HashSet<Symbol>,
+    ) -> Option<(&str, &FilledSlot)> {
+        self.iter()
+            .flat_map(|(vtable, slots)| slots.iter().map(move |slot| (vtable, slot)))
+            .find(|(_, slot)| !is_lowered(&slot.symbol) && !withheld.contains(&slot.symbol))
+    }
+
     /// The symbol of every body a filled slot reaches, through an adapter or
     /// not: what each slot points at, and the body each adapter calls.
     pub fn reached_symbols(&self) -> impl Iterator<Item = &Symbol> {
