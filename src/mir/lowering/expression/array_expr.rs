@@ -50,7 +50,7 @@ pub(crate) fn lower_array_expr(
         });
         Operand::Copy(d)
     } else {
-        let temp = ctx.push_temp(ty, expr.span);
+        let temp = ctx.push_temp(ctx.instantiated_type(&ty), expr.span);
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(
                 Place::new(temp),

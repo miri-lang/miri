@@ -4,7 +4,7 @@
 use super::compilation_ids::{new_shared_compilation_ids, SharedCompilationIds};
 use crate::ast::expression::Expression;
 use crate::ast::type_arguments::TypeArgument;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::Type;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -15,9 +15,7 @@ use crate::mir::module::Import;
 use crate::mir::place::{Local, Place};
 use crate::mir::symbol::{ClosureKind, InstantiationKey, RuntimeCallee, Symbol};
 use crate::mir::{BasicBlock, BasicBlockData, Body, LocalDecl, Operand, StatementKind, Terminator};
-use crate::type_checker::instantiation_requirements::spells_a_type;
 use crate::type_checker::{CalleeKind, DeclaredFunction};
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -294,10 +292,17 @@ impl<'a> LoweringContext<'a> {
     /// unchanged.
     pub fn recorded_type(&self, expr_id: usize) -> Option<Type> {
         let ty = self.type_checker.get_type(expr_id)?;
-        Some(super::apply_generic_sub(
-            &self.resolve_self_in(ty),
-            &self.generic_subs,
-        ))
+        Some(self.instantiated_type(ty))
+    }
+
+    /// `ty`, a type read from the type checker or the source, read at the
+    /// body's instantiation: `Self` and the active substitution applied.
+    ///
+    /// A type is read at the instance exactly once, where it is read; a type
+    /// already read there must not pass through again, since nothing in it
+    /// tells a parameter from a program type spelled with the same name.
+    pub fn instantiated_type(&self, ty: &Type) -> Type {
+        super::apply_generic_sub(&self.resolve_self_in(ty), &self.generic_subs)
     }
 
     /// The type arguments the type checker inferred for a call to a generic
@@ -367,14 +372,15 @@ impl<'a> LoweringContext<'a> {
     /// as generic, so reference counting inserts a release for what may be a plain
     /// integer — and one the callee's own claim on the value already accounts for.
     pub fn resolved_type(&self, expr: &Expression) -> Type {
-        let named = super::resolve_type(self.type_checker, expr);
-        super::apply_generic_sub(&self.resolve_self_in(&named), &self.generic_subs)
+        self.instantiated_type(&super::resolve_type(self.type_checker, expr))
     }
 
     /// [`Self::resolved_type`] for a type argument.
     pub fn resolved_argument_type(&self, arg: &TypeArgument) -> Type {
-        let named = super::helpers::resolve_argument_type(self.type_checker, arg);
-        super::apply_generic_sub(&self.resolve_self_in(&named), &self.generic_subs)
+        self.instantiated_type(&super::helpers::resolve_argument_type(
+            self.type_checker,
+            arg,
+        ))
     }
 
     /// [`Self::resolved_type`] for a written declaration, in canonical form.
@@ -813,7 +819,7 @@ impl<'a> LoweringContext<'a> {
     /// Emits no name-dependent MIR beyond `StorageLive`, so the instruction
     /// stream is identical to the combined [`push_local`].
     pub fn alloc_local(&mut self, name: String, ty: Type, span: Span) -> Local {
-        let mut decl = self.instantiated_local_decl(ty, span);
+        let mut decl = self.self_resolved_local_decl(ty, span);
         let name_rc: Rc<str> = Rc::from(name);
 
         if !self.is_release {
@@ -866,7 +872,7 @@ impl<'a> LoweringContext<'a> {
 
     /// Register a function parameter (similar to push_local but no StorageLive)
     pub fn push_param(&mut self, name: String, ty: Type, span: Span) -> Local {
-        let mut decl = self.instantiated_local_decl(ty, span);
+        let mut decl = self.self_resolved_local_decl(ty, span);
         let name_rc: Rc<str> = Rc::from(name);
 
         if !self.is_release {
@@ -886,59 +892,23 @@ impl<'a> LoweringContext<'a> {
     }
 
     pub fn push_temp(&mut self, ty: Type, span: Span) -> Local {
-        let decl = self.instantiated_local_decl(ty, span);
+        let decl = self.self_resolved_local_decl(ty, span);
         self.body.new_local(decl)
     }
 
-    /// A declaration for a local of type `ty`, read at the body's
-    /// instantiation.
+    /// A declaration for a local of type `ty`, with `Self` read as the class
+    /// this body is lowered for.
     ///
-    /// Every local a body declares passes through here, so a monomorphized
-    /// body declares none at a bare generic parameter, however its caller
-    /// derived the type. A local left at `T` is a pointer-width integer slot
-    /// to code generation: a `float` stored in it is read back as its bits,
-    /// and a call passing it is declared with a signature the instantiation's
-    /// own declaration contradicts. Outside a monomorphized body the
-    /// substitution is empty and `ty` is kept as written.
-    ///
-    /// Most callers hand in a type already read at the instance, so only the
-    /// part of the substitution that reading again cannot change is applied;
-    /// see [`Self::repeatable_substitution`].
-    ///
-    /// TODO: this second substitution exists because some callers still hand
-    /// in a type naming the body's parameters, and nothing in a type tells a
-    /// parameter from a program type of the same name. Once every caller
-    /// substitutes the type where it reads it, this pass and
-    /// `repeatable_substitution` are deleted.
-    fn instantiated_local_decl(&self, ty: Type, span: Span) -> LocalDecl {
-        let ty =
-            super::apply_generic_sub(&self.resolve_self_in(&ty), &self.repeatable_substitution());
-        LocalDecl::new(ty, span)
-    }
-
-    /// The part of `generic_subs` a type already read at the instance can be
-    /// read through again unchanged: every parameter whose name no argument
-    /// spells bare. `Map<String, K>` binds the map's `K` to `String` and its
-    /// `V` to a program class `K`; reading `V`'s argument again through the
-    /// whole substitution would turn that class into `String`.
-    pub(crate) fn repeatable_substitution(&self) -> Cow<'_, HashMap<String, Type>> {
-        let is_spelled_bare = |name: &str| {
-            self.generic_subs.values().any(|arg| {
-                spells_a_type(
-                    &arg.kind,
-                    &|kind| matches!(kind, TypeKind::Custom(spelled, None) if spelled == name),
-                )
-            })
-        };
-        if !self.generic_subs.keys().any(|name| is_spelled_bare(name)) {
-            return Cow::Borrowed(&self.generic_subs);
-        }
-        Cow::Owned(
-            (self.generic_subs.iter())
-                .filter(|(name, _)| !is_spelled_bare(name))
-                .map(|(name, arg)| (name.clone(), arg.clone()))
-                .collect(),
-        )
+    /// Every caller hands in a type already read at the body's instantiation
+    /// ([`Self::instantiated_type`]), so the substitution is not applied
+    /// again: nothing in a type tells a parameter from a program type spelled
+    /// with the same name, and a second reading would turn a program class `K`
+    /// held by a `Map<String, K>` into the map's `String`. A caller that
+    /// hands in a type still naming the body's parameters is refused by the
+    /// verifier (`verify_bound_names`), which finds the local declared at a
+    /// parameter the instance does not leave open.
+    fn self_resolved_local_decl(&self, ty: Type, span: Span) -> LocalDecl {
+        LocalDecl::new(self.resolve_self_in(&ty), span)
     }
 
     /// Returns `true` if `kind` requires reference-count management, as the

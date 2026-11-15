@@ -415,7 +415,7 @@ pub(crate) fn lower_math_intrinsic_call(
         place_at_parameter(&mut slots, position, op);
     }
     let arg_ops = operands_in_parameter_order(slots, span)?;
-    let return_ty = gpu_math_return_type(ctx, args, return_ty, span);
+    let return_ty = gpu_math_return_type(ctx, args, ctx.instantiated_type(&return_ty), span);
     let (target, ret_op) = call_destination(ctx, return_ty, dest, span);
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(target, Rvalue::MathIntrinsic(intrinsic, arg_ops)),
@@ -1461,9 +1461,7 @@ fn lower_gpu_slice(
     let end_op = lower_operand(ctx, end)?;
 
     let result_ty = ctx
-        .type_checker
-        .get_type(call_expr_id)
-        .cloned()
+        .recorded_type(call_expr_id)
         .unwrap_or_else(|| Type::new(TypeKind::Int, *span));
     let (destination, op) = call_destination(ctx, result_ty, dest, *span);
 

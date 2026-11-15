@@ -18,7 +18,7 @@ use crate::mir::{
 use std::rc::Rc;
 
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::helpers::{ensure_place, resolve_type};
+use crate::mir::lowering::helpers::ensure_place;
 
 /// Returns the kernel-context field name in `<kernel>.<field>` intermediate
 /// identifiers (e.g. `"thread_idx"` for `"kernel.thread_idx"`), or `None` when
@@ -127,7 +127,7 @@ fn lower_enum_unit_variant(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let ty = resolve_type(ctx.type_checker, expr);
+    let ty = ctx.resolved_type(expr);
     let discr_op = Operand::Constant(Box::new(Constant {
         span: expr.span,
         ty: Type::new(TypeKind::Int, expr.span),

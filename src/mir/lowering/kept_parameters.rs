@@ -127,12 +127,13 @@ pub(crate) fn record_and_bind_kept_method_parameters(
     bind_kept_parameters(ctx, &kept, params, span)
 }
 
-/// The type a parameter declared at `ty` holds in the copy being lowered:
-/// read through the copy's instantiation, as a call passing it reads it
-/// (`method_dispatch::method_argument_types`).
+/// The type a parameter declared at `ty` holds in the copy being lowered, in
+/// the canonical form a call passing it reads it at
+/// (`method_dispatch::method_argument_types`). The parameter is declared at
+/// the copy's instantiation already (`lower_class_method_body`), so `ty` is
+/// not read through the substitution again.
 fn compiled_operand_type(ctx: &LoweringContext, ty: &Type) -> Type {
-    let instantiated = crate::mir::lowering::apply_generic_sub(ty, &ctx.repeatable_substitution());
-    variable::canonical_declared_type(ctx.type_checker, &instantiated)
+    variable::canonical_declared_type(ctx.type_checker, ty)
 }
 
 /// Records `kept`, in operand order, on the body's signature and binds each

@@ -12,7 +12,6 @@ use crate::mir::{
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
-use crate::mir::lowering::helpers::resolve_type;
 
 pub(crate) fn lower_conditional_expr(
     ctx: &mut LoweringContext,
@@ -30,7 +29,7 @@ pub(crate) fn lower_conditional_expr(
     let result_local = if let Some(ref dest_place) = dest {
         dest_place.local
     } else {
-        let result_ty = resolve_type(ctx.type_checker, expr);
+        let result_ty = ctx.resolved_type(expr);
         ctx.push_temp(result_ty, expr.span)
     };
 

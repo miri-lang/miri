@@ -29,6 +29,7 @@ pub mod literal_arguments;
 pub mod loop_variables;
 pub mod multiple_bounds;
 pub mod operator_dispatch;
+pub mod program_types_named_like_parameters;
 pub mod requirements_through_aliases;
 pub mod return_type_parameters;
 pub mod shared_body_releases;

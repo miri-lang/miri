@@ -191,9 +191,7 @@ fn lower_expression_stmt(
         Operand::Function(function) => function.ty.clone(),
         Operand::Copy(place) | Operand::Move(place) => {
             if !place.projection.is_empty() {
-                ctx.type_checker
-                    .get_type(expr.id)
-                    .cloned()
+                ctx.recorded_type(expr.id)
                     .unwrap_or_else(|| ctx.body.local_decls[place.local.0].ty.clone())
             } else {
                 ctx.body.local_decls[place.local.0].ty.clone()

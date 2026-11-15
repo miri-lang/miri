@@ -254,9 +254,7 @@ pub(crate) fn try_lower_kernel_launch(
         .collect();
 
     let return_ty = ctx
-        .type_checker
-        .get_type(call_expr_id)
-        .cloned()
+        .recorded_type(call_expr_id)
         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
     let (destination, op) = super::dispatch::call_destination(ctx, return_ty, dest, *span);
     let target_bb = ctx.new_basic_block();

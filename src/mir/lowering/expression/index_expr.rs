@@ -280,9 +280,7 @@ pub(crate) fn ensure_index_local(
         Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
         _ => {
             let ty = ctx
-                .type_checker
-                .get_type(index_expr.id)
-                .cloned()
+                .recorded_type(index_expr.id)
                 .unwrap_or_else(|| Type::new(TypeKind::Int, index_expr.span));
             let temp = ctx.push_temp(ty, index_expr.span);
             ctx.push_statement(crate::mir::Statement {

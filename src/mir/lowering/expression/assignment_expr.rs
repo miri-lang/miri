@@ -681,7 +681,7 @@ fn lower_index_assign_receiver<'e>(
     obj: &'e Expression,
     span: crate::error::syntax::Span,
 ) -> Result<(PendingReceiver<'e>, Option<TemporaryRoot>), LoweringError> {
-    let obj_ty = ctx.type_checker.get_type(obj.id).cloned();
+    let obj_ty = ctx.recorded_type(obj.id);
     let cow = obj_ty.as_ref().and_then(|ty| {
         let cow = ty
             .kind
@@ -990,9 +990,7 @@ fn normalize_index(
         Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => Ok(p.local),
         _ => {
             let ty = ctx
-                .type_checker
-                .get_type(idx.id)
-                .cloned()
+                .recorded_type(idx.id)
                 .unwrap_or_else(|| Type::new(TypeKind::Int, idx.span));
             let temp = ctx.push_temp(ty, idx.span);
             ctx.push_statement(crate::mir::Statement {

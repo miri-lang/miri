@@ -731,7 +731,7 @@ pub(crate) fn lower_match_expr(
     let result_local = if let Some(ref dest_place) = dest {
         dest_place.local
     } else {
-        ctx.push_temp(result_ty.clone(), expr.span)
+        ctx.push_temp(ctx.instantiated_type(&result_ty), expr.span)
     };
 
     let join_bb = ctx.new_basic_block();
@@ -811,7 +811,7 @@ fn lower_match_subject(
         Operand::Constant(_) | Operand::Function(_) => None,
     };
     let ty = resolve_type(ctx.type_checker, subject);
-    let local = ctx.push_temp(ty.clone(), subject.span);
+    let local = ctx.push_temp(ctx.instantiated_type(&ty), subject.span);
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(Place::new(local), Rvalue::Use(subject_op)),
         span: subject.span,

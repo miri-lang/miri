@@ -72,7 +72,7 @@ fn emit_enum_aggregate(
     // DPS: use the caller-provided destination, else allocate a fresh temp.
     let target = match dest {
         Some(d) => d,
-        None => Place::new(ctx.push_temp(instance, expr.span)),
+        None => Place::new(ctx.push_temp(ctx.instantiated_type(&instance), expr.span)),
     };
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(

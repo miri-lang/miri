@@ -132,7 +132,7 @@ fn try_lower_option_some(
     let target = if let Some(d) = dest {
         d
     } else {
-        let ty = resolve_type(ctx.type_checker, expr);
+        let ty = ctx.resolved_type(expr);
         Place::new(ctx.push_temp(ty, expr.span))
     };
     ctx.push_statement(crate::mir::Statement {
@@ -163,7 +163,7 @@ fn some_optional_type(ctx: &LoweringContext, arg: &Expression, some_expr: &Expre
     }
     let payload = ctx
         .recorded_type(arg.id)
-        .unwrap_or_else(|| resolve_type(ctx.type_checker, arg));
+        .unwrap_or_else(|| ctx.resolved_type(arg));
     Type::new(TypeKind::Option(Box::new(payload)), some_expr.span)
 }
 
@@ -365,7 +365,7 @@ fn try_lower_gpu_shuffle_down(
         }
     };
 
-    let result_ty = resolve_type(ctx.type_checker, &args[0]);
+    let result_ty = ctx.resolved_type(&args[0]);
     let (target, ret_op) = if let Some(ref d) = dest {
         (d.clone(), Operand::Copy(d.clone()))
     } else {
@@ -479,7 +479,7 @@ fn try_lower_atomic_builtin(
     };
 
     // The result is the old value (or the CAS result).
-    let return_ty = resolve_type(ctx.type_checker, expr);
+    let return_ty = ctx.resolved_type(expr);
     let (target, ret_op) = if let Some(ref d) = dest {
         (d.clone(), Operand::Copy(d.clone()))
     } else {
@@ -563,7 +563,7 @@ fn try_lower_vector_builtin(
         arg_ops.push(lower_operand(ctx, arg)?);
     }
 
-    let return_ty = resolve_type(ctx.type_checker, expr);
+    let return_ty = ctx.resolved_type(expr);
     let return_ty = gpu_math_return_type(ctx, args, return_ty, expr.span);
     let (target, ret_op) = if let Some(ref d) = dest {
         (d.clone(), Operand::Copy(d.clone()))
@@ -674,7 +674,7 @@ fn emit_enum_variant_call(
 
     let target = match dest {
         Some(d) => d,
-        None => Place::new(ctx.push_temp(instance, expr.span)),
+        None => Place::new(ctx.push_temp(ctx.instantiated_type(&instance), expr.span)),
     };
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
