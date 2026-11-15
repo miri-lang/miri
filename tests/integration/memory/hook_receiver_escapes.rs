@@ -230,6 +230,46 @@ fn a_hook_handing_self_to_a_trait_method_a_keeper_fills_is_refused() {
 }
 
 #[test]
+fn a_hook_handing_self_to_a_keeper_held_in_a_local_is_refused() {
+    assert_escape_refused(&["let f = keep", "f(self)"], "        f(self)");
+}
+
+#[test]
+fn a_hook_handing_self_to_a_keeping_lambda_held_in_a_local_is_refused() {
+    assert_escape_refused(
+        &["let f = fn(x Tag) int", "    return keep(x)", "f(self)"],
+        "        f(self)",
+    );
+}
+
+#[test]
+fn a_hook_handing_self_through_super_to_a_keeper_is_refused() {
+    let source = r#"
+struct Shelf
+    slot Base?
+
+class Base
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn put_on() int
+        let _shelf = Shelf(slot: Some(self))
+        return 0
+
+class Derived extends Base
+    fn init(id int)
+        super.init(id)
+    fn drop(self)
+        super.put_on()
+
+fn main()
+    let d = Derived(1)
+    println(f"{d.id}")
+"#;
+    assert_escape_refused_in(source, "        super.put_on()");
+}
+
+#[test]
 fn a_hook_handing_an_alias_of_self_to_a_keeper_is_refused() {
     assert_escape_refused(&["let t = self", "keep(t)"], "        keep(t)");
 }

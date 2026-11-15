@@ -240,10 +240,10 @@ fn main()
     );
 }
 
-/// The escape analysis summarizes no enum method, so no enum method keeps its
-/// receiver yet: the caller still releases it after the call.
+/// An enum method keeping its receiver owns it, as a class's method does:
+/// the hook runs where the shelf the method builds ends.
 #[test]
-fn a_resource_enum_receiver_is_released_by_its_caller() {
+fn a_resource_enum_receiver_kept_by_its_method_is_released_where_the_new_owner_ends() {
     assert_heap_guard_output(
         r#"
 struct Shelf
@@ -268,7 +268,7 @@ fn main()
     r.put_on()
     println("after")
 "#,
-        "on shelf\nleaving\nafter\nclosed res",
+        "on shelf\nclosed res\nleaving\nafter",
     );
 }
 

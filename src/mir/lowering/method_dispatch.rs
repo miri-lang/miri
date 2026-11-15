@@ -4,6 +4,7 @@
 //! Method dispatch lowering — inheritance resolution, virtual/static dispatch.
 
 use crate::ast::expression::Expression;
+use crate::ast::statement::RECEIVER_PARAM_NAME;
 use crate::ast::types::{STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::ast::{ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
@@ -1759,13 +1760,18 @@ fn prepare_method_self<'e>(
     Ok((Receiver::Ready(self_op), obj_temp_local))
 }
 
-/// Lower a method receiver, resolving `super` to the `self` binding.
+/// Lower a method receiver, resolving `super` to the `self` binding, which a
+/// call keeping its receiver consumes as it consumes `self`.
 fn lower_method_receiver(
     ctx: &mut LoweringContext,
     obj: &Expression,
 ) -> Result<Operand, LoweringError> {
     if matches!(&obj.node, ExpressionKind::Super) {
-        if let Some(&self_local) = ctx.variable_map.get("self") {
+        if let Some(&self_local) = ctx.variable_map.get(RECEIVER_PARAM_NAME) {
+            if super::variable::is_consumed_here(ctx, obj) {
+                let read = super::variable::ConsumedRead::Pending(self_local);
+                ctx.consumed_reads.insert(obj.id, read);
+            }
             return Ok(Operand::Copy(Place::new(self_local)));
         }
     }

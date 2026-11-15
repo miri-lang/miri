@@ -24,7 +24,6 @@
 //!   runtime hands borrowed elements. One keeping a resource it is handed is
 //!   refused where it is declared ([`thunk_keeper_refusal`]);
 //! - a generic function, or a method declaring type parameters of its own;
-//! - a method of an enum, which the escape analysis does not summarize;
 //! - a `gpu`, `async` or `parallel` function, and one with no body.
 //!
 //! Where a function is declared does not change what it owns: one an
@@ -86,7 +85,7 @@ use super::context::{resolve_method_source, MethodInfo, MethodSource, TypeDefini
 use super::diagnostics::shown_type_name;
 use super::escape_analysis::{EscapeSummary, FunctionId};
 use super::function_analysis::{DeclaredFunction, ModuleId};
-use super::hook_receivers::{declares_drop_hook, receiver_escape_refusal};
+use super::hook_receivers::receiver_escape_refusal;
 use super::thunk_methods::ThunkBodies;
 use super::type_identities::DeclaredNames;
 use super::utils::{hands_on_a_reference, ResourceTypes};
@@ -196,7 +195,7 @@ pub(crate) struct KeptDecision {
 }
 
 /// The owned resource parameters of every top-level function, and of every
-/// method of a class, among `statements`.
+/// method of a class, a trait or an enum, among `statements`.
 pub(crate) fn decide_kept_parameters<'a>(
     statements: impl IntoIterator<Item = &'a Statement>,
     facts: (&KeepFacts<'_>, &ThunkBodies),
@@ -229,12 +228,6 @@ fn collect_kept_parameters(
         }
         return;
     }
-    if let StatementKind::Enum(name, _, _, methods, _, _) = &statement.node {
-        if let Some(owner) = facts.0.names.declared(name) {
-            collect_hook_refusals(owner, methods, facts.0.escape_summaries, decision);
-        }
-        return;
-    }
     let (facts, _) = facts;
     let kept = &mut decision.kept;
     let StatementKind::FunctionDeclaration(decl) = &statement.node else {
@@ -253,36 +246,17 @@ fn collect_kept_parameters(
     }
 }
 
-/// Refuses each drop hook among the methods of the enum `owner` that keeps
-/// its receiver. An enum's other methods keep nothing: the escape analysis
-/// summarizes only its hook.
-fn collect_hook_refusals(
-    owner: &str,
-    methods: &[Statement],
-    summaries: &HashMap<FunctionId, EscapeSummary>,
-    decision: &mut KeptDecision,
-) {
-    for hook in methods.iter().filter(|method| declares_drop_hook(method)) {
-        let refusal = receiver_escape_refusal(owner, hook, summaries);
-        decision
-            .refusals
-            .extend(refusal.map(|error| (hook.id, error)));
-    }
-}
-
-/// The identity of the class or trait `statement` declares, with the
+/// The identity of the class, trait or enum `statement` declares, with the
 /// statements of its body; `None` for any other statement. A type a module
 /// keeps private is keyed by its qualified identity, so it never shares a
 /// method's key with a type of the same written name in another file.
-///
-/// TODO: an enum's methods can own a receiver they keep only once the escape
-/// analysis summarizes them; until then no enum method is seen keeping
-/// anything, and every call to one lends its receiver.
 fn declared_methods<'s>(
     statement: &'s Statement,
     names: &DeclaredNames<'s>,
 ) -> Option<(&'s str, &'s [Statement])> {
-    if let StatementKind::Trait(name, _, _, methods, _) = &statement.node {
+    if let StatementKind::Trait(name, _, _, methods, _)
+    | StatementKind::Enum(name, _, _, methods, _, _) = &statement.node
+    {
         return Some((names.declared(name)?, methods.as_slice()));
     }
     let StatementKind::Class(class) = &statement.node else {
@@ -480,7 +454,7 @@ pub(crate) fn method_run_by<'d>(
     Some((kept.method_declaration(declaring, method)?, info))
 }
 
-/// The signature the class or trait `owner` registers for its method
+/// The signature the class, trait or enum `owner` registers for its method
 /// `name`.
 fn slot_method<'d>(
     owner: &str,
@@ -490,10 +464,8 @@ fn slot_method<'d>(
     match type_definitions.get(owner)? {
         TypeDefinition::Class(class) => class.methods.get(name),
         TypeDefinition::Trait(definition) => definition.methods.get(name),
-        TypeDefinition::Struct(_)
-        | TypeDefinition::Enum(_)
-        | TypeDefinition::Generic(_)
-        | TypeDefinition::Alias(_) => None,
+        TypeDefinition::Enum(definition) => definition.methods.get(name),
+        TypeDefinition::Struct(_) | TypeDefinition::Generic(_) | TypeDefinition::Alias(_) => None,
     }
 }
 

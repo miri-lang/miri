@@ -23,7 +23,9 @@
 
 use crate::ast::expression::{ExpressionKind, LeftHandSideExpression};
 use crate::ast::implicit_methods::MEMBERSHIP_METHOD_NAME;
-use crate::ast::statement::{BindingResidency, StatementKind, WhileStatementType, DROP_HOOK_NAME};
+use crate::ast::statement::{
+    BindingResidency, StatementKind, WhileStatementType, DROP_HOOK_NAME, RECEIVER_PARAM_NAME,
+};
 use crate::ast::types::{Type, TypeKind, ITERATOR_METHOD_NAME};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
@@ -35,7 +37,8 @@ use std::collections::{HashMap, HashSet};
 use super::context::TypeDefinition;
 use super::escape_analysis::{
     call_builds_a_value, collect_pattern_bindings, free_callee, method_owner, method_summary,
-    returned_tails, EscapeNextHop, EscapeSummary, FunctionId,
+    named_binding, receiver_method_summary, returned_tails, EscapeNextHop, EscapeSummary,
+    FunctionId, MethodCall,
 };
 use super::function_analysis::DeclaredFunction;
 use super::iteration_plan::{IterationPlan, IterationPlans};
@@ -1059,24 +1062,28 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.note_capture(name, expr);
                 self.report_use_after_consume(name, expr.span, consumed)
             }
+            // `super` is a read of the receiver.
+            ExpressionKind::Super => {
+                self.note_capture(RECEIVER_PARAM_NAME, expr);
+                self.report_use_after_consume(RECEIVER_PARAM_NAME, expr.span, consumed)
+            }
             ExpressionKind::Call(callee, args) => self.check_call_expr(callee, args, consumed),
-            ExpressionKind::Member(obj, _) => self.check_expr(obj, consumed),
+            ExpressionKind::Member(e, _)
+            | ExpressionKind::Unary(_, e)
+            | ExpressionKind::Guard(_, e)
+            | ExpressionKind::NamedArgument(_, e)
+            | ExpressionKind::Cast(e, _) => self.check_expr(e, consumed),
             ExpressionKind::Binary(l, op, r) => {
                 self.check_expr(l, consumed);
                 self.check_expr(r, consumed);
                 self.consume_operator_operands((l, op, r), consumed);
             }
-            ExpressionKind::Logical(l, _, r) => {
+            ExpressionKind::Logical(l, _, r) | ExpressionKind::Index(l, r) => {
                 self.check_expr(l, consumed);
                 self.check_expr(r, consumed);
             }
-            ExpressionKind::Unary(_, e) => self.check_expr(e, consumed),
             ExpressionKind::Assignment(lhs, _, rhs) => {
                 self.check_assignment_expr(lhs, rhs, consumed)
-            }
-            ExpressionKind::Index(obj, idx) => {
-                self.check_expr(obj, consumed);
-                self.check_expr(idx, consumed);
             }
             ExpressionKind::Conditional(then, cond, else_, _) => {
                 self.check_conditional_expr(then, cond, else_.as_deref(), consumed)
@@ -1087,7 +1094,6 @@ impl<'a> UseAfterMoveChecker<'a> {
                     self.check_expr(e, consumed);
                 }
             }
-            ExpressionKind::Guard(_, e) => self.check_expr(e, consumed),
             ExpressionKind::FormattedString(parts, _)
             | ExpressionKind::List(parts)
             | ExpressionKind::Set(parts)
@@ -1106,7 +1112,6 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.check_expr(name, consumed);
                 self.check_each(values, consumed);
             }
-            ExpressionKind::NamedArgument(_, val) => self.check_expr(val, consumed),
             ExpressionKind::Lambda(lambda) => {
                 let captured = self.check_lambda_expr(lambda);
                 self.consume_captures(expr.id, &captured, consumed);
@@ -1117,16 +1122,12 @@ impl<'a> UseAfterMoveChecker<'a> {
                 }
                 self.check_expr(final_expr, consumed);
             }
-            ExpressionKind::Cast(value_expr, _target_type_expr) => {
-                self.check_expr(value_expr, consumed);
-            }
             ExpressionKind::Literal(_)
             | ExpressionKind::Type(_, _)
             | ExpressionKind::GenericType(_, _, _)
             | ExpressionKind::TypeDeclaration(_, _, _, _)
             | ExpressionKind::StructMember(_, _)
-            | ExpressionKind::ImportPath(_, _)
-            | ExpressionKind::Super => {}
+            | ExpressionKind::ImportPath(_, _) => {}
         }
     }
 
@@ -1750,14 +1751,10 @@ impl<'a> UseAfterMoveChecker<'a> {
             self.consume_captures(value.id, &captured, consumed);
             return;
         }
-        let (name, ident_expr) = match &arg.node {
-            ExpressionKind::Identifier(n, _) => (n.clone(), arg),
-            ExpressionKind::NamedArgument(_, val) => match &val.node {
-                ExpressionKind::Identifier(n, _) => (n.clone(), val.as_ref()),
-                _ => return,
-            },
-            _ => return,
+        let Some(name) = named_binding(value) else {
+            return;
         };
+        let (name, ident_expr) = (name.to_string(), value);
         if consumed.contains_key(name.as_str()) {
             return;
         }
@@ -1873,9 +1870,15 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// unresolved, or no summary is present for the method.
     fn extract_method_summary(&self, callee: &Expression) -> Option<EscapeSummary> {
         let (type_name, method_name) = self.method_call_target(callee)?;
-        let summary = method_summary(
-            type_name,
-            method_name,
+        let ExpressionKind::Member(receiver, _) = &callee.node else {
+            return None;
+        };
+        let summary = receiver_method_summary(
+            MethodCall {
+                receiver,
+                type_name,
+                method: method_name,
+            },
             self.escape_summaries,
             self.type_definitions,
         );

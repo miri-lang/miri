@@ -14,31 +14,19 @@
 //! decision reads for every other method: the receiver is slot 0, and the
 //! first place the body keeps it, with the chain of callees it passes
 //! through, is what the refusal shows. Reading the receiver's fields and
-//! lending it to a callee that does not keep it are not escapes.
-//!
-//! TODO: a call through a function value bound to a local (`let f = keep`,
-//! then `f(self)`) owns the receiver's position by the function value's
-//! convention, but the escape walk records a keep only for a call through a
-//! function-typed parameter, so the hook's summary misses it and the escape
-//! is not refused. Closing it means the walk reading every call through an
-//! opaque function value as keeping each position its convention owns, which
-//! also changes what an ordinary function handing a parameter to such a call
-//! owns.
+//! lending it to a callee that does not keep it are not escapes. A call
+//! through a local holding a function value keeps what the body it runs
+//! keeps, and what it is handed when the walk cannot tell which body runs.
 
 use std::collections::HashMap;
 
-use crate::ast::statement::{Statement, StatementKind, DROP_HOOK_NAME};
+use crate::ast::statement::{Statement, DROP_HOOK_NAME};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
 use super::diagnostics::shown_type_name;
 use super::escape_analysis::{EscapeSummary, FunctionId};
 use super::use_after_move::consumed_because_chain;
-
-/// Whether `statement` declares a drop hook.
-pub(crate) fn declares_drop_hook(statement: &Statement) -> bool {
-    matches!(&statement.node, StatementKind::FunctionDeclaration(decl) if decl.is_drop_hook())
-}
 
 /// The position a method's escape summary numbers its receiver at.
 const RECEIVER_SLOT: usize = 0;
