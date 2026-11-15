@@ -12,9 +12,7 @@ use miri::mir::lowering::dispatch_symbols::{
 use miri::type_checker::context::{
     inherited_trait_default, resolve_method_source, MethodSource, TraitDefault, TypeDefinition,
 };
-use miri::type_checker::kept_parameters::KeptParameters;
-use miri::type_checker::slot_conventions::decide_slot_conventions;
-use miri::type_checker::utils::ResourceTypes;
+use miri::type_checker::DispatchTable;
 use std::collections::HashMap;
 
 use miri::ast::types::{Type, TypeKind};
@@ -299,16 +297,14 @@ fn slot_of(receiver: &str, method: &str, defs: &HashMap<String, TypeDefinition>)
 }
 
 /// The slot of `layout` a call through `receiver` reads, by the dispatch the
-/// type checker decides for `defs`.
+/// type checker decides for `defs` from the type table alone.
 fn slot_in(
     layout: &VtableLayout,
     receiver: &str,
     method: &str,
     defs: &HashMap<String, TypeDefinition>,
 ) -> Option<usize> {
-    let resources = ResourceTypes::default();
-    let conventions = decide_slot_conventions(defs, &KeptParameters::default(), &resources);
-    vtable_slot_index(layout, &conventions, receiver, method).map(|(slot, _)| slot)
+    vtable_slot_index(layout, &DispatchTable::of(defs), receiver, method).map(|(slot, _)| slot)
 }
 
 /// `trait A` requires `zeta`, `trait B` requires `alpha`, and `class C`

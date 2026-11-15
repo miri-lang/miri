@@ -26,11 +26,10 @@ use crate::mir::symbol::Symbol;
 use crate::type_checker::context::{
     class_ancestry, resolve_method_source, MethodSource, TypeDefinition,
 };
-use crate::type_checker::slot_conventions::SlotConventions;
 use crate::type_checker::thunk_methods::{thunk_body, ThunkQuestion};
 use crate::type_checker::utils::has_drop_hook;
 pub use crate::type_checker::vtable_selectors::collect_vtable_methods;
-use crate::type_checker::vtable_selectors::{class_fills, trait_hierarchy};
+use crate::type_checker::vtable_selectors::{class_fills, trait_hierarchy, DispatchTable};
 use crate::type_checker::TypeChecker;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -170,7 +169,7 @@ impl VtableInstance {
         type_checker: &'td TypeChecker,
     ) -> Vec<(&'td str, Option<Symbol>, Vec<usize>)> {
         let type_defs = type_checker.type_definitions();
-        let is_overridden = |method: &str| type_checker.slot_conventions.is_overridden(method);
+        let is_overridden = |method: &str| type_checker.dispatch_table.is_overridden(method);
         (class_fills(self.class(), type_defs, &is_overridden).into_iter())
             .map(|(method, roots)| {
                 let slots = (roots.into_iter())
@@ -201,15 +200,15 @@ impl VtableInstance {
 /// below — reads, with the root of the hierarchy numbering it, or `None`
 /// when the receiver dispatches no such method and the call is static. Which
 /// hierarchy's slot that is, the type checker decides once for the program
-/// ([`SlotConventions::dispatched_root`]): the one lookup both a call's slot
+/// ([`DispatchTable::dispatched_root`]): the one lookup both a call's slot
 /// number and its convention are read from.
 pub fn vtable_slot_index<'c>(
     layout: &VtableLayout,
-    conventions: &'c SlotConventions,
+    dispatch: &'c DispatchTable,
     receiver: &str,
     method_name: &str,
 ) -> Option<(usize, &'c str)> {
-    let root = conventions.dispatched_root(receiver, method_name)?;
+    let root = dispatch.dispatched_root(receiver, method_name)?;
     Some((layout.slot(root, method_name)?, root))
 }
 

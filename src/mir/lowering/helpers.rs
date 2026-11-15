@@ -891,13 +891,20 @@ fn lower_return_expression(
 /// Lowers the function or closure body `body`, its final expression
 /// assigned to `_0`, and refuses it when an operand the type checker holds
 /// in it was not read where it is evaluated
-/// ([`super::sequencing::check_every_hold_lowered`]).
+/// ([`super::sequencing::check_every_hold_lowered`]). Every read a call
+/// marked ended where it handed the binding over has been taken by the
+/// site consuming it by then ([`super::variable::ConsumedRead::Ended`]).
 pub fn lower_body_as_return(
     ctx: &mut LoweringContext,
     body: &Statement,
     ret_ty: &Type,
 ) -> Result<(), LoweringError> {
     lower_as_return(ctx, body, ret_ty)?;
+    debug_assert!(
+        !(ctx.consumed_reads.values())
+            .any(|read| matches!(read, super::variable::ConsumedRead::Ended)),
+        "a call ended a consumed read that no site consuming it took"
+    );
     super::sequencing::check_every_hold_lowered(ctx, body)
 }
 

@@ -2,6 +2,10 @@
 
 A resource was consumed and then used again. A resource (a class or enum with a `drop` hook) has one owner: assigning it moves it, and passing it to a function that keeps it (stores it, returns it, captures it) gives that function ownership. The name the resource came from cannot be read afterwards. A call that only reads its argument lends it, and every other type is lent by every call, so only a kept resource is ever consumed.
 
+A call through a function value or a closure cannot see which body runs, so it owns every resource position its function type declares. A second call through such a value handing over the same resource binding is refused even when the lambda behind it only reads its argument; call a function that only reads it by its name, or give each call a resource of its own.
+
+A call on a trait-typed binding is decided from the binding's static trait type, which is a resource when any class implementing it has a `drop` hook, never from the class the value has at run time. When the method keeps its receiver, two such calls on the same binding are refused even when the class behind it has no `drop` hook.
+
 The report explains why the resource was consumed: each step from the call to the place that keeps the resource is attached as a note, pointing at the line that takes it.
 
 ## Messages

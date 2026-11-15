@@ -15,8 +15,9 @@
 //!
 //! A runtime function calling a closure (`@closure`) lends it every
 //! argument, so a closure handed to one either owns nothing by its type or
-//! is an adapter built where the call is made: a closure value created in
-//! the block the call ends, whose own body lends every parameter. Every other
+//! is an adapter built where the call is made: a closure value created on
+//! every path to the call, every write to its local creating that one
+//! closure, whose own body lends every parameter. Every other
 //! closure body follows its type's convention.
 //!
 //! The rule reads the bodies, the type of the value each call is made
@@ -29,11 +30,12 @@ use std::collections::{HashMap, HashSet};
 use super::{local_display_name, VerificationViolation};
 use crate::ast::expression::ExpressionKind;
 use crate::ast::types::{FunctionTypeData, TypeKind};
+use crate::mir::analysis::traversal::successors_of;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::arg_mode;
 use crate::mir::{
-    AggregateKind, ArgMode, BasicBlockData, Body, Local, Operand, Place, Rvalue, StatementKind,
+    AggregateKind, ArgMode, BasicBlock, Body, Local, Operand, Place, Rvalue, StatementKind,
     TerminatorKind,
 };
 use crate::type_checker::context::TypeDefinition;
@@ -121,7 +123,7 @@ fn slot_violations(
             if !convention_of(&function, table).contains(&true) {
                 continue;
             }
-            match created_closure(data, place) {
+            match created_closure(body, BasicBlock(block), place) {
                 Some(symbol) => {
                     adapters.insert(symbol.clone());
                 }
@@ -132,21 +134,98 @@ fn slot_violations(
     violations
 }
 
-/// The closure the block a call ends, `block`, creates in the whole local
-/// `place` names ahead of the call, if it creates one there. Lowering builds
-/// an adapter in the block its call ends, so one created anywhere else is
-/// not the adapter of this call.
-fn created_closure<'b>(block: &'b BasicBlockData, place: &Place) -> Option<&'b Symbol> {
+/// The closure the whole local `place` names holds when the call ending
+/// `call_block` runs: every write to that local in `body` creates a closure
+/// of one symbol, and every path from the entry to the call passes one, so
+/// whichever write reaches the call is that creation. Lowering builds an
+/// adapter once, in the block its call ends; a pass may split that block
+/// (`drop_elaboration` splits at a guarded storage end) or copy the
+/// creation onto several paths, and the creation still reaches the call.
+fn created_closure<'b>(
+    body: &'b Body,
+    call_block: BasicBlock,
+    place: &Place,
+) -> Option<&'b Symbol> {
     if !place.projection.is_empty() {
         return None;
     }
-    block.statements.iter().find_map(|statement| {
-        let StatementKind::Assign(dest, Rvalue::Aggregate(AggregateKind::Closure(symbol, _), _)) =
-            &statement.kind
-        else {
+    let mut created: Option<&Symbol> = None;
+    let mut writing_blocks = HashSet::new();
+    for (block, rvalue) in local_writes(body, place.local) {
+        let symbol = rvalue.and_then(closure_created)?;
+        if created.is_some_and(|known| known != symbol) {
             return None;
-        };
-        (dest == place).then_some(symbol)
+        }
+        created = Some(symbol);
+        writing_blocks.insert(block);
+    }
+    let reached_unwritten = reaches_avoiding(body, call_block, &writing_blocks);
+    created.filter(|_| !reached_unwritten)
+}
+
+/// The closure `rvalue` creates, if it creates one.
+fn closure_created(rvalue: &Rvalue) -> Option<&Symbol> {
+    match rvalue {
+        Rvalue::Aggregate(AggregateKind::Closure(symbol, _), _) => Some(symbol),
+        Rvalue::Use(_)
+        | Rvalue::Ref(_)
+        | Rvalue::BinaryOp(..)
+        | Rvalue::UnaryOp(..)
+        | Rvalue::Cast(..)
+        | Rvalue::Len(_)
+        | Rvalue::GpuIntrinsic(_)
+        | Rvalue::MathIntrinsic(..)
+        | Rvalue::Aggregate(..)
+        | Rvalue::AtomicOp { .. } => None,
+    }
+}
+
+/// Whether some path from the entry of `body` reaches `target` through no
+/// block of `avoided`, `target` included: a path passing one of them
+/// leaves it written.
+fn reaches_avoiding(body: &Body, target: BasicBlock, avoided: &HashSet<BasicBlock>) -> bool {
+    let mut seen = HashSet::new();
+    let mut pending = vec![0];
+    while let Some(block) = pending.pop() {
+        if avoided.contains(&BasicBlock(block)) || !seen.insert(block) {
+            continue;
+        }
+        if block == target.0 {
+            return true;
+        }
+        pending.extend(successors_of(body, block));
+    }
+    false
+}
+
+/// Every write to `local` in `body`, in block order, with the block it is
+/// made in and the value an assignment stores, `None` for what a
+/// terminator stores: each assignment to a place rooted at it, and each
+/// place a terminator writes rooted at it.
+fn local_writes(body: &Body, local: Local) -> impl Iterator<Item = (BasicBlock, Option<&Rvalue>)> {
+    (body.basic_blocks.iter().enumerate()).flat_map(move |(block, data)| {
+        let assigned =
+            (data.statements.iter()).filter_map(move |statement| match &statement.kind {
+                StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue)
+                    if dest.local == local =>
+                {
+                    Some((BasicBlock(block), Some(rvalue)))
+                }
+                StatementKind::Assign(..)
+                | StatementKind::Reassign(..)
+                | StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(..)
+                | StatementKind::IncRef(_)
+                | StatementKind::DecRef(_)
+                | StatementKind::Dealloc(_)
+                | StatementKind::ReadHeader(_)
+                | StatementKind::Nop => None,
+            });
+        let called = (data.terminator.iter())
+            .flat_map(|terminator| terminator.written_places())
+            .filter(move |written| written.local == local)
+            .map(move |_| (BasicBlock(block), None));
+        assigned.chain(called)
     })
 }
 

@@ -564,8 +564,8 @@ fn dispatch_slot<'t>(
     class_name: &str,
     method_name: &str,
 ) -> Option<(usize, &'t str)> {
-    let conventions = &ctx.type_checker.slot_conventions;
-    vtable_slot_index(&ctx.vtable_layout(), conventions, class_name, method_name)
+    let dispatch = &ctx.type_checker.dispatch_table;
+    vtable_slot_index(&ctx.vtable_layout(), dispatch, class_name, method_name)
 }
 
 /// The internal error raised when the compiler is asked to call a method the

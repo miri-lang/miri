@@ -7,9 +7,11 @@
 //! to a runtime closure slot either owns nothing or is an adapter lending
 //! every argument.
 
+use miri::error::syntax::Span;
 use miri::mir::verify::{verify_value_calls, VerificationViolation};
 use miri::mir::{
-    AggregateKind, ArgMode, Body, Local, Operand, Place, Rvalue, StatementKind, TerminatorKind,
+    AggregateKind, ArgMode, BasicBlock, BasicBlockData, Body, Discriminant, Local, Operand, Place,
+    Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
 use miri::pipeline::Pipeline;
 use miri::type_checker::context::TypeDefinition;
@@ -277,4 +279,123 @@ fn an_adapter_created_after_the_runtime_call_is_refused() {
         .filter(|(name, _)| is_main(name))
         .collect();
     assert_found(&found, 1, "main", UNADAPTED);
+}
+
+/// The adapter a runtime call is handed is the closure the place holds when
+/// the call runs: one written over after its creation, still ahead of the
+/// call, is not that call's adapter.
+#[test]
+fn an_adapter_written_over_before_the_runtime_call_is_refused() {
+    let (mut bodies, definitions) = compiled();
+    let main = main_body(&mut bodies);
+    let cmp = (main.local_decls.iter())
+        .position(|decl| decl.name.as_deref() == Some("cmp"))
+        .expect("the comparator's binding");
+    let (adapter, block, index) = sort_adapter(main);
+    let overwrite = Statement {
+        kind: StatementKind::Assign(adapter, Rvalue::Use(Operand::Copy(Place::new(Local(cmp))))),
+        span: main.basic_blocks[block].statements[index].span,
+    };
+    main.basic_blocks[block]
+        .statements
+        .insert(index + 1, overwrite);
+    let found: Vec<_> = (violations_in(&bodies, &definitions).into_iter())
+        .filter(|(name, _)| is_main(name))
+        .collect();
+    assert_found(&found, 1, "main", UNADAPTED);
+}
+
+/// A pass may split the block an adapter is created in from the block its
+/// call ends: the creation still runs on every path to the call, so the
+/// closure the call is handed is still the adapter.
+#[test]
+fn an_adapter_created_in_a_block_dominating_the_runtime_call_is_accepted() {
+    let (mut bodies, definitions) = compiled();
+    let main = main_body(&mut bodies);
+    let (_, block, index) = sort_adapter(main);
+    let continuation = BasicBlock(main.basic_blocks.len());
+    let split = &mut main.basic_blocks[block];
+    let tail = BasicBlockData {
+        statements: split.statements.split_off(index + 1),
+        terminator: split.terminator.take(),
+        is_cleanup: split.is_cleanup,
+    };
+    let span = (tail.terminator.as_ref()).map_or_else(|| Span::new(0, 0), |t| t.span);
+    split.terminator = Some(Terminator {
+        kind: TerminatorKind::Goto {
+            target: continuation,
+        },
+        span,
+    });
+    main.basic_blocks.push(tail);
+    assert_found(&violations_in(&bodies, &definitions), 0, "", "");
+}
+
+/// Rebuilds the block creating the sort's adapter in `main` as a diamond:
+/// the statements ahead of the creation branch to two arms, the first
+/// creating the adapter and the second creating it too when `on_both_arms`,
+/// and both arms join in the block ending in the runtime call.
+fn diamond_around_the_adapter(main: &mut Body, on_both_arms: bool) {
+    let (_, block, index) = sort_adapter(main);
+    let first_arm = main.basic_blocks.len();
+    let (second_arm, join) = (first_arm + 1, first_arm + 2);
+    let split = &mut main.basic_blocks[block];
+    let mut tail = split.statements.split_off(index);
+    let creation = tail.remove(0);
+    let joined = BasicBlockData {
+        statements: tail,
+        terminator: split.terminator.take(),
+        is_cleanup: split.is_cleanup,
+    };
+    let span = creation.span;
+    let jump = |target: usize| {
+        Some(Terminator {
+            kind: TerminatorKind::Goto {
+                target: BasicBlock(target),
+            },
+            span,
+        })
+    };
+    split.terminator = Some(Terminator {
+        kind: TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(Local(0))),
+            targets: vec![(Discriminant::bool_true(), BasicBlock(first_arm))],
+            otherwise: BasicBlock(second_arm),
+        },
+        span,
+    });
+    let second = if on_both_arms {
+        vec![creation.clone()]
+    } else {
+        Vec::new()
+    };
+    let arm = |statements: Vec<Statement>| BasicBlockData {
+        statements,
+        terminator: jump(join),
+        is_cleanup: false,
+    };
+    main.basic_blocks.push(arm(vec![creation]));
+    main.basic_blocks.push(arm(second));
+    main.basic_blocks.push(joined);
+}
+
+/// An adapter created on one arm of a branch only does not reach the call
+/// on the other: there the place holds no adapter.
+#[test]
+fn an_adapter_created_on_one_arm_only_is_refused() {
+    let (mut bodies, definitions) = compiled();
+    diamond_around_the_adapter(main_body(&mut bodies), false);
+    let found: Vec<_> = (violations_in(&bodies, &definitions).into_iter())
+        .filter(|(name, _)| is_main(name))
+        .collect();
+    assert_found(&found, 1, "main", UNADAPTED);
+}
+
+/// A pass duplicating the creation onto every path to the call leaves the
+/// same adapter reaching it whichever path runs.
+#[test]
+fn an_adapter_created_on_every_arm_is_accepted() {
+    let (mut bodies, definitions) = compiled();
+    diamond_around_the_adapter(main_body(&mut bodies), true);
+    assert_found(&violations_in(&bodies, &definitions), 0, "", "");
 }

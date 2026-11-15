@@ -486,3 +486,93 @@ fn main()
         "look 1\nclosed 1\nafter twice 1",
     );
 }
+
+/// An `async` lambda follows the function-value convention like any other:
+/// a call through it owns the resource it is handed, so the hook runs where
+/// the shelf the lambda builds ends, inside the lambda.
+#[test]
+fn an_async_lambda_keeping_its_argument_releases_it_where_the_new_owner_ends() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+fn main()
+    let f = async fn(h Handle) int
+        if true
+            let _shelf = Shelf(slot: Some(h))
+            println("kept")
+        println("leaving lambda")
+        return 0
+    f(Handle(1))
+    println("after closure")
+"#,
+        ),
+        "kept\nclosed 1\nleaving lambda\nafter closure",
+    );
+}
+
+/// A `parallel` lambda owns every resource position too: one that only reads
+/// its argument releases it where the lambda ends.
+#[test]
+fn a_parallel_lambda_reading_its_argument_releases_it_where_the_lambda_ends() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+fn main()
+    let g = parallel fn(h Handle) int
+        println(f"look {h.id}")
+        return h.id
+    g(Handle(2))
+    println("after closure")
+"#,
+        ),
+        "look 2\nclosed 2\nafter closure",
+    );
+}
+
+/// An `async` function owns none of its parameters at a call naming it, so a
+/// value naming it reaches it through a forwarding body that owns the
+/// resource the value's call hands over and releases it once the function
+/// returns.
+#[test]
+fn an_async_function_named_as_a_value_releases_its_argument_once_it_returns() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+async fn akeep(h Handle) int
+    if true
+        let _shelf = Shelf(slot: Some(h))
+        println("kept")
+    println("leaving akeep")
+    return 0
+
+fn main()
+    let f = akeep
+    f(Handle(1))
+    println("after value")
+"#,
+        ),
+        "kept\nleaving akeep\nclosed 1\nafter value",
+    );
+}
+
+/// A `parallel` function named as a value is reached through the same
+/// forwarding body: the value's call owns the resource and the forwarding
+/// body releases it once the function returns.
+#[test]
+fn a_parallel_function_named_as_a_value_releases_its_argument_once_it_returns() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+parallel fn plook(h Handle) int
+    println(f"look {h.id}")
+    return h.id
+
+fn main()
+    let g = plook
+    g(Handle(2))
+    println("after value")
+"#,
+        ),
+        "look 2\nclosed 2\nafter value",
+    );
+}

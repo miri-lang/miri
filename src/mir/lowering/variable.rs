@@ -395,8 +395,9 @@ pub(crate) fn is_own_binding(ctx: &LoweringContext, local: crate::mir::Local) ->
 
 /// The binding the lowering of `expr` read, when the type checker records
 /// that consuming `expr` hands its reference on; `None` for any other
-/// expression, and for one whose call already ended the binding. Refused when the lowering of a consumed expression read no
-/// binding, which would leave the binding released only where its scope ends.
+/// expression, and for one whose call already ended the binding. Refused
+/// when the lowering of a consumed expression read no binding, which would
+/// leave the binding released only where its scope ends.
 pub(crate) fn consumed_read(
     ctx: &mut LoweringContext,
     expr: &Expression,

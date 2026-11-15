@@ -16,6 +16,63 @@ use super::context::{
     class_ancestry, trait_lineage, ClassDefinition, MethodInfo, TraitDefinition, TypeDefinition,
 };
 
+/// How each call through a vtable dispatches, decided once for the whole
+/// program from the type table alone: the root of the slot a call to a
+/// method on a receiver reads ([`dispatched_slot_root`]), and the method
+/// names some class overrides. Which positions a slot owns is the ownership
+/// pass's answer, read beside this ([`super::slot_conventions`]).
+#[derive(Debug, Default)]
+pub struct DispatchTable {
+    /// The root of the slot a call to a method on a receiver reads, by the
+    /// receiver's type and the method; absent for a static call.
+    roots: HashMap<String, HashMap<String, String>>,
+    /// The name of every method some class overrides.
+    overridden: BTreeSet<String>,
+}
+
+impl DispatchTable {
+    /// The table of every receiver type and method of `type_defs`.
+    pub fn of(type_defs: &HashMap<String, TypeDefinition>) -> Self {
+        let roots = (type_defs.keys())
+            .filter_map(|receiver| {
+                let roots = receiver_roots(receiver, type_defs);
+                (!roots.is_empty()).then(|| (receiver.clone(), roots))
+            })
+            .collect();
+        DispatchTable {
+            roots,
+            overridden: (overridden_method_names(type_defs).map(str::to_string)).collect(),
+        }
+    }
+
+    /// The root of the slot a call to `selector` on a `receiver` reads, or
+    /// `None` when the call is static ([`dispatched_slot_root`]).
+    pub fn dispatched_root(&self, receiver: &str, selector: &str) -> Option<&str> {
+        (self.roots.get(receiver))
+            .and_then(|selectors| selectors.get(selector))
+            .map(String::as_str)
+    }
+
+    /// Whether some class overrides a method named `method`.
+    pub fn is_overridden(&self, method: &str) -> bool {
+        self.overridden.contains(method)
+    }
+}
+
+/// The root of the slot each call on a `receiver` reads, by every method it
+/// might read through a vtable.
+fn receiver_roots(
+    receiver: &str,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> HashMap<String, String> {
+    (dispatch_candidates(receiver, type_defs).into_iter())
+        .filter_map(|selector| {
+            let root = dispatched_slot_root(receiver, selector, type_defs)?;
+            Some((selector.to_string(), root.to_string()))
+        })
+        .collect()
+}
+
 /// The name of every method some class overrides: one it declares that a
 /// class it extends, directly or further up, declares too.
 pub(crate) fn overridden_method_names(

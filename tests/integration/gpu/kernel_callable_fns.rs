@@ -549,3 +549,33 @@ fn main()
 "#,
     );
 }
+
+/// NEGATIVE: a host function keeping a resource parameter, called from a
+/// `gpu forall` body, is refused where the kernel calls it as a type error:
+/// a resource is no GPU type, so the call never reaches lowering, which
+/// binds a parameter the function keeps on the host only.
+#[test]
+fn kernel_cannot_call_function_keeping_a_resource_param() {
+    assert_compiler_error(
+        "
+use system.gpu
+use system.collections.array
+
+class Handle
+    var id int
+
+    fn drop(self)
+        println(f'released {self.id}')
+
+fn keep(h Handle) int
+    var held = h
+    held.id
+
+fn main()
+    gpu var dst = [0, 0, 0]
+    gpu forall i in 0..3
+        dst[i] = keep(Handle(i))
+",
+        "Function 'keep' parameter 'h' has type 'Handle' which is not GPU-compatible",
+    );
+}

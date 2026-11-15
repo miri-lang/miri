@@ -22,8 +22,8 @@ use miri::mir::type_facts::{
     ClassDefinition, DropHookReach, GenericDefinition, MethodInfo, TypeDefinition,
 };
 use miri::mir::{
-    ArgMode, Body, ExecutionModel, Local, LocalDecl, Operand, Place, PlaceElem, Rvalue, Statement,
-    StatementKind, Terminator, TerminatorKind,
+    AggregateKind, ArgMode, Body, ExecutionModel, Local, LocalDecl, Operand, Place, PlaceElem,
+    Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
 use miri::type_checker::context::{FieldInfo, StructDefinition};
 use miri::type_checker::ModuleId;
@@ -612,6 +612,27 @@ fn a_callee_named_as_a_value_stays_borrowed() {
         .push(stmt(StatementKind::Assign(
             place(3),
             Rvalue::Use(Operand::function(callee_symbol(), span())),
+        )));
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
+}
+
+/// A closure built over the callee's symbol reaches it without a MIR call
+/// naming it, so the closure is a mention that is not a direct call.
+#[test]
+fn a_callee_a_closure_is_built_over_stays_borrowed() {
+    let mut program = program(binding_callee());
+    let (_, caller) = &mut program[1];
+    let closure_ty = Type::new(TypeKind::Identifier, span());
+    caller.new_local(LocalDecl::new(closure_ty.clone(), span()));
+    caller.basic_blocks[0]
+        .statements
+        .push(stmt(StatementKind::Assign(
+            place(3),
+            Rvalue::Aggregate(
+                AggregateKind::Closure(callee_symbol(), closure_ty),
+                Vec::new(),
+            ),
         )));
     let facts = decide(&mut program);
     assert_borrowed(&program, &facts);

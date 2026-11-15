@@ -104,6 +104,7 @@ use function_analysis::FunctionAnalysis;
 use module_loader::ModuleLoader;
 pub use module_loader::ModuleSource;
 use type_table::TypeTable;
+pub use vtable_selectors::DispatchTable;
 
 pub use gpu_buffer_init::GpuBufferInit;
 
@@ -220,6 +221,9 @@ pub struct TypeChecker {
     /// slot and every body filling it read; see
     /// [`slot_conventions::SlotConventions`].
     pub slot_conventions: slot_conventions::SlotConventions,
+    /// Which slot each call through a vtable reads, and which methods some
+    /// class overrides; see [`vtable_selectors::DispatchTable`].
+    pub dispatch_table: vtable_selectors::DispatchTable,
     /// What each declared runtime entry point does to its arguments and its
     /// result, as its `runtime` declaration states.
     pub runtime_effects: crate::runtime_effects::RuntimeEffects,
@@ -417,6 +421,7 @@ impl TypeChecker {
             kept_parameters: kept_parameters::KeptParameters::default(),
             thunk_bodies: thunk_methods::ThunkBodies::default(),
             slot_conventions: slot_conventions::SlotConventions::default(),
+            dispatch_table: vtable_selectors::DispatchTable::default(),
             runtime_effects: HashMap::new(),
             call_generic_mappings: HashMap::new(),
             open_generic_calls: call_instantiation::OpenGenericCalls::default(),
@@ -1111,7 +1116,10 @@ impl TypeChecker {
             &self.type_table.global_type_definitions,
             &context.escape_summaries,
             &self.fn_analysis.declared_callees,
-            &self.slot_conventions,
+            use_after_move::VtableCalls {
+                dispatch: &self.dispatch_table,
+                conventions: &self.slot_conventions,
+            },
             self.resource_types(),
         )
         .with_iteration_plans(&self.iteration_plans)
@@ -1151,8 +1159,9 @@ impl TypeChecker {
 
     /// Decides which resource parameters each top-level function and method
     /// owns ([`kept_parameters`]), the program's and every imported
-    /// module's, from the converged escape summaries, and then which
-    /// positions each vtable slot owns ([`slot_conventions`]), which the
+    /// module's, from the converged escape summaries, then which slot each
+    /// call through a vtable reads ([`vtable_selectors::DispatchTable`]) and
+    /// which positions each slot owns ([`slot_conventions`]), which the
     /// consumption check reads.
     ///
     /// Where a function is declared does not change what it owns: the
@@ -1187,8 +1196,10 @@ impl TypeChecker {
             })
             .collect();
         self.diagnostics.extend_errors(refusals);
+        self.dispatch_table = vtable_selectors::DispatchTable::of(type_definitions);
         self.slot_conventions = slot_conventions::decide_slot_conventions(
             type_definitions,
+            &self.dispatch_table,
             &self.kept_parameters,
             self.resource_types(),
         );

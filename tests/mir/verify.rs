@@ -2875,6 +2875,51 @@ fn a_function_keeping_a_parameter_named_as_a_value_is_reported() {
     );
 }
 
+/// A closure built over a function taking a parameter over reaches it
+/// through no call naming it, so the closure's calls lend what it releases.
+#[test]
+fn a_function_keeping_a_parameter_a_closure_is_built_over_is_reported() {
+    let mut program = kept_param_program(ArgMode::Owned);
+    program[1].1.basic_blocks[0]
+        .statements
+        .push(stmt(StatementKind::Assign(
+            place(2),
+            Rvalue::Aggregate(
+                AggregateKind::Closure(callee_symbol(), void_ty()),
+                Vec::new(),
+            ),
+        )));
+    let found = verify_owned_argument_modes(&program, &ProgramFacts::of(&program));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0]
+            .1
+            .message
+            .contains("which takes a parameter over, as a value"),
+        "{}",
+        found[0].1.message
+    );
+}
+
+/// A closure body owning its parameters is reached through its value, so
+/// building the closure is no mention of it.
+#[test]
+fn a_closure_body_keeping_a_parameter_built_into_a_closure_is_not_reported() {
+    let mut program = kept_param_program(ArgMode::Owned);
+    program[0].1.captures.closure = Some(callee_symbol());
+    program[1].1.basic_blocks[0]
+        .statements
+        .push(stmt(StatementKind::Assign(
+            place(2),
+            Rvalue::Aggregate(
+                AggregateKind::Closure(callee_symbol(), void_ty()),
+                Vec::new(),
+            ),
+        )));
+    let found = verify_owned_argument_modes(&program, &ProgramFacts::of(&program));
+    assert!(found.is_empty(), "{found:?}");
+}
+
 #[test]
 fn a_function_keeping_a_parameter_called_through_a_runtime_thunk_is_reported() {
     let program = kept_param_program(ArgMode::Owned);
@@ -2934,6 +2979,51 @@ fn a_direct_call_lending_a_kept_argument_fails_the_reach_check() {
             .is_err_and(|reason| reason.contains("lends argument 0")
                 && reason.contains(&callee_symbol().link_name())),
         "{refused:?}"
+    );
+}
+
+/// A closure built over a keeper reaches it through no call naming it, so
+/// the closure lends what the keeper releases.
+#[test]
+fn a_keeper_a_closure_is_built_over_fails_the_reach_check() {
+    let mut program = kept_param_program(ArgMode::Owned);
+    program[1].1.basic_blocks[0]
+        .statements
+        .push(stmt(StatementKind::Assign(
+            place(2),
+            Rvalue::Aggregate(
+                AggregateKind::Closure(callee_symbol(), void_ty()),
+                Vec::new(),
+            ),
+        )));
+    let refused = refuse_indirectly_reached_keepers(&program, &HashSet::new());
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|reason| reason.contains("keeps a parameter")),
+        "{refused:?}"
+    );
+}
+
+/// A closure body owns its function type's convention and is reached by
+/// the calls made through its value, which the value-call check holds it
+/// to, so building the closure is no refused reach.
+#[test]
+fn a_closure_body_keeping_a_parameter_passes_the_reach_check() {
+    let mut program = kept_param_program(ArgMode::Owned);
+    program[0].1.captures.closure = Some(callee_symbol());
+    program[1].1.basic_blocks[0]
+        .statements
+        .push(stmt(StatementKind::Assign(
+            place(2),
+            Rvalue::Aggregate(
+                AggregateKind::Closure(callee_symbol(), void_ty()),
+                Vec::new(),
+            ),
+        )));
+    assert_eq!(
+        refuse_indirectly_reached_keepers(&program, &HashSet::new()),
+        Ok(())
     );
 }
 

@@ -24,32 +24,25 @@
 //! is no counted value — a generic trait's parameter at a scalar type — is
 //! lent on both sides of the call. The consumption check at a virtual call
 //! ([`super::use_after_move`]), MIR lowering of the call, and the adapters
-//! the pipeline builds for the slot all read this table.
+//! the pipeline builds for the slot all read this table, each beside the
+//! [`DispatchTable`] that says which slot a call reads.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use super::context::{class_is_extended, resolve_method_source, MethodSource, TypeDefinition};
 use super::instantiation_requirements::spells_a_type;
 use super::kept_parameters::{owned_at, KeptParameters};
 use super::utils::{hands_on_a_reference, ResourceTypes};
-use super::vtable_selectors::{
-    class_fills, dispatch_candidates, dispatched_slot_root, overridden_method_names,
-};
+use super::vtable_selectors::{class_fills, DispatchTable};
 use crate::ast::types::TypeKind;
 
 /// For each vtable slot owning a position, which positions it owns, by the
 /// slot's root and then its method; a slot absent from the table lends every
-/// position. Beside it, decided once for the whole program: the root of the
-/// slot each call through a vtable reads, and the method names some class
-/// overrides.
+/// position. Which slot a call reads is not decided here but by the
+/// program's [`DispatchTable`], which needs no ownership verdict.
 #[derive(Debug, Default)]
 pub struct SlotConventions {
     by_root: BTreeMap<String, BTreeMap<String, Vec<bool>>>,
-    /// The root of the slot a call to a method on a receiver reads, by the
-    /// receiver's type and the method; absent for a static call.
-    dispatch: HashMap<String, HashMap<String, String>>,
-    /// The name of every method some class overrides.
-    overridden: BTreeSet<String>,
 }
 
 impl SlotConventions {
@@ -59,20 +52,6 @@ impl SlotConventions {
         (self.by_root.get(root))
             .and_then(|selectors| selectors.get(selector))
             .map_or(&[], Vec::as_slice)
-    }
-
-    /// The root of the slot a call to `selector` on a `receiver` reads, or
-    /// `None` when the call is static
-    /// ([`super::vtable_selectors::dispatched_slot_root`]).
-    pub fn dispatched_root(&self, receiver: &str, selector: &str) -> Option<&str> {
-        (self.dispatch.get(receiver))
-            .and_then(|selectors| selectors.get(selector))
-            .map(String::as_str)
-    }
-
-    /// Whether some class overrides a method named `method`.
-    pub fn is_overridden(&self, method: &str) -> bool {
-        self.overridden.contains(method)
     }
 
     /// Marks every position `owned` marks as owned by the slot of
@@ -90,27 +69,22 @@ impl SlotConventions {
     }
 }
 
-/// The convention of every slot the classes of `type_defs` fill, with the
-/// slot every call through a vtable reads: for each class and each slot it
-/// fills ([`class_fills`]), the positions some copy of the body filling it
-/// may own ([`owned_by_filling_body`]) join the slot's.
+/// The convention of every slot the classes of `type_defs` fill: for each
+/// class and each slot it fills ([`class_fills`], read off `dispatch`), the
+/// positions some copy of the body filling it may own
+/// ([`owned_by_filling_body`]) join the slot's.
 pub fn decide_slot_conventions(
     type_defs: &HashMap<String, TypeDefinition>,
+    dispatch: &DispatchTable,
     kept: &KeptParameters,
     resources: &ResourceTypes,
 ) -> SlotConventions {
-    let mut conventions = SlotConventions {
-        overridden: overridden_method_names(type_defs)
-            .map(str::to_string)
-            .collect(),
-        ..SlotConventions::default()
-    };
+    let mut conventions = SlotConventions::default();
+    let is_overridden = |method: &str| dispatch.is_overridden(method);
     for (name, definition) in type_defs {
-        record_dispatch(name, type_defs, &mut conventions.dispatch);
         if !matches!(definition, TypeDefinition::Class(_)) {
             continue;
         }
-        let is_overridden = |method: &str| conventions.overridden.contains(method);
         for (selector, roots) in class_fills(name, type_defs, &is_overridden) {
             let owned = owned_by_filling_body((name, selector), type_defs, kept, resources);
             if !owned.contains(&true) {
@@ -122,24 +96,6 @@ pub fn decide_slot_conventions(
         }
     }
     conventions
-}
-
-/// Records the root of the slot each call on a `receiver` reads, for every
-/// method it might read through a vtable.
-fn record_dispatch(
-    receiver: &str,
-    type_defs: &HashMap<String, TypeDefinition>,
-    dispatch: &mut HashMap<String, HashMap<String, String>>,
-) {
-    let roots: HashMap<String, String> = (dispatch_candidates(receiver, type_defs).into_iter())
-        .filter_map(|selector| {
-            let root = dispatched_slot_root(receiver, selector, type_defs)?;
-            Some((selector.to_string(), root.to_string()))
-        })
-        .collect();
-    if !roots.is_empty() {
-        dispatch.insert(receiver.to_string(), roots);
-    }
 }
 
 /// The positions some copy of the body `class_name` runs for `selector` may

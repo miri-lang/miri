@@ -112,7 +112,7 @@ use crate::mir::lowering::constructors::compute_elem_size_from_type;
 use crate::mir::operand::Operand;
 use crate::mir::place::Place;
 use crate::mir::residency::{self, HandleCarriers, Mirror};
-use crate::mir::rvalue::Rvalue;
+use crate::mir::rvalue::{AggregateKind, Rvalue};
 use crate::mir::statement::StatementKind;
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Discriminant;
@@ -432,6 +432,13 @@ fn owner_violations(
     if owners.is_empty() {
         return Vec::new();
     }
+    // A closure body is reached through its value, by calls following the
+    // value's convention, which `value_calls::verify_value_calls` checks;
+    // building the closure is no mention of it.
+    let named_owners: HashSet<&Symbol> = (program.iter())
+        .filter(|(symbol, body)| owners.contains(symbol) && body.captures.closure.is_none())
+        .map(|(symbol, _)| symbol)
+        .collect();
     let mut lowered: HashMap<&Symbol, usize> = HashMap::new();
     let mut violations = Vec::new();
     for (symbol, body) in program {
@@ -444,7 +451,7 @@ fn owner_violations(
             }
         }
         violations.extend(
-            mention_violations(body, &owners)
+            mention_violations(body, &named_owners)
                 .into_iter()
                 .map(|violation| (symbol.clone(), violation)),
         );
@@ -502,17 +509,31 @@ fn body_violation(body: &Body, message: String) -> VerificationViolation {
     }
 }
 
-/// Counts every operand naming one of `owners`.
+/// Counts every mention of one of `owners`: each operand naming it, and
+/// each closure built over it, which reaches it through no call naming it.
 struct OwnerMentions<'o> {
     owners: &'o HashSet<&'o Symbol>,
     counts: HashMap<Symbol, usize>,
 }
 
-impl Visitor for OwnerMentions<'_> {
-    fn visit_function(&mut self, function: &FunctionConstant, _location: BasicBlock) {
-        if self.owners.contains(&function.symbol) {
-            *self.counts.entry(function.symbol.clone()).or_default() += 1;
+impl OwnerMentions<'_> {
+    fn mention(&mut self, symbol: &Symbol) {
+        if self.owners.contains(symbol) {
+            *self.counts.entry(symbol.clone()).or_default() += 1;
         }
+    }
+}
+
+impl Visitor for OwnerMentions<'_> {
+    fn visit_assign(&mut self, block: BasicBlock, _place: &Place, rvalue: &Rvalue) {
+        if let Rvalue::Aggregate(AggregateKind::Closure(symbol, _), _) = rvalue {
+            self.mention(symbol);
+        }
+        self.visit_rvalue(rvalue, block);
+    }
+
+    fn visit_function(&mut self, function: &FunctionConstant, _location: BasicBlock) {
+        self.mention(&function.symbol);
     }
 }
 

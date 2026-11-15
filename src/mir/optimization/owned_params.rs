@@ -48,8 +48,8 @@ use crate::mir::terminator::arg_mode;
 use crate::mir::type_facts::DropHookReach;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
-    ArgMode, BasicBlock, Body, ExecutionModel, FunctionConstant, Local, Operand, Place, PlaceElem,
-    Rvalue, Statement, StatementKind, TerminatorKind,
+    AggregateKind, ArgMode, BasicBlock, Body, ExecutionModel, FunctionConstant, Local, Operand,
+    Place, PlaceElem, Rvalue, Statement, StatementKind, TerminatorKind,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -85,7 +85,7 @@ pub fn decide_owned_parameters(
     let arities = (candidates.iter())
         .map(|(symbol, candidate)| (symbol.clone(), candidate.arity))
         .collect();
-    let reach = reach_of(program, arities);
+    let reach = call_reach_of(program, arities);
     candidates.retain(|symbol, _| {
         reach
             .get(symbol)
@@ -131,19 +131,20 @@ struct Candidate {
 /// owning a parameter needs, since only such a call can pass the argument
 /// owned.
 #[derive(Default)]
-pub struct Reach {
+pub struct CallReach {
     /// How many parameters the function takes.
     arity: usize,
     /// How many bodies were lowered under the symbol.
     bodies: usize,
-    /// How many operands anywhere in the program name the symbol.
+    /// How many operands and closures anywhere in the program name the
+    /// symbol.
     named: usize,
     /// How many of those are the callee of a host call passing `arity`
     /// arguments.
     called: usize,
 }
 
-impl Reach {
+impl CallReach {
     /// Whether some host call names the function as its callee.
     pub fn is_called(&self) -> bool {
         self.called > 0
@@ -163,15 +164,15 @@ impl Reach {
 /// reaches is not called directly. A body the runtime or a vtable slot calls
 /// is reached without any MIR call: the caller checks `synthesized` beside
 /// this.
-pub fn reach_of(
+pub fn call_reach_of(
     program: &[(Symbol, Body)],
     arities: HashMap<Symbol, usize>,
-) -> HashMap<Symbol, Reach> {
-    let mut reach: HashMap<Symbol, Reach> = (arities.into_iter())
+) -> HashMap<Symbol, CallReach> {
+    let mut reach: HashMap<Symbol, CallReach> = (arities.into_iter())
         .map(|(symbol, arity)| {
-            let reach = Reach {
+            let reach = CallReach {
                 arity,
-                ..Reach::default()
+                ..CallReach::default()
             };
             (symbol, reach)
         })
@@ -203,12 +204,18 @@ pub fn reach_of(
 ///
 /// The type checker keeps no parameter of a function it sees reached any of
 /// these ways; this holds that decision to what the lowered program does, on
-/// every build.
+/// every build. A closure body is not refused here: it is reached by the
+/// calls made through its value, and both sides read one convention off the
+/// value's function type
+/// ([`crate::type_checker::kept_parameters::function_value_convention`]), so
+/// a normal build holds them together by construction, and
+/// `verify/value_calls.rs` checks the pair under `--verify-mir`.
 pub fn refuse_indirectly_reached_keepers(
     program: &[(Symbol, Body)],
     synthesized: &HashSet<Symbol>,
 ) -> Result<(), String> {
     let keepers: HashMap<&Symbol, &[bool]> = (program.iter())
+        .filter(|(_, body)| body.captures.closure.is_none())
         .filter(|(_, body)| body.signature.kept_params.contains(&true))
         .map(|(symbol, body)| (symbol, body.signature.kept_params.as_slice()))
         .collect();
@@ -216,7 +223,7 @@ pub fn refuse_indirectly_reached_keepers(
         .filter(|(symbol, _)| keepers.contains_key(symbol))
         .map(|(symbol, body)| (symbol.clone(), body.arg_count))
         .collect();
-    let reach = reach_of(program, arities);
+    let reach = call_reach_of(program, arities);
     let mut refused: Vec<String> = (reach.iter())
         .filter(|(symbol, reach)| synthesized.contains(*symbol) || !reach.is_only_called_directly())
         .map(|(symbol, _)| symbol.link_name())
@@ -478,22 +485,37 @@ fn dies_in_entry_block(body: &Body, local: Local) -> bool {
     })
 }
 
-/// Counts every operand naming a function whose reach is wanted.
+/// Counts every mention of a function whose reach is wanted: each operand
+/// naming it, and each closure built over it, which reaches the body through
+/// no MIR call naming it.
 struct FunctionMentions<'c> {
-    reach: &'c mut HashMap<Symbol, Reach>,
+    reach: &'c mut HashMap<Symbol, CallReach>,
 }
 
-impl Visitor for FunctionMentions<'_> {
-    fn visit_function(&mut self, function: &FunctionConstant, _location: BasicBlock) {
-        if let Some(reach) = self.reach.get_mut(&function.symbol) {
+impl FunctionMentions<'_> {
+    fn mention(&mut self, symbol: &Symbol) {
+        if let Some(reach) = self.reach.get_mut(symbol) {
             reach.named += 1;
         }
     }
 }
 
+impl Visitor for FunctionMentions<'_> {
+    fn visit_assign(&mut self, block: BasicBlock, _place: &Place, rvalue: &Rvalue) {
+        if let Rvalue::Aggregate(AggregateKind::Closure(symbol, _), _) = rvalue {
+            self.mention(symbol);
+        }
+        self.visit_rvalue(rvalue, block);
+    }
+
+    fn visit_function(&mut self, function: &FunctionConstant, _location: BasicBlock) {
+        self.mention(&function.symbol);
+    }
+}
+
 /// Count each call in `body` naming a function whose reach is wanted as its
 /// callee with as many arguments as the function takes.
-fn count_direct_calls(body: &Body, reach: &mut HashMap<Symbol, Reach>) {
+fn count_direct_calls(body: &Body, reach: &mut HashMap<Symbol, CallReach>) {
     for terminator in body
         .basic_blocks
         .iter()

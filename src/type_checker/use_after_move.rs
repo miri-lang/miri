@@ -44,6 +44,7 @@ use super::open_consumption::{OpenBody, OpenRefusal};
 use super::slot_conventions::SlotConventions;
 use super::type_identities::DeclaredNames;
 use super::utils::{hands_on_a_reference, runs_drop_hook, ResourceTypes};
+use super::vtable_selectors::DispatchTable;
 use crate::ast::captures::collect_lambda_captures;
 
 /// Why `value.drop()` is refused on a receiver the scope does not own.
@@ -321,6 +322,24 @@ struct OpenSite {
     expression: usize,
 }
 
+/// What a call through a vtable hands over: which slot it reads, decided
+/// from the type table ([`DispatchTable`]), and which positions that slot
+/// owns ([`SlotConventions`]).
+#[derive(Clone, Copy)]
+pub struct VtableCalls<'a> {
+    pub dispatch: &'a DispatchTable,
+    pub conventions: &'a SlotConventions,
+}
+
+impl<'a> VtableCalls<'a> {
+    /// The positions a call to `method_name` on a `receiver` hands over
+    /// through its slot, or `None` when the call is static.
+    fn convention(&self, receiver: &str, method_name: &str) -> Option<&'a [bool]> {
+        let root = self.dispatch.dispatched_root(receiver, method_name)?;
+        Some(self.conventions.of(root, method_name))
+    }
+}
+
 pub struct UseAfterMoveChecker<'a> {
     /// Answers whether control can reach the end of a statement or an
     /// expression.
@@ -334,9 +353,9 @@ pub struct UseAfterMoveChecker<'a> {
     /// The function each free-function callee resolved to, by callee id: a
     /// free function's summary is its declaration's, never its name's.
     callees: &'a HashMap<usize, DeclaredFunction>,
-    /// The positions each vtable slot owns, which a call through the slot
-    /// consumes.
-    slot_conventions: &'a SlotConventions,
+    /// Which slot a call through a vtable reads and the positions it owns,
+    /// which a call through the slot consumes.
+    vtable_calls: VtableCalls<'a>,
     /// The named types that are resources, decided once for the program.
     resources: &'a ResourceTypes,
     /// How each `for` statement walks its value, by the statement's id.
@@ -427,7 +446,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         type_definitions: &'a HashMap<String, TypeDefinition>,
         escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
         callees: &'a HashMap<usize, DeclaredFunction>,
-        slot_conventions: &'a SlotConventions,
+        vtable_calls: VtableCalls<'a>,
         resources: &'a ResourceTypes,
     ) -> Self {
         Self {
@@ -436,7 +455,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             type_definitions,
             escape_summaries,
             callees,
-            slot_conventions,
+            vtable_calls,
             resources,
             iteration_plans: None,
             names: None,
@@ -1906,14 +1925,8 @@ impl<'a> UseAfterMoveChecker<'a> {
             self.escape_summaries,
             self.type_definitions,
         );
-        match self
-            .slot_conventions
-            .dispatched_root(type_name, method_name)
-        {
-            Some(root) => {
-                let convention = self.slot_conventions.of(root, method_name);
-                Some(slot_summary(summary.unwrap_or_default(), convention))
-            }
+        match self.vtable_calls.convention(type_name, method_name) {
+            Some(convention) => Some(slot_summary(summary.unwrap_or_default(), convention)),
             None => summary,
         }
     }
@@ -1934,10 +1947,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         if matches!(receiver.node, ExpressionKind::Super) {
             return None;
         }
-        let root = self
-            .slot_conventions
-            .dispatched_root(type_name, method_name)?;
-        Some(self.slot_conventions.of(root, method_name))
+        self.vtable_calls.convention(type_name, method_name)
     }
 
     /// The receiver's declared type and the method's name of a method-call
