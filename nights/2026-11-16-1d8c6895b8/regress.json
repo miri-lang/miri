@@ -1,0 +1,21 @@
+{
+ "run_id": "20261116T131706Z",
+ "suspect": [
+  {
+   "cell": "binary-trees/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.055283581990702,
+   "baseline": 0.9400608645582725,
+   "tonight": 0.9920307964403301
+  },
+  {
+   "cell": "wordfreq/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.0936903138194563,
+   "baseline": 4.9837028795190745,
+   "tonight": 5.450627566284145
+  }
+ ],
+ "regressed": [],
+ "recovered": []
+}
