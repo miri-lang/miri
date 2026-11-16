@@ -21,8 +21,9 @@ use std::rc::Rc;
 /// declares.
 pub type RuntimeEffects = HashMap<String, Rc<RuntimeEffect>>;
 
-/// What an element argument of a collection entry point is to the
-/// collection it is handed to.
+/// What an element argument of an entry point is: an element, key or value
+/// of the collection it is handed to, or a value of the entry point's own
+/// type parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ElementRole {
     /// An element of a list, an array or a set.
@@ -31,6 +32,11 @@ pub enum ElementRole {
     Key,
     /// A value of a map.
     Value,
+    /// A value of a type parameter the declaration itself declares. No
+    /// collection types it: its type is the declared parameter's at the
+    /// type arguments the call binds, which the call's function operand
+    /// records.
+    Parameter,
 }
 
 /// What a runtime entry point that calls a Miri closure promises about the
@@ -69,6 +75,13 @@ pub enum ParamUse {
     /// An element the collection's contents are matched against: read, never
     /// kept, and travelling by address like a stored one.
     LooksUp(ElementRole),
+    /// The caller's place, passed `out` and typed by a type parameter the
+    /// declaration itself declares ([`ElementRole::Parameter`]): the entry
+    /// point reads its bytes out and writes others over them. The reference
+    /// the place held leaves with what was read, so the place keeps the count
+    /// it had; it travels by address like any element, and the address is
+    /// where the runtime writes.
+    Overwrites,
     /// A closure the runtime calls in the shape the contract gives.
     Closure(ClosureContract),
     /// The receiver of a copy-on-write entry point: taken over and handed
@@ -124,6 +137,15 @@ pub struct RuntimeEffect {
     /// Reads the count of what it is handed: asks whether it is shared, or
     /// stops the program unless the call holds it alone.
     pub reads_count: bool,
+    /// The type parameters the declaration itself declares, in order. The
+    /// entry point is one symbol at every instantiation of them.
+    pub type_parameters: Vec<String>,
+    /// For each declared parameter, the index in
+    /// [`type_parameters`](Self::type_parameters) of the one it is declared
+    /// as, bare; `None` for a parameter declared at any other type.
+    pub typed_by: Vec<Option<usize>>,
+    /// The index of the type parameter the result is declared as, bare.
+    pub result_typed_by: Option<usize>,
 }
 
 impl RuntimeEffect {
@@ -138,7 +160,17 @@ impl RuntimeEffect {
             matches: None,
             leaves_headers: false,
             reads_count: false,
+            type_parameters: Vec::new(),
+            typed_by: Vec::new(),
+            result_typed_by: None,
         }
+    }
+
+    /// Each declared position with the type parameter, by index, it is
+    /// declared as, bare.
+    pub fn bare_parameter_positions(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        (self.typed_by.iter().enumerate())
+            .filter_map(|(position, parameter)| parameter.map(|parameter| (position, parameter)))
     }
 
     /// The use of the declared parameter `position`; a position past the
@@ -189,6 +221,12 @@ impl RuntimeEffect {
     /// Whether the element handed at `position` is one the container keeps.
     pub fn stores(&self, position: usize) -> bool {
         matches!(self.param(position), ParamUse::Stores(_))
+    }
+
+    /// Whether the element handed at `position` is the caller's place, which
+    /// the entry point writes new bytes over.
+    pub fn overwrites(&self, position: usize) -> bool {
+        self.param(position) == ParamUse::Overwrites
     }
 
     /// Whether the entry point writes, in place, what it is handed at
@@ -260,12 +298,14 @@ impl RuntimeEffect {
         self.preserves_length()
     }
 
-    /// Positions carrying an element the container stores or looks up, each
-    /// with what it is to the container.
+    /// Positions carrying an element the entry point stores, looks up or
+    /// overwrites, each with what it is to the container, or
+    /// [`ElementRole::Parameter`] where no container types it.
     pub fn element_roles(&self) -> Vec<(usize, ElementRole)> {
         (self.params.iter().enumerate())
             .filter_map(|(position, use_)| match use_ {
                 ParamUse::Stores(role) | ParamUse::LooksUp(role) => Some((position, *role)),
+                ParamUse::Overwrites => Some((position, ElementRole::Parameter)),
                 ParamUse::Scalar
                 | ParamUse::Reads
                 | ParamUse::Writes
@@ -294,6 +334,7 @@ impl RuntimeEffect {
             | ParamUse::Writes
             | ParamUse::Stores(_)
             | ParamUse::LooksUp(_)
+            | ParamUse::Overwrites
             | ParamUse::CopiesOnWrite
             | ParamUse::Appends
             | ParamUse::CountOf => None,

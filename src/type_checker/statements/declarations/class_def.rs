@@ -810,6 +810,7 @@ impl TypeChecker {
                 StatementKind::RuntimeFunctionDeclaration(
                     _runtime,
                     rt_name,
+                    generics,
                     params,
                     return_type_expr,
                     attributes,
@@ -817,6 +818,7 @@ impl TypeChecker {
                     self.collect_runtime_function(
                         &RuntimeDeclaration {
                             name: rt_name,
+                            generics: generics.as_deref(),
                             params,
                             return_type: return_type_expr.as_deref(),
                             attributes,
@@ -1059,7 +1061,7 @@ impl TypeChecker {
     ) {
         let rt_name = declaration.name;
         let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
-            generics: None,
+            generics: declaration.generics.map(<[Expression]>::to_vec),
             params: declaration.params.to_vec(),
             return_type: declaration.return_type.cloned().map(Box::new),
         })));

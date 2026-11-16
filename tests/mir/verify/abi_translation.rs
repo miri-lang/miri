@@ -410,7 +410,7 @@ fn lookup_by_a_local() -> (Body, Body, usize, Place) {
                 continue;
             };
             let looked_up = (effect.element_positions().into_iter())
-                .filter(|&position| !effect.stores(position))
+                .filter(|&position| !effect.stores(position) && !effect.overwrites(position))
                 .find_map(|position| match args.get(position) {
                     Some(Operand::Copy(place)) if place.projection.is_empty() => {
                         Some(place.clone())
@@ -450,4 +450,142 @@ fn test_a_looked_up_element_copied_into_a_temporary_is_flagged() {
     let at = before.basic_blocks[block].statements.len();
     after.basic_blocks[block].statements.insert(at, copy);
     assert_flagged(&before, &after, "not of the element");
+}
+
+/// Hands a runtime entry point a place it writes, held in a register and as
+/// its bytes, beside a new value it stores there and gets the old one back.
+const OVERWRITING: &str = r#"
+@element("place, new")
+@writes("place")
+@stores("new")
+@returns_element
+runtime "core" fn miri_rt_overwrite_probe<T>(place out T, new T) T
+
+struct Point
+    x int
+    y int
+
+fn main()
+    var name = "a"
+    let old_name = miri_rt_overwrite_probe(name, "b")
+    var point = Point(x: 1, y: 2)
+    let old_point = miri_rt_overwrite_probe(point, Point(x: 3, y: 4))
+"#;
+
+/// `main` of [`OVERWRITING`] before and after both ABI passes, with the
+/// blocks ending in its two calls of the probe, in source order.
+fn overwriting_main() -> (Body, Body, Vec<usize>) {
+    let (_, before) = Pipeline::new()
+        .get_mir_bodies_with_rc(OVERWRITING)
+        .expect("the program lowers")
+        .into_iter()
+        .find(|(name, _)| name == "main")
+        .expect("main is lowered");
+    let mut after = before.clone();
+    pass_elements_by_address(&mut after).expect("the element ABI applies");
+    pass_closures_with_trampolines(&mut after).expect("the closure ABI applies");
+    let calls = (0..before.basic_blocks.len())
+        .filter(|&block| {
+            matches!(&before.basic_blocks[block].terminator.as_ref().map(|t| &t.kind),
+                Some(TerminatorKind::Call { func, .. })
+                    if func.called_runtime_effect().is_some_and(|e| !e.element_positions().is_empty()))
+        })
+        .collect();
+    (before, after, calls)
+}
+
+fn call_modes(body: &Body, block: usize) -> Vec<miri::mir::ArgMode> {
+    match body.basic_blocks[block]
+        .terminator
+        .as_ref()
+        .map(|t| &t.kind)
+    {
+        Some(TerminatorKind::Call { arg_modes, .. }) => arg_modes.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// A written place held in a register travels as itself, passed `out`, so
+/// the backend hands the runtime a slot it reads back; one held as its bytes
+/// travels as the address of those bytes.
+#[test]
+fn test_a_written_element_travels_as_its_place() {
+    let (before, after, calls) = overwriting_main();
+    let [register, bytes] = calls.as_slice() else {
+        panic!("main calls the probe twice, found {calls:?}");
+    };
+    let lowered = call_args(&before, *register);
+    assert_eq!(call_args(&after, *register)[0], lowered[0]);
+    assert_eq!(call_modes(&after, *register)[0], miri::mir::ArgMode::Out);
+    let address = call_args(&after, *bytes)[0].clone();
+    let Operand::Copy(address) = address else {
+        panic!("the bytes travel as an address, found {address}");
+    };
+    let takes_the_address = after.basic_blocks[*bytes].statements.iter().any(|s| {
+        matches!(&s.kind, StatementKind::Assign(target, Rvalue::Ref(place))
+            if *target == address && Some(place) == call_args(&before, *bytes)[0].place())
+    });
+    assert!(takes_the_address, "{after}");
+    assert_eq!(call_modes(&after, *bytes)[0], miri::mir::ArgMode::Borrowed);
+    let found = messages(&verify_abi_translation(&before, &after));
+    assert!(found.is_empty(), "{found:?}\n{after}");
+}
+
+/// A written place in a register passed as a plain word would hand the
+/// runtime the value rather than where to write, and the write is lost.
+#[test]
+fn test_a_written_element_not_passed_out_is_flagged() {
+    let (before, mut after, calls) = overwriting_main();
+    let TerminatorKind::Call { arg_modes, .. } = call_mut(&mut after, calls[0]) else {
+        panic!("the probe call is a call");
+    };
+    arg_modes[0] = miri::mir::ArgMode::Borrowed;
+    assert_flagged(&before, &after, "written element");
+}
+
+/// A written place in a register whose address is taken hands the runtime a
+/// copy: the backend fills a fresh slot and never reads it back.
+#[test]
+fn test_a_written_element_passed_by_a_copy_of_its_address_is_flagged() {
+    let (before, mut after, calls) = overwriting_main();
+    let block = calls[0];
+    let place = call_args(&before, block)[0]
+        .place()
+        .cloned()
+        .expect("the written element is a place");
+    let span = Span::default();
+    let address = after.new_local(miri::mir::LocalDecl::new(
+        miri::ast::types::Type::new(miri::ast::types::TypeKind::RawPtr, span),
+        span,
+    ));
+    after.basic_blocks[block].statements.push(Statement {
+        kind: StatementKind::Assign(Place::new(address), Rvalue::Ref(place)),
+        span,
+    });
+    let TerminatorKind::Call {
+        args, arg_modes, ..
+    } = call_mut(&mut after, block)
+    else {
+        panic!("the probe call is a call");
+    };
+    args[0] = Operand::Copy(Place::new(address));
+    arg_modes[0] = miri::mir::ArgMode::Borrowed;
+    assert_flagged(&before, &after, "written element");
+}
+
+/// A written place spelled without its byte count after it names no width
+/// the runtime could write, so the place itself is flagged, not only the
+/// arguments the call is short of.
+#[test]
+fn test_a_written_element_without_its_byte_count_is_flagged() {
+    let (before, mut after, calls) = overwriting_main();
+    let TerminatorKind::Call {
+        args, arg_modes, ..
+    } = call_mut(&mut after, calls[0])
+    else {
+        panic!("the probe call is a call");
+    };
+    args.truncate(1);
+    arg_modes.truncate(1);
+    assert_flagged(&before, &after, "written element spelled without");
 }

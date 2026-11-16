@@ -54,12 +54,11 @@ fn normalize_stmt(stmt: &mut Statement) {
         } => normalize_for_stmt(vars, iterable, body),
         StatementKind::GpuFrameBlock(block) => normalize_stmt(block),
         StatementKind::FunctionDeclaration(decl) => normalize_function_decl(decl),
-        StatementKind::RuntimeFunctionDeclaration(_, _, params, ret, _) => {
-            normalize_params(params);
-            normalize_optional_expr(ret.as_deref_mut());
+        StatementKind::RuntimeFunctionDeclaration(_, _, generics, params, ret, _) => {
+            normalize_bodiless_function_decl(generics, params, ret.as_deref_mut())
         }
         StatementKind::IntrinsicFunctionDeclaration(_, generics, params, ret, _) => {
-            normalize_intrinsic_function_decl(generics, params, ret.as_deref_mut())
+            normalize_bodiless_function_decl(generics, params, ret.as_deref_mut())
         }
         StatementKind::Use(path, alias) => {
             normalize_expr(path);
@@ -92,7 +91,7 @@ fn normalize_if_stmt(
     }
 }
 
-fn normalize_intrinsic_function_decl(
+fn normalize_bodiless_function_decl(
     generics: &mut Option<Vec<Expression>>,
     params: &mut [Parameter],
     ret: Option<&mut Expression>,

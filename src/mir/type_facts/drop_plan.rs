@@ -120,7 +120,11 @@ pub(crate) fn drop_plan(
 ) -> DropPlan {
     let open = thunk_open_parameters(definitions, name, args);
     DropPlan {
-        hook: crate::mir::lowering::dispatch_symbols::drop_hook_symbol(name, definitions),
+        hook: crate::mir::lowering::dispatch_symbols::instantiated_drop_hook_symbol(
+            name,
+            args,
+            definitions,
+        ),
         members: dropped_members_in(definitions, name, args, &open),
         may_recurse: reach.may_recurse(name, args),
     }

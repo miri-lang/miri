@@ -309,9 +309,9 @@ fn variable_statement_keeps_visibility() {
 
 #[test]
 fn runtime_function_declaration_carries_kind() {
-    let s = runtime_function_declaration(RuntimeKind::Core, "miri_rt_x", vec![], None);
+    let s = runtime_function_declaration(RuntimeKind::Core, "miri_rt_x", None, vec![], None);
     match s.node {
-        StatementKind::RuntimeFunctionDeclaration(kind, name, params, ret, _) => {
+        StatementKind::RuntimeFunctionDeclaration(kind, name, _, params, ret, _) => {
             assert_eq!(kind, RuntimeKind::Core);
             assert_eq!(name, "miri_rt_x");
             assert!(params.is_empty());

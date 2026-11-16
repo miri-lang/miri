@@ -44,6 +44,7 @@ pub mod io;
 pub mod list;
 pub mod map;
 pub mod os;
+pub mod place;
 pub mod process;
 pub mod profile;
 pub mod rc;

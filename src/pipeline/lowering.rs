@@ -372,9 +372,9 @@ impl TraitDefaultBodies {
     }
 }
 
-/// One method a generic class compiles under its own name — one it declares,
-/// or a trait default it inherits — as its open template, which leaves the
-/// class's parameters open.
+/// One method a generic class or enum compiles under its own name — one it
+/// declares, or a trait default a class inherits — as its open template,
+/// which leaves the type's parameters open.
 ///
 /// Every call at concrete arguments names the body compiled for its
 /// instantiation, so a template is compiled only where something still names
@@ -406,11 +406,9 @@ impl ClassTemplateMethod {
         trait_defaults: &TraitDefaultBodies,
     ) -> Option<(&'r Statement, &'r Statement)> {
         let class_stmt = self.class_site.statement(result)?;
-        let StatementKind::Class(class_data) = &class_stmt.node else {
-            return None;
-        };
+        let (_, members) = generic_type_members(class_stmt)?;
         let method_stmt = match &self.body {
-            TemplateBody::Own(member) => class_data.body.get(*member)?,
+            TemplateBody::Own(member) => members.get(*member)?,
             TemplateBody::TraitDefault { trait_name, method } => {
                 trait_defaults.method(result, trait_name, method)?
             }
@@ -427,13 +425,10 @@ fn class_template_methods(
 ) -> Vec<ClassTemplateMethod> {
     let mut templates = Vec::new();
     for (class_site, stmt) in statements_with_sites(result) {
-        let StatementKind::Class(class_data) = &stmt.node else {
+        let Some((name, members)) = generic_type_members(stmt) else {
             continue;
         };
-        if class_data.generics.is_none() {
-            continue;
-        }
-        let Some(class_name) = result.type_checker.type_identity_named_by(&class_data.name) else {
+        let Some(class_name) = result.type_checker.type_identity_named_by(name) else {
             continue;
         };
         let template = |method: &str, body| ClassTemplateMethod {
@@ -442,10 +437,13 @@ fn class_template_methods(
             class_site,
             body,
         };
-        for (member, method_stmt) in class_data.body.iter().enumerate() {
+        for (member, method_stmt) in members.iter().enumerate() {
             if let Some(decl) = shared_method_body(method_stmt) {
                 templates.push(template(&decl.name, TemplateBody::Own(member)));
             }
+        }
+        if !matches!(stmt.node, StatementKind::Class(_)) {
+            continue;
         }
         for (method, trait_name) in inherited_default_templates(result, trait_defaults, class_name)
         {
@@ -457,6 +455,22 @@ fn class_template_methods(
         }
     }
     templates
+}
+
+/// The name and the members of the generic class or enum `stmt` declares;
+/// `None` for any other statement, and for a class or enum that declares no
+/// type parameters, whose methods are compiled once.
+fn generic_type_members(stmt: &Statement) -> Option<(&crate::ast::Expression, &[Statement])> {
+    if let StatementKind::Class(class_data) = &stmt.node {
+        return class_data
+            .generics
+            .is_some()
+            .then_some((&class_data.name, class_data.body.as_slice()));
+    }
+    if let StatementKind::Enum(name, Some(_), _, methods, _, _) = &stmt.node {
+        return Some((name, methods.as_slice()));
+    }
+    None
 }
 
 /// Every trait default with a body that the concrete class `class_name`
@@ -701,10 +715,10 @@ fn register_base_class_instantiations(type_checker: &mut TypeChecker) -> Result<
     }
 }
 
-/// The receiver an enum method compiled once for every instantiation holds:
-/// the bare enum, or for the enum `T?` spells, `T?` at its own parameter, the
-/// way every caller holds it.
-fn shared_enum_self_type(result: &PipelineResult, enum_name: &str, span: Span) -> Type {
+/// The receiver a method compiled once for every instantiation of its class
+/// or enum holds: the bare type, or for the enum `T?` spells, `T?` at its own
+/// parameter, the way every caller holds it.
+fn shared_self_type(result: &PipelineResult, enum_name: &str, span: Span) -> Type {
     match result.type_checker.optional_enum() {
         Some(optional) if optional.name == enum_name => optional.shared_self_type(span),
         Some(_) | None => Type::new(TypeKind::Custom(enum_name.to_string(), None), span),
@@ -1089,7 +1103,12 @@ impl Pipeline {
             .into_iter()
             .filter(|site| !symbols.is_claimed(&site.method.symbol))
             .filter_map(|site| {
-                let demand = if called.is_called(&site.method.symbol) {
+                // Every release of an instance runs the drop hook its drop
+                // plan names through the instantiation's drop thunk, so each
+                // reached instance compiles that hook.
+                let demand = if called.is_called(&site.method.symbol)
+                    || Self::is_released_drop_hook(result, &site.method)
+                {
                     MethodDemand::Called
                 } else if called.contains(&site.method.symbol)
                     || Self::is_element_method_body(
@@ -1110,6 +1129,20 @@ impl Pipeline {
                 })
             })
             .collect()
+    }
+
+    /// Whether `method` is the drop hook a release of its instance runs, the
+    /// one the instantiation's drop plan names.
+    fn is_released_drop_hook(result: &PipelineResult, method: &InstanceMethod) -> bool {
+        let args: Vec<Type> = (method.mangle_args.iter())
+            .map(|(_, arg)| arg.clone())
+            .collect();
+        let hook = mir::lowering::dispatch_symbols::instantiated_drop_hook_symbol(
+            &method.class_name,
+            Some(&args),
+            result.type_checker.type_definitions(),
+        );
+        hook.as_ref() == Some(&method.symbol)
     }
 
     /// Every method each class and generic enum compiles under its own name,
@@ -1761,9 +1794,15 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Emit the open template of each generic class method a lowered body
-    /// names: a call, or a slot of a vtable built where the class's arguments
-    /// have no spelling. One nothing names is never compiled.
+    /// Emit the open template of each generic class or enum method a lowered
+    /// body names: a call, or a slot of a vtable built where the class's
+    /// arguments have no spelling. One nothing names is never compiled.
+    // TODO: two named templates that call one generic function at open
+    // arguments of different shapes (`f<T?>` from one, `f<A<T>>` from
+    // another) still meet in the one symbol `f$__open`, because a type
+    // argument naming an open parameter is spelled `__open` whatever its
+    // shape; the second caller then declares that symbol at another
+    // signature. Spelling the open shape in the symbol would end it.
     fn lower_called_class_templates(
         result: &PipelineResult,
         reach: &ReachTables,
@@ -1790,10 +1829,7 @@ impl Pipeline {
             {
                 continue;
             }
-            let self_type = Type::new(
-                TypeKind::Custom(template.class_name.clone(), None),
-                class_stmt.span,
-            );
+            let self_type = shared_self_type(result, &template.class_name, class_stmt.span);
             let body = match &template.body {
                 TemplateBody::Own(_) => mir::lowering::lower_class_method_with_compilation_ids(
                     method_stmt,
@@ -1898,9 +1934,11 @@ impl Pipeline {
                         compilation_ids,
                     )?;
                 }
-                // A generic class's methods are its open templates, compiled
-                // only where something names one, by `lower_called_class_templates`.
+                // A generic class's or enum's methods are its open templates,
+                // compiled only where something names one, by
+                // `lower_called_class_templates`.
                 StatementKind::Class(class_data) if class_data.generics.is_some() => {}
+                StatementKind::Enum(_, Some(_), _, _, _, _) => {}
                 StatementKind::Class(class_data) => {
                     let Some(class_name) =
                         result.type_checker.type_identity_named_by(&class_data.name)
@@ -1968,7 +2006,7 @@ impl Pipeline {
                     else {
                         continue;
                     };
-                    let self_type = shared_enum_self_type(result, enum_name, stmt.span);
+                    let self_type = shared_self_type(result, enum_name, stmt.span);
 
                     for (method_stmt, method_decl) in shared_method_bodies(methods) {
                         let symbol = Symbol::method(enum_name, &[], &method_decl.name, &[]);
@@ -2021,9 +2059,11 @@ impl Pipeline {
                         compilation_ids,
                     )?;
                 }
-                // A generic class's methods are its open templates, compiled
-                // only where something names one, by `lower_called_class_templates`.
+                // A generic class's or enum's methods are its open templates,
+                // compiled only where something names one, by
+                // `lower_called_class_templates`.
                 StatementKind::Class(class_data) if class_data.generics.is_some() => {}
+                StatementKind::Enum(_, Some(_), _, _, _, _) => {}
                 StatementKind::Class(class_data) => {
                     // Extract the class name string
                     let Some(class_name) =
@@ -2092,7 +2132,7 @@ impl Pipeline {
                     else {
                         continue;
                     };
-                    let self_type = shared_enum_self_type(result, enum_name, stmt.span);
+                    let self_type = shared_self_type(result, enum_name, stmt.span);
 
                     for (method_stmt, method_decl) in shared_method_bodies(methods) {
                         let symbol = Symbol::method(enum_name, &[], &method_decl.name, &[]);

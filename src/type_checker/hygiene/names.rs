@@ -164,9 +164,14 @@ impl References {
                 self.expressions(parents);
                 self.statements(body);
             }
-            StatementKind::RuntimeFunctionDeclaration(_, _, parameters, return_type, _) => {
-                self.signature(None, parameters, return_type.as_deref())
-            }
+            StatementKind::RuntimeFunctionDeclaration(
+                _,
+                _,
+                generics,
+                parameters,
+                return_type,
+                _,
+            ) => self.signature(generics.as_deref(), parameters, return_type.as_deref()),
             StatementKind::IntrinsicFunctionDeclaration(_, generics, params, return_type, _) => {
                 self.signature(generics.as_deref(), params, return_type.as_deref())
             }

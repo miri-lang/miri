@@ -393,12 +393,14 @@ pub fn abstract_function_declaration(
 pub fn runtime_function_declaration(
     runtime: RuntimeKind,
     name: &str,
+    generics: Option<Vec<Expression>>,
     parameters: Vec<Parameter>,
     return_type: Option<Box<Expression>>,
 ) -> Statement {
     stmt(StatementKind::RuntimeFunctionDeclaration(
         runtime,
         name.into(),
+        generics,
         parameters,
         return_type,
         Vec::new(),

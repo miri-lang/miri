@@ -620,8 +620,9 @@ impl PlaceTypes<'_> {
     /// What each argument of the call `kind` is passed as, by position.
     ///
     /// A runtime entry point takes its elements, keys and values at the
-    /// receiver collection's type arguments ([`RuntimeEffect::element_roles`])
-    /// and every other argument as a word; a Miri function at its parameters; a function value at the parameters its
+    /// receiver collection's type arguments ([`RuntimeEffect::element_roles`]),
+    /// a value of its own type parameter at the type its function operand
+    /// records for the call, and every other argument as a word; a Miri function at its parameters; a function value at the parameters its
     /// type declares; a virtual call at the parameter types its call site
     /// recorded. An argument past the declared parameters — the allocator —
     /// is a word. `callees` names every Miri function's parameters.
@@ -661,7 +662,7 @@ impl PlaceTypes<'_> {
         let declared = match func {
             Operand::Function(function) => {
                 if let Some(runtime) = function.symbol.runtime_effect() {
-                    return self.element_argument_slots(runtime, args);
+                    return self.element_argument_slots(runtime, &function.ty, args);
                 }
                 callees.of_callee(&function.symbol)
             }
@@ -681,23 +682,32 @@ impl PlaceTypes<'_> {
             .collect()
     }
 
-    /// The arguments of the runtime entry point doing `runtime`: each element,
-    /// key or value at the receiver collection's type argument, every other
-    /// one a word.
+    /// The arguments of the runtime entry point doing `runtime`, called
+    /// through a function operand typed `callee`: each element, key or value
+    /// at the receiver collection's type argument, each value of the entry
+    /// point's own type parameter at the parameter type `callee` records for
+    /// this call, every other one a word.
     fn element_argument_slots(
         &self,
         runtime: &RuntimeEffect,
+        callee: &Type,
         args: &[Operand],
     ) -> Vec<ArgumentSlot> {
         let collection = args
             .first()
             .and_then(|receiver| self.operand_type(receiver));
+        let instantiated = function_parameters(callee);
         let mut slots = vec![ArgumentSlot::Word; args.len()];
         for (position, role) in runtime.element_roles() {
-            let slot = collection
-                .as_ref()
-                .and_then(|collection| element_slot(collection, role))
-                .map_or(ArgumentSlot::Unknown, ArgumentSlot::Declared);
+            let declared = match role {
+                ElementRole::Parameter => instantiated
+                    .as_ref()
+                    .and_then(|params| params.get(position).cloned()),
+                ElementRole::Element | ElementRole::Key | ElementRole::Value => collection
+                    .as_ref()
+                    .and_then(|collection| element_slot(collection, role)),
+            };
+            let slot = declared.map_or(ArgumentSlot::Unknown, ArgumentSlot::Declared);
             if let Some(entry) = slots.get_mut(position) {
                 *entry = slot;
             }
@@ -749,7 +759,8 @@ pub fn element_slot(collection: &Type, role: ElementRole) -> Option<Type> {
         | (
             BuiltinCollectionKind::Array | BuiltinCollectionKind::List | BuiltinCollectionKind::Set,
             ElementRole::Key | ElementRole::Value,
-        ) => return None,
+        )
+        | (_, ElementRole::Parameter) => return None,
     };
     element_type(arguments.get(position)?)
 }

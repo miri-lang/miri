@@ -154,13 +154,14 @@ fn statement_code(sink: &mut Sink, node: &Statement, indent: usize) {
         StatementKind::RuntimeFunctionDeclaration(
             runtime,
             name,
+            generics,
             parameters,
             return_type,
             entries,
         ) => runtime_function(
             sink,
             (runtime, entries),
-            name,
+            (name, generics.as_deref()),
             parameters,
             return_type.as_deref(),
             indent,
@@ -583,7 +584,7 @@ pub(super) fn function_header(
 fn runtime_function(
     sink: &mut Sink,
     (runtime, entries): (&RuntimeKind, &[Attribute]),
-    name: &str,
+    (name, generics): (&str, Option<&[Expression]>),
     parameters: &[Parameter],
     return_type: Option<&Expression>,
     indent: usize,
@@ -594,6 +595,7 @@ fn runtime_function(
     sink.emit(runtime.name());
     sink.emit("\" fn ");
     sink.emit(name);
+    generic_arguments(sink, generics);
     parameter_list(sink, parameters);
     if let Some(return_type) = return_type {
         sink.emit(" ");

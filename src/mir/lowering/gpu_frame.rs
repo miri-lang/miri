@@ -619,7 +619,7 @@ fn detect_frame_usage(stmt: &Statement) -> bool {
         | StatementKind::Class(_)
         | StatementKind::Trait(_, _, _, _, _)
         | StatementKind::FunctionDeclaration(_)
-        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _)
+        | StatementKind::RuntimeFunctionDeclaration(..)
         | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
     }
 }

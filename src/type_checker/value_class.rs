@@ -222,14 +222,21 @@ impl FieldRepr {
 
 /// The value class of `kind`, decided against `scope`.
 pub fn value_class(kind: &TypeKind, scope: LayoutScope<'_>) -> ValueClass {
-    let mut classifier = Classifier {
-        definitions: scope.definitions,
-        visits_left: VISIT_BUDGET,
-        depth: 0,
-    };
+    let mut classifier = Classifier::over(scope.definitions);
     classifier
         .classify(kind, Names::Body(scope.type_params))
         .into_class()
+}
+
+/// Whether deciding the value class of `kind` against `scope` reads a type
+/// parameter left open. One that does is decided by what the parameter is
+/// bound to, so its class, and the bytes it spans, may differ between
+/// instantiations; one that does not has, at every instantiation, the class
+/// it has with its parameters open.
+pub fn class_reads_open_parameter(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
+    let mut classifier = Classifier::over(scope.definitions);
+    classifier.classify(kind, Names::Body(scope.type_params));
+    classifier.read_open_parameter
 }
 
 /// Whether `kind` is the type an absent value is spelled at before it meets
@@ -367,9 +374,26 @@ struct Classifier<'a> {
     definitions: &'a HashMap<String, TypeDefinition>,
     visits_left: u32,
     depth: u32,
+    /// Whether a verdict so far was decided by an open parameter's word.
+    read_open_parameter: bool,
 }
 
 impl<'a> Classifier<'a> {
+    fn over(definitions: &'a HashMap<String, TypeDefinition>) -> Self {
+        Self {
+            definitions,
+            visits_left: VISIT_BUDGET,
+            depth: 0,
+            read_open_parameter: false,
+        }
+    }
+
+    /// An open parameter's class: one uncounted word, whatever it is bound to.
+    fn open_parameter(&mut self) -> Verdict {
+        self.read_open_parameter = true;
+        Verdict::Class(ValueClass::Word(WordRole::Parameter))
+    }
+
     fn classify(&mut self, kind: &'a TypeKind, names: Names<'_, 'a>) -> Verdict {
         if self.visits_left == 0 || self.depth == DEPTH_LIMIT {
             return Verdict::managed();
@@ -438,7 +462,7 @@ impl<'a> Classifier<'a> {
     fn classify_parameter(&mut self, parameter: Option<Option<Argument<'_, 'a>>>) -> Verdict {
         match parameter {
             Some(Some(argument)) => self.classify_argument(argument),
-            Some(None) | None => Verdict::Class(ValueClass::Word(WordRole::Parameter)),
+            Some(None) | None => self.open_parameter(),
         }
     }
 
@@ -489,9 +513,7 @@ impl<'a> Classifier<'a> {
                 let frame = bind(alias.generics.as_deref(), args, names);
                 self.classify(&alias.template.kind, Names::Definition(&frame))
             }
-            Some(TypeDefinition::Generic(_)) => {
-                Verdict::Class(ValueClass::Word(WordRole::Parameter))
-            }
+            Some(TypeDefinition::Generic(_)) => self.open_parameter(),
             Some(TypeDefinition::Class(_) | TypeDefinition::Trait(_)) => Verdict::Pointer,
             None => Verdict::managed(),
         }

@@ -26,6 +26,7 @@ use system.collections.list
 use system.collections.set
 use system.collections.map
 use system.collections.array
+use system.memory
 
 fn main()
     return
@@ -146,7 +147,7 @@ fn every_declared_entry_point_has_a_record() {
             let Some(name) = rest
                 .split("fn ")
                 .nth(1)
-                .and_then(|after| after.split('(').next())
+                .and_then(|after| after.split(['(', '<']).next())
             else {
                 continue;
             };
@@ -169,4 +170,321 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         }
     }
     found
+}
+
+#[test]
+fn a_free_runtime_declaration_may_take_type_parameters() {
+    crate::type_checker::utils::type_checker_test(
+        r#"
+@element("item")
+@returns_element
+runtime "core" fn miri_rt_x<T>(item T) T
+
+fn main()
+    return
+"#,
+    );
+}
+
+#[test]
+fn a_result_of_a_declaration_type_parameter_must_be_stated() {
+    type_checker_error_test(
+        r#"
+@element("item")
+runtime "core" fn miri_rt_x<T>(item T) T
+
+fn main()
+    return
+"#,
+        "states nothing about what it hands back",
+    );
+}
+
+#[test]
+fn a_runtime_declaration_type_parameter_is_not_seen_outside_it() {
+    type_checker_error_test(
+        r#"
+@element("item")
+@returns_element
+runtime "core" fn miri_rt_x<T>(item T) T
+
+fn f(v T)
+    return
+
+fn main()
+    return
+"#,
+        "Unknown type: T",
+    );
+}
+
+#[test]
+fn a_call_infers_the_type_parameters_of_a_runtime_declaration() {
+    type_checker_error_test(
+        r#"
+@element("item")
+@returns_element
+runtime "core" fn miri_rt_x<T>(item T) T
+
+fn main()
+    let y = miri_rt_x("a")
+    let z int = y
+"#,
+        "expected int, got String",
+    );
+}
+
+#[test]
+fn an_element_the_runtime_writes_is_stated_with_writes() {
+    crate::type_checker::utils::type_checker_test(
+        r#"
+@element("place, new")
+@writes("place")
+@stores("new")
+@returns_element
+runtime "core" fn miri_rt_x<T>(place out T, new T) T
+
+fn main()
+    return
+"#,
+    );
+}
+
+#[test]
+fn an_element_the_runtime_writes_must_be_an_out_parameter() {
+    type_checker_error_test(
+        r#"
+@element("place, new")
+@writes("place")
+@stores("new")
+@returns_element
+runtime "core" fn miri_rt_x<T>(place T, new T) T
+
+fn main()
+    return
+"#,
+        "writes the element `place`, so it must be declared `out`",
+    );
+}
+
+#[test]
+fn a_value_of_the_declarations_own_type_parameter_is_no_maps_key() {
+    type_checker_error_test(
+        r#"
+@key("item")
+runtime "core" fn miri_rt_x<T>(item T) bool
+
+fn main()
+    return
+"#,
+        "which is a key or value of no map: name it in `@element`",
+    );
+}
+
+#[test]
+fn a_parameter_of_the_declarations_own_type_parameter_must_be_an_element() {
+    type_checker_error_test(
+        r#"
+@reads("x")
+runtime "core" fn miri_rt_x<T>(x T) bool
+
+fn main()
+    return
+"#,
+        "`miri_rt_x` takes `x` at its own type parameter, which is one word only at some types: name it in `@element`",
+    );
+}
+
+#[test]
+fn a_collection_and_a_closure_of_the_declarations_own_type_parameter_are_words() {
+    crate::type_checker::utils::type_checker_test(
+        r#"
+@reads("xs")
+@closure("f, 1, xs")
+runtime "core" fn miri_rt_x<T>(xs [T], f fn(T) int) bool
+
+fn main()
+    return
+"#,
+    );
+}
+
+#[test]
+fn an_optional_of_the_declarations_own_type_parameter_must_be_an_element() {
+    type_checker_error_test(
+        r#"
+@reads("x")
+runtime "core" fn miri_rt_x<T>(x T?) bool
+
+fn main()
+    return
+"#,
+        "`miri_rt_x` takes `x` at its own type parameter",
+    );
+}
+
+#[test]
+fn a_tuple_holding_the_declarations_own_type_parameter_must_be_an_element() {
+    type_checker_error_test(
+        r#"
+@reads("x")
+runtime "core" fn miri_rt_x<T>(x (T, int)) bool
+
+fn main()
+    return
+"#,
+        "`miri_rt_x` takes `x` at its own type parameter",
+    );
+}
+
+#[test]
+fn a_struct_holding_the_declarations_own_type_parameter_must_be_an_element() {
+    type_checker_error_test(
+        r#"
+struct Pair<T>
+    a T
+    b T
+
+@reads("x")
+runtime "core" fn miri_rt_x<T>(x Pair<T>) bool
+
+fn main()
+    return
+"#,
+        "`miri_rt_x` takes `x` at its own type parameter",
+    );
+}
+
+#[test]
+fn a_class_instance_of_the_declarations_own_type_parameter_is_a_word() {
+    crate::type_checker::utils::type_checker_test(
+        r#"
+class Box<T>
+    var v T
+
+@reads("x")
+runtime "core" fn miri_rt_x<T>(x Box<T>) bool
+
+fn main()
+    return
+"#,
+    );
+}
+
+#[test]
+fn a_generic_enum_of_the_declarations_own_type_parameter_is_a_word() {
+    crate::type_checker::utils::type_checker_test(
+        r#"
+enum Slot<T>
+    Full(T)
+    Empty
+
+@reads("x")
+runtime "core" fn miri_rt_x<T>(x Slot<T>) bool
+
+fn main()
+    return
+"#,
+    );
+}
+
+#[test]
+fn a_struct_counted_whatever_the_declarations_own_type_parameter_is_a_word() {
+    crate::type_checker::utils::type_checker_test(
+        r#"
+struct Named<T>
+    name String
+    v T
+
+@reads("x")
+runtime "core" fn miri_rt_x<T>(x Named<T>) bool
+
+fn main()
+    return
+"#,
+    );
+}
+
+#[test]
+fn a_result_of_the_declarations_own_type_parameter_must_be_an_element() {
+    type_checker_error_test(
+        r#"
+@element("x")
+@copies("x")
+runtime "core" fn miri_rt_x<T>(x T) T?
+
+fn main()
+    return
+"#,
+        "`miri_rt_x` hands back its own type parameter, which is one word only at some types: state `@returns_element`",
+    );
+}
+
+#[test]
+fn an_element_of_the_declarations_own_type_parameter_is_accepted() {
+    crate::type_checker::utils::type_checker_test(
+        r#"
+@element("x")
+runtime "core" fn miri_rt_x<T>(x T) bool
+
+fn main()
+    return
+"#,
+    );
+}
+
+#[test]
+fn an_unstated_result_built_from_the_declarations_own_type_parameter_is_refused() {
+    type_checker_error_test(
+        r#"
+@element("x")
+runtime "core" fn miri_rt_x<T>(x T) (T, int)
+
+fn main()
+    return
+"#,
+        "`miri_rt_x` hands back its own type parameter",
+    );
+}
+
+#[test]
+fn a_key_the_runtime_writes_is_refused() {
+    type_checker_error_test(
+        r#"
+@key("k")
+@writes("k")
+runtime "core" fn miri_rt_x(k out String)
+
+fn main()
+    return
+"#,
+        "`miri_rt_x` states both `@key` and `@writes` for `k`",
+    );
+}
+
+#[test]
+fn an_out_parameter_the_runtime_does_not_overwrite_is_refused() {
+    type_checker_error_test(
+        r#"
+@writes("s")
+runtime "core" fn miri_rt_x(s out String)
+
+fn main()
+    return
+"#,
+        "`miri_rt_x` takes `s` `out`, but only a place it writes new bytes over, an `@element` it `@writes`, is handed to the runtime `out`",
+    );
+}
+
+#[test]
+fn an_out_scalar_of_a_runtime_declaration_is_refused() {
+    type_checker_error_test(
+        r#"
+runtime "core" fn miri_rt_x(n out int)
+
+fn main()
+    return
+"#,
+        "`miri_rt_x` takes `n` `out`",
+    );
 }

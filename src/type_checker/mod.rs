@@ -840,11 +840,29 @@ impl TypeChecker {
         self.fn_analysis.function_out_params.get(declared)
     }
 
-    /// Whether a call of `method` on an instance of `owner` takes its
-    /// receiver's place and restores it
-    /// ([`body_writes::ReceiverWrites::replaces_receiver`]).
-    pub fn restores_receiver(&self, owner: &str, method: &str) -> bool {
-        self.receiver_writes.replaces_receiver(owner, method)
+    /// Whether a call of `method` on a receiver of type `receiver_ty` takes
+    /// the receiver's place and restores it
+    /// ([`body_writes::ReceiverWrites::replaces_receiver`]). Only an enum's
+    /// method restores its receiver, and an enum neither extends nor is
+    /// extended, so the receiver's [`method_owner`](Self::method_owner) names
+    /// the one body every call reaches.
+    pub fn restores_receiver(&self, receiver_ty: &Type, method: &str) -> bool {
+        self.method_owner(receiver_ty)
+            .is_some_and(|owner| self.receiver_writes.replaces_receiver(&owner, method))
+    }
+
+    /// The name of the declaration whose methods a receiver of type
+    /// `receiver_ty` calls: its class, struct or enum, the enum marked
+    /// `@optional` for an optional, the built-in class of a string, a tuple
+    /// or a collection. `None` for a type that declares no methods.
+    pub fn method_owner(&self, receiver_ty: &Type) -> Option<String> {
+        match &receiver_ty.kind {
+            TypeKind::Option(_) => self.optional_enum().map(|optional| optional.name.clone()),
+            TypeKind::String => Some(types::STRING_TYPE_NAME.to_string()),
+            TypeKind::Tuple(_) => Some(types::TUPLE_TYPE_NAME.to_string()),
+            TypeKind::Custom(name, _) => Some(name.clone()),
+            kind => kind.as_builtin_collection().map(|b| b.name().to_string()),
+        }
     }
 
     /// Whether `info`, the declaration `written` resolved to, is `@diverges`.
@@ -967,10 +985,16 @@ impl TypeChecker {
         self.report_deferred_int_literal_ranges();
         self.report_deferred_gpu_int_literal_ranges();
         self.answer_pinning_sites(&context);
+        let binds_out = |callee: &Expression, arguments: &[Expression], index: usize| {
+            body_writes::binds_out_parameter(self, callee, arguments, index)
+        };
         self.receiver_writes = body_writes::ReceiverWrites::of(
             top_level_statements(program).chain(&self.imported_statements),
             |name| self.type_identity_named_by(name).map(str::to_string),
-            &self.runtime_effects,
+            &body_writes::Callees {
+                runtime: &self.runtime_effects,
+                binds_out: &binds_out,
+            },
         );
         self.report_unrestorable_replacements();
         self.run_pass_escape_summaries(program, &mut context);

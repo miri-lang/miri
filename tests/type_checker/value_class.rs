@@ -15,8 +15,8 @@ use miri::ast::types::{
 use miri::ast::StatementKind;
 use miri::type_checker::context::TypeDefinition;
 use miri::type_checker::value_class::{
-    value_class, FieldRepr, LayoutScope, LayoutShape, ScalarKind, ValueClass, ValueField,
-    ValueLayout, WordRole,
+    class_reads_open_parameter, value_class, FieldRepr, LayoutScope, LayoutShape, ScalarKind,
+    ValueClass, ValueField, ValueLayout, WordRole,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -203,6 +203,30 @@ fn probe<T, U>(open Pair<T, U>, bare T)
         probe.class_in("bare", &open),
         ValueClass::Word(WordRole::Parameter)
     );
+}
+
+/// A class is decided by an open parameter exactly where its verdict reads
+/// one: the parameter itself, an optional of it, a struct holding it; never
+/// a collection of it or a struct a counted field already decides.
+#[test]
+fn class_reads_open_parameter_only_where_the_verdict_reads_one() {
+    let probe = Probe::of(&format!(
+        "{DECLARATIONS}
+fn probe<T>(bare T, maybe T?, open Pair<T, int>, counted Pair<String, T>, list [T], fixed Pair<int, int>)
+    return
+"
+    ));
+    let open: HashSet<String> = ["T"].map(String::from).into();
+    let reads = |parameter: &str| {
+        let ty = &probe.parameters[parameter];
+        class_reads_open_parameter(&ty.kind, LayoutScope::new(&probe.definitions, &open))
+    };
+    for parameter in ["bare", "maybe", "open"] {
+        assert!(reads(parameter), "{parameter}");
+    }
+    for parameter in ["counted", "list", "fixed"] {
+        assert!(!reads(parameter), "{parameter}");
+    }
 }
 
 #[test]

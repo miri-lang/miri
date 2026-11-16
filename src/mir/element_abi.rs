@@ -11,6 +11,11 @@
 //! element width. This pass spells that expansion in MIR, so no backend has to
 //! know which arguments are elements or how wide each one is.
 //!
+//! An element the entry point writes over is the caller's place, an `out`
+//! argument, and the address handed for it is where the runtime writes: the
+//! address of its bytes when it is held as them, and otherwise the place
+//! itself passed `out`, which the backend hands over as a slot it reads back.
+//!
 //! A call that hands an element back is lowered with the element as its
 //! result. The runtime entry point instead writes the element into storage the
 //! caller names — again an address and a byte count, appended after its other
@@ -53,31 +58,47 @@ pub fn pass_elements_by_address(body: &mut Body) -> Result<(), String> {
 /// Expand each element argument of the call ending `block` into its address
 /// and byte count.
 fn pass_element_arguments(body: &mut Body, block: usize) -> Result<(), String> {
-    let Some((positions, stored, args, span)) = element_call(body, block) else {
+    let Some(call) = element_call(body, block) else {
         return Ok(());
     };
-    let mut expanded = Vec::with_capacity(args.len() + positions.len());
-    for (index, arg) in args.into_iter().enumerate() {
-        if positions.contains(&index) {
-            let arg = if stored.contains(&index) {
-                copy_stored_element(body, block, arg, span)
-            } else {
-                arg
-            };
-            let (address, payload) = element_address(body, block, arg, span)?;
-            expanded.push(address);
-            expanded.push(payload);
-        } else {
+    let span = call.span;
+    let mut expanded = Vec::with_capacity(call.args.len() + call.positions.len());
+    let mut modes = Vec::new();
+    for (index, arg) in call.args.into_iter().enumerate() {
+        if !call.positions.contains(&index) {
             expanded.push(arg);
+            continue;
         }
+        let (address, payload) = if call.overwritten.contains(&index) {
+            let (address, payload, mode) = overwritten_place(body, block, arg, span)?;
+            modes.push((index, mode));
+            (address, payload)
+        } else if call.stored.contains(&index) {
+            let arg = copy_stored_element(body, block, arg, span);
+            element_address(body, block, arg, span)?
+        } else {
+            element_address(body, block, arg, span)?
+        };
+        expanded.push(address);
+        expanded.push(payload);
     }
-    replace_call_args(body, block, expanded, &positions);
+    replace_call_args(body, block, expanded, (&call.positions, &modes));
     Ok(())
 }
 
-/// The element positions, the stored ones among them, the arguments and the
-/// span of the call ending `block`, when it calls a runtime entry point that
-/// takes an element.
+/// What [`element_call`] finds of a call taking an element: the element
+/// positions, the stored and the overwritten ones among them, the arguments
+/// and the call's span.
+struct ElementCall {
+    positions: Vec<usize>,
+    stored: Vec<usize>,
+    overwritten: Vec<usize>,
+    args: Vec<Operand>,
+    span: Span,
+}
+
+/// What the call ending `block` hands as elements, when it calls a runtime
+/// entry point that takes one.
 fn element_call(body: &Body, block: usize) -> Option<ElementCall> {
     let terminator = body.basic_blocks[block].terminator.as_ref()?;
     let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
@@ -88,16 +109,55 @@ fn element_call(body: &Body, block: usize) -> Option<ElementCall> {
     if positions.is_empty() {
         return None;
     }
-    Some((
+    let overwritten = (positions.iter().copied())
+        .filter(|&position| effect.overwrites(position))
+        .collect();
+    Some(ElementCall {
         positions,
-        effect.stored_positions(),
-        args.clone(),
-        terminator.span,
-    ))
+        stored: effect.stored_positions(),
+        overwritten,
+        args: args.clone(),
+        span: terminator.span,
+    })
 }
 
-/// What [`element_call`] finds of a call taking an element.
-type ElementCall = (Vec<usize>, Vec<usize>, Vec<Operand>, Span);
+/// How the caller's place `arg` an entry point writes over is handed to it:
+/// the argument standing for its address, its byte count, and the mode the
+/// argument is passed under.
+///
+/// The place is an `out` argument, which is always a whole local. Held as its
+/// bytes, it is handed as the address of those bytes, which the runtime
+/// writes in place. Held in a register, it is handed as itself, passed `out`:
+/// the backend passes the address of a slot holding its value and reads the
+/// slot back once the call returns. The address of a register-held local
+/// would name a copy the runtime's write never reaches.
+fn overwritten_place(
+    body: &mut Body,
+    block: usize,
+    arg: Operand,
+    span: Span,
+) -> Result<(Operand, Operand, ArgMode), String> {
+    let place = match arg {
+        Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => place,
+        other => {
+            return Err(format!(
+                "the runtime writes the element {other}, which is not a whole local"
+            ))
+        }
+    };
+    let kind = &body.local_decls[place.local.0].ty.kind;
+    let payload = byte_count(element_layout(kind, body.layout_scope()).payload, span);
+    if body.value_layout(kind).is_none() {
+        return Ok((Operand::Copy(place), payload, ArgMode::Out));
+    }
+    let address = body.new_local(LocalDecl::new(Type::new(TypeKind::RawPtr, span), span));
+    push_assign(body, block, Place::new(address), Rvalue::Ref(place), span);
+    Ok((
+        Operand::Copy(Place::new(address)),
+        payload,
+        ArgMode::Borrowed,
+    ))
+}
 
 /// The element a container keeps, read into a slot of its own when it is a
 /// place of the body.
@@ -132,7 +192,9 @@ fn copy_stored_element(body: &mut Body, block: usize, arg: Operand, span: Span) 
 /// byte count.
 ///
 /// The entry point copies the element's bytes out during the call and never
-/// writes them, so the place whose address was taken is only read.
+/// writes them, so the place whose address was taken is only read. A place
+/// the entry point overwrites ([`RuntimeEffect::overwrites`]) is written
+/// through its address, so its address is never one this answers for.
 pub fn reads_element_through(kind: &TerminatorKind, address: Local) -> bool {
     let TerminatorKind::Call { func, args, .. } = kind else {
         return false;
@@ -144,22 +206,30 @@ pub fn reads_element_through(kind: &TerminatorKind, address: Local) -> bool {
         matches!(arg, Operand::Copy(place) | Operand::Move(place)
             if place.local == address && place.projection.is_empty())
     };
-    expanded_element_positions(effect).any(|position| args.get(position).is_some_and(is_address))
+    expanded_element_positions(effect)
+        .filter(|&(declared, _)| !effect.overwrites(declared))
+        .any(|(_, position)| args.get(position).is_some_and(is_address))
 }
 
-/// The position of each element address in the expanded arguments of a call
-/// to the entry point doing `effect`: every element before it gained a byte
-/// count after it.
-fn expanded_element_positions(effect: &RuntimeEffect) -> impl Iterator<Item = usize> {
+/// The declared position of each element of a call to the entry point doing
+/// `effect`, with the position of its address in the expanded arguments:
+/// every element before it gained a byte count after it.
+fn expanded_element_positions(effect: &RuntimeEffect) -> impl Iterator<Item = (usize, usize)> {
     (effect.element_positions().into_iter())
         .enumerate()
-        .map(|(earlier, position)| position + earlier)
+        .map(|(earlier, position)| (position, position + earlier))
 }
 
 /// Install `expanded` as the arguments of the call ending `block`, widening its
 /// per-argument metadata to match: each element position gained one argument
-/// after it, which is passed borrowed and carries no device handle.
-fn replace_call_args(body: &mut Body, block: usize, expanded: Vec<Operand>, positions: &[usize]) {
+/// after it, which is passed borrowed and carries no device handle, and an
+/// overwritten place is passed under the mode `modes` gives it.
+fn replace_call_args(
+    body: &mut Body,
+    block: usize,
+    expanded: Vec<Operand>,
+    (positions, modes): (&[usize], &[(usize, ArgMode)]),
+) {
     let Some(terminator) = body.basic_blocks[block].terminator.as_mut() else {
         return;
     };
@@ -172,6 +242,11 @@ fn replace_call_args(body: &mut Body, block: usize, expanded: Vec<Operand>, posi
     else {
         return;
     };
+    for &(position, mode) in modes {
+        if let Some(recorded) = arg_modes.get_mut(position) {
+            *recorded = mode;
+        }
+    }
     for &position in positions.iter().rev() {
         if position < arg_modes.len() {
             arg_modes.insert(position + 1, ArgMode::Borrowed);

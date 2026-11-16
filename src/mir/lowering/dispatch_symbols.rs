@@ -296,21 +296,45 @@ pub fn drop_hook_symbol(
     Some(method_symbol(type_defs, type_name, DROP_HOOK_NAME))
 }
 
+/// The symbol of the drop hook releasing a `type_name` value at `args` runs:
+/// the hook compiled for that instantiation where one is, the way
+/// [`crate::mir::type_facts::TypeFacts::element_method_symbol`] names an
+/// element's method, else [`drop_hook_symbol`]. A generic type's shared hook
+/// reads its parameters open, so it is not the instantiation's hook.
+pub fn instantiated_drop_hook_symbol(
+    type_name: &str,
+    args: Option<&[Type]>,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> Option<Symbol> {
+    let shared = drop_hook_symbol(type_name, type_defs)?;
+    let instantiated = args
+        .and_then(|args| instantiated_callee(type_defs, type_name, args, DROP_HOOK_NAME))
+        .map(|callee| callee.symbol);
+    Some(instantiated.unwrap_or(shared))
+}
+
 /// The symbol of the `clone` a copy of a `type_name` element calls.
 pub fn clone_method_symbol(type_name: &str, type_defs: &HashMap<String, TypeDefinition>) -> Symbol {
     method_symbol(type_defs, type_name, CLONE_METHOD_NAME)
 }
 
-/// Every function symbol codegen names without a MIR call carrying it, for
-/// every class: the drop hook, and the body each runtime thunk calls to copy,
-/// order, match or hash its elements, which the type checker answers
-/// ([`thunk_body`]) for the thunks and the ownership verdict alike. A vtable
-/// slot is named only where a reached body constructs an instance and a
-/// reached virtual call reads it, so
+/// Every function symbol codegen names without a MIR call carrying it: the
+/// drop hook of every class and of every enum declaring no parameters (a
+/// generic enum's release runs the hook compiled for its instantiation, not
+/// the shared one), and, for every class, the body each runtime thunk calls
+/// to copy, order, match or hash its elements, which the type checker
+/// answers ([`thunk_body`]) for the thunks and the ownership verdict alike.
+/// A vtable slot is named only where a reached body constructs an instance
+/// and a reached virtual call reads it, so
 /// [`super::vtable_demand::VtableDemand`] reads those off the lowered bodies.
 pub fn synthesized_references(type_defs: &HashMap<String, TypeDefinition>) -> HashSet<Symbol> {
     let mut symbols = HashSet::new();
     for (type_name, definition) in type_defs {
+        if let TypeDefinition::Enum(enum_def) = definition {
+            if enum_def.generics.as_ref().is_none_or(Vec::is_empty) {
+                symbols.extend(drop_hook_symbol(type_name, type_defs));
+            }
+        }
         let TypeDefinition::Class(_) = definition else {
             continue;
         };

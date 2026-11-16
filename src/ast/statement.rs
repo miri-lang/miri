@@ -381,12 +381,14 @@ pub enum StatementKind {
     ),
 
     /// A runtime function declaration (extern binding to a runtime library).
-    /// These functions have no body, no generics, no modifiers, and are always
-    /// private to their declaring scope.
-    /// (runtime_kind, name, params, return_type)
+    /// These functions have no body and no modifiers, and are always private
+    /// to their declaring scope. Type parameters of their own are inferred at
+    /// each call, and an argument of one travels as the element it is.
+    /// (runtime_kind, name, generics, params, return_type, attributes)
     RuntimeFunctionDeclaration(
         RuntimeKind,             // Which runtime this function lives in
         String,                  // Function name (e.g., "miri_rt_string_new")
+        Option<Vec<Expression>>, // Type parameters of its own
         Vec<Parameter>,          // Parameters
         Option<Box<Expression>>, // Return type
         Vec<Attribute>,          // What the runtime does with each argument

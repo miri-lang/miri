@@ -48,7 +48,9 @@ pub const PATTERN_MATCH_ATTRIBUTE: &str = "regex_match";
 pub const READS_ATTRIBUTE: &str = "reads";
 
 /// Names the parameters of a `runtime` declaration the entry point writes in
-/// place, keeping no reference to them past the call.
+/// place, keeping no reference to them past the call. On an `@element` that is
+/// an `out` parameter it names the caller's place, whose bytes the entry point
+/// reads out and writes new ones over.
 pub const WRITES_ATTRIBUTE: &str = "writes";
 
 /// Names the element parameters of a `runtime` declaration the collection

@@ -984,9 +984,7 @@ fn lower_class_method_body(
     // The allocator is appended below as a non-out ABI param.
     let mut out_params = Vec::with_capacity(params.len() + 2);
     if has_self {
-        out_params.push(method_dispatch::restores_receiver(
-            tc, &self_type, &decl.name,
-        ));
+        out_params.push(tc.restores_receiver(&self_type, &decl.name));
     }
     for param in params.iter() {
         let written = apply_generic_sub(&resolve_declared_annotation(tc, &param.typ), subs);

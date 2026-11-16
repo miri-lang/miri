@@ -3,9 +3,10 @@
 
 //! The class instances a body holds without building them. A collection
 //! literal, a typed local, a value a call or a runtime entry returns: each
-//! has a type, and every generic class instance that type spells, nested
-//! inside another class's arguments included, is one lowering compiles a
-//! body for, its `equals` among them, though no construction names it.
+//! has a type, and every generic class or enum instance that type spells,
+//! nested inside another class's arguments included, is one lowering
+//! compiles a body for, its `equals` among them, though no construction
+//! names it.
 //!
 //! A type spelling no parameter of the body holding it is the instance it
 //! names; one spelling the body's own parameters names an instance at each
@@ -26,7 +27,7 @@ use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
 
 /// A generic class at the arguments a held type spells it at.
-type HeldClass = (String, Vec<Type>);
+pub(super) type HeldClass = (String, Vec<Type>);
 
 /// How a held type's generic argument is read as an instance's argument;
 /// `None` when it names no argument an instance can be listed at.
@@ -76,6 +77,14 @@ impl TypeChecker {
     /// [`TypeChecker::reached_class_instantiations`]. Lowering compiles every
     /// one of them, whichever body holds it.
     pub(super) fn record_held_instances(&mut self) {
+        for (class, arguments) in self.closed_held_instances() {
+            self.record_with_bases(&class, arguments);
+        }
+    }
+
+    /// Each generic class instance at closed arguments a type the checker
+    /// inferred spells, once, ordered by class.
+    pub(super) fn closed_held_instances(&self) -> Vec<HeldClass> {
         let definitions = self.type_definitions();
         let mut held = Vec::new();
         let reader = (definitions, instantiation_argument as ArgumentReader);
@@ -94,16 +103,15 @@ impl TypeChecker {
                 ))
         });
         held.sort_by(|(lhs, _), (rhs, _)| lhs.cmp(rhs));
-        for (class, arguments) in held {
-            self.record_with_bases(&class, arguments);
-        }
+        held
     }
 }
 
-/// Append every generic class or struct instance `kind` spells, each nested
-/// one before the one holding it, down to [`MAX_INSTANCE_TYPE_DEPTH`] levels,
-/// as lowering lists the instances a type it compiles holds, each argument
-/// read by `read`.
+/// Append every generic class, struct or enum instance `kind` spells, each
+/// nested one before the one holding it, down to [`MAX_INSTANCE_TYPE_DEPTH`]
+/// levels, as lowering lists the instances a type it compiles holds, each
+/// argument read by `read`. A generic enum's methods are compiled at each
+/// instance, its drop hook among them, as a class's are.
 fn collect_held_classes(
     (definitions, read): (&HashMap<String, TypeDefinition>, ArgumentReader),
     kind: &TypeKind,
@@ -117,15 +125,12 @@ fn collect_held_classes(
         return;
     };
     let declared = match definitions.get(name) {
-        Some(definition @ (TypeDefinition::Class(_) | TypeDefinition::Struct(_))) => {
-            definition.generics().unwrap_or_default()
-        }
         Some(
-            TypeDefinition::Enum(_)
-            | TypeDefinition::Trait(_)
-            | TypeDefinition::Generic(_)
-            | TypeDefinition::Alias(_),
-        )
+            definition @ (TypeDefinition::Class(_)
+            | TypeDefinition::Struct(_)
+            | TypeDefinition::Enum(_)),
+        ) => definition.generics().unwrap_or_default(),
+        Some(TypeDefinition::Trait(_) | TypeDefinition::Generic(_) | TypeDefinition::Alias(_))
         | None => return,
     };
     let Some(arguments) = arguments.iter().map(read).collect::<Option<Vec<_>>>() else {

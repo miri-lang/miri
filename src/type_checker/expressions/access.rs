@@ -1304,9 +1304,12 @@ impl TypeChecker {
                 span,
                 context,
             )),
-            Some(TypeDefinition::Enum(enum_def)) => Some(
-                self.infer_member_enum(&enum_def, type_name, prop_name, obj_type, span, context),
-            ),
+            Some(TypeDefinition::Enum(enum_def)) => Some(self.infer_member_enum(
+                (&enum_def, type_name, prop_name),
+                (obj_type, type_args),
+                span,
+                context,
+            )),
             Some(TypeDefinition::Generic(_)) | Some(TypeDefinition::Alias(_)) => None,
             None => {
                 let modules = Self::modules_declaring_type(type_name);
@@ -2408,12 +2411,13 @@ impl TypeChecker {
         );
     }
 
+    /// The type of the method `prop_name` of the enum `name`, read on a
+    /// receiver of `obj_type` whose type arguments are `type_args`: an
+    /// optional's are its payload, which its type does not spell as the enum's.
     fn infer_member_enum(
         &mut self,
-        enum_def: &crate::type_checker::context::EnumDefinition,
-        name: &str,
-        prop_name: &str,
-        obj_type: &Type,
+        (enum_def, name, prop_name): (&crate::type_checker::context::EnumDefinition, &str, &str),
+        (obj_type, type_args): (&Type, &Option<Vec<TypeArgument>>),
         span: Span,
         context: &mut Context,
     ) -> Type {
@@ -2425,8 +2429,7 @@ impl TypeChecker {
             return make_type(TypeKind::Error);
         }
 
-        let type_args = self.extract_type_args_from_type(obj_type);
-        let generic_mapping = self.build_enum_method_generic_mapping(enum_def, &type_args);
+        let generic_mapping = self.build_enum_method_generic_mapping(enum_def, type_args);
         self.record_method_pinning_sites(name, prop_name, &generic_mapping, span, context);
 
         let params = self.build_enum_method_params(method_info, &generic_mapping);
@@ -2471,15 +2474,6 @@ impl TypeChecker {
             span,
         );
         false
-    }
-
-    /// Extracts type arguments from a custom type.
-    fn extract_type_args_from_type(&self, obj_type: &Type) -> Option<Vec<TypeArgument>> {
-        if let TypeKind::Custom(_, args) = &obj_type.kind {
-            args.clone()
-        } else {
-            None
-        }
     }
 
     /// Builds a generic type mapping for an enum method.

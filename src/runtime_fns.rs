@@ -117,6 +117,9 @@ pub mod rt {
     /// collection reached through a field, so the write copies a shared value
     /// first instead of changing it under every other name that holds it.
     pub const RC_IS_SHARED: &str = "miri_rt_rc_is_shared";
+    /// Puts a new value in the caller's place and writes the value the place
+    /// held into the caller's storage, moving bytes only.
+    pub const REPLACE: &str = "miri_rt_replace";
     /// Compiler-internal: stops the program unless the collection receiver of
     /// a method that writes it is held by that call alone, not in stdlib.
     /// Asked where the method would otherwise copy its receiver on write: the
@@ -482,6 +485,7 @@ pub mod rt {
         CHECKS_COMPILED_OUT,
         PROFILE_INIT,
         RC_IS_SHARED,
+        REPLACE,
         RECEIVER_UNIQUE,
         // Array
         ARRAY_NEW,

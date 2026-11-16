@@ -18,11 +18,11 @@
 //! trampoline read past an element slot or write past the answer, so it is
 //! refused where it is written.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::ast::common::Parameter;
-use crate::ast::expression::Expression;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::ast::{
     Attribute, ALLOCATES_ATTRIBUTE, CLOSURE_ATTRIBUTE, COPIES_ATTRIBUTE, DIVERGES_ATTRIBUTE,
@@ -33,11 +33,15 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::runtime_effects::{ClosureContract, ElementRole, ParamUse, ResultUse, RuntimeEffect};
 use crate::type_checker::context::TypeDefinition;
+use crate::type_checker::instantiation_requirements::spells_a_type;
+use crate::type_checker::value_class::{class_reads_open_parameter, LayoutScope};
 use crate::type_checker::{resolve_type_name, TypeChecker};
 
 /// A `runtime` declaration as the type checker reads its effects from it.
 pub(crate) struct RuntimeDeclaration<'a> {
     pub name: &'a str,
+    /// The declaration's own type parameters, inferred at each call.
+    pub generics: Option<&'a [Expression]>,
     pub params: &'a [Parameter],
     pub return_type: Option<&'a Expression>,
     pub attributes: &'a [Attribute],
@@ -166,7 +170,7 @@ fn stated_effect(
     declaration: &RuntimeDeclaration,
     definitions: &HashMap<String, TypeDefinition>,
 ) -> (RuntimeEffect, Vec<Refusal>) {
-    let mut statements = Statements::new(declaration);
+    let mut statements = Statements::new(declaration, definitions);
     for attribute in declaration.attributes {
         statements.read(attribute);
     }
@@ -178,6 +182,12 @@ fn stated_effect(
     effect.diverges = statements.diverges;
     effect.orders = statements.orders;
     effect.matches = statements.matches;
+    effect.typed_by = (declaration.params.iter())
+        .map(|param| statements.bare_parameter(&param.typ))
+        .collect();
+    effect.result_typed_by =
+        (declaration.return_type).and_then(|written| statements.bare_parameter(written));
+    effect.type_parameters = statements.own_parameters.clone();
     (effect, statements.refusals)
 }
 
@@ -185,6 +195,12 @@ fn stated_effect(
 /// before they are checked against each other.
 struct Statements<'a> {
     declaration: &'a RuntimeDeclaration<'a>,
+    definitions: &'a HashMap<String, TypeDefinition>,
+    /// The names of the type parameters the declaration itself declares.
+    own_parameters: Vec<String>,
+    /// The same names, as the layout authority reads the parameters a scope
+    /// leaves open.
+    open_parameters: HashSet<String>,
     /// Each parameter's stated uses, with the attribute that stated each.
     uses: Vec<Vec<(&'static str, ParamUse)>>,
     stores: Vec<bool>,
@@ -196,10 +212,17 @@ struct Statements<'a> {
 }
 
 impl<'a> Statements<'a> {
-    fn new(declaration: &'a RuntimeDeclaration<'a>) -> Self {
+    fn new(
+        declaration: &'a RuntimeDeclaration<'a>,
+        definitions: &'a HashMap<String, TypeDefinition>,
+    ) -> Self {
         let count = declaration.params.len();
+        let own_parameters = own_parameter_names(declaration.generics.unwrap_or_default());
         Statements {
             declaration,
+            definitions,
+            open_parameters: own_parameters.iter().cloned().collect(),
+            own_parameters,
             uses: vec![Vec::new(); count],
             stores: vec![false; count],
             results: Vec::new(),
@@ -219,7 +242,7 @@ impl<'a> Statements<'a> {
         match stated {
             Stated::Reads => self.state(spelling, argument, span, ParamUse::Reads),
             Stated::Writes => self.state(spelling, argument, span, ParamUse::Writes),
-            Stated::Element(role) => self.state(spelling, argument, span, ParamUse::LooksUp(role)),
+            Stated::Element(role) => self.state_element(spelling, argument, span, role),
             Stated::Stores => {
                 for position in self.positions(argument, span) {
                     self.stores[position] = true;
@@ -243,6 +266,96 @@ impl<'a> Statements<'a> {
         for position in self.positions(argument, span) {
             self.uses[position].push((attribute, use_));
         }
+    }
+
+    /// `@element`, `@key` or `@value` naming `argument`. A parameter typed by
+    /// a type parameter the declaration itself declares is no collection's:
+    /// `@element` makes it a [`ElementRole::Parameter`], and a key or a
+    /// value of no collection is refused.
+    fn state_element(
+        &mut self,
+        attribute: &'static str,
+        argument: &str,
+        span: Span,
+        role: ElementRole,
+    ) {
+        for position in self.positions(argument, span) {
+            let role = match (role, self.is_typed_by_own_parameter(position)) {
+                (role, false) => role,
+                (ElementRole::Element | ElementRole::Parameter, true) => ElementRole::Parameter,
+                (ElementRole::Key | ElementRole::Value, true) => {
+                    let param = &self.declaration.params[position].name;
+                    self.refuse(
+                        format!("`@{attribute}` names `{param}`, whose type is a type parameter of the declaration, which is a key or value of no map: name it in `@element`"),
+                        span,
+                    );
+                    continue;
+                }
+            };
+            self.uses[position].push((attribute, ParamUse::LooksUp(role)));
+        }
+    }
+
+    /// Whether the parameter at `position` is typed by a type parameter the
+    /// declaration itself declares, anywhere in its type.
+    fn is_typed_by_own_parameter(&self, position: usize) -> bool {
+        self.mentions_own_parameter(&self.declaration.params[position].typ)
+    }
+
+    /// The index of the type parameter the declaration itself declares that
+    /// the written type `written` is, bare; `None` for any other type.
+    fn bare_parameter(&self, written: &Expression) -> Option<usize> {
+        let (TypeKind::Custom(name, None) | TypeKind::Generic(name, _)) =
+            resolve_type_name(written)?.kind
+        else {
+            return None;
+        };
+        self.own_parameters.iter().position(|own| *own == name)
+    }
+
+    /// Whether the written type `written` names a type parameter the
+    /// declaration itself declares, anywhere in it.
+    fn mentions_own_parameter(&self, written: &Expression) -> bool {
+        let own = &self.own_parameters;
+        resolve_type_name(written).is_some_and(|ty| {
+            spells_a_type(&ty.kind, &|kind| {
+                matches!(kind, TypeKind::Custom(name, None) | TypeKind::Generic(name, _) if own.contains(name))
+            })
+        })
+    }
+
+    /// Whether a value of the written type `written` may be laid out
+    /// differently at each instantiation of the declaration's own type
+    /// parameters: the layout authority reads one of them to decide it
+    /// ([`class_reads_open_parameter`]). A collection, a function, a class
+    /// instance or a generic enum is one counted word whatever they are
+    /// bound to; the parameter itself, or an optional, a tuple or a struct
+    /// holding it, is not.
+    fn is_held_as_own_parameter(&self, written: &Expression) -> bool {
+        let scope = LayoutScope::new(self.definitions, &self.open_parameters);
+        resolve_type_name(written).is_some_and(|ty| class_reads_open_parameter(&ty.kind, scope))
+    }
+
+    /// Refuse the parameter at `position` when it is held as a value of the
+    /// declaration's own type parameter but `use_` is no element. The entry
+    /// point is one symbol at every instantiation, so only an element, which
+    /// travels by address and byte count, reaches it alike at every type.
+    fn refuse_unsized_parameter(&mut self, position: usize, use_: ParamUse) {
+        let is_element = matches!(
+            use_,
+            ParamUse::LooksUp(ElementRole::Parameter)
+                | ParamUse::Stores(ElementRole::Parameter)
+                | ParamUse::Overwrites
+        );
+        if is_element || !self.is_held_as_own_parameter(&self.declaration.params[position].typ) {
+            return;
+        }
+        let declared = self.declaration.name;
+        let param = &self.declaration.params[position].name;
+        self.refuse(
+            format!("`{declared}` takes `{param}` at its own type parameter, which is one word only at some types: name it in `@element`"),
+            self.param_span(position),
+        );
     }
 
     /// `@closure("f, 2, l")`: the closure parameter, the arity the runtime
@@ -300,6 +413,7 @@ impl<'a> Statements<'a> {
         let param = &self.declaration.params[position];
         let declared = self.declaration.name;
         let stated = self.uses[position].clone();
+        let refused_before = self.refusals.len();
         let use_ = match stated.as_slice() {
             [] if holds_no_reference(param) => ParamUse::Scalar,
             [] => {
@@ -310,6 +424,10 @@ impl<'a> Statements<'a> {
                 ParamUse::Writes
             }
             [(_, use_)] => *use_,
+            [(_, ParamUse::LooksUp(ElementRole::Parameter)), (_, ParamUse::Writes)]
+            | [(_, ParamUse::Writes), (_, ParamUse::LooksUp(ElementRole::Parameter))] => {
+                self.overwritten(position)
+            }
             [(first, _), (second, _), ..] => {
                 self.refuse(
                     format!(
@@ -321,7 +439,46 @@ impl<'a> Statements<'a> {
                 ParamUse::Writes
             }
         };
-        self.stored(position, use_)
+        let use_ = self.stored(position, use_);
+        if self.refusals.len() == refused_before {
+            self.refuse_unsized_parameter(position, use_);
+            self.refuse_out_parameter(position, use_);
+        }
+        use_
+    }
+
+    /// Refuse the parameter at `position` declared `out` when `use_` is not a
+    /// place the entry point writes new bytes over: the backend hands an
+    /// `out` argument as the address of a slot, where any other parameter
+    /// takes the value itself.
+    fn refuse_out_parameter(&mut self, position: usize, use_: ParamUse) {
+        let param = &self.declaration.params[position];
+        if !param.is_out || use_ == ParamUse::Overwrites {
+            return;
+        }
+        let declared = self.declaration.name;
+        self.refuse(
+            format!("`{declared}` takes `{}` `out`, but only a place it writes new bytes over, an `@element` it `@writes`, is handed to the runtime `out`", param.name),
+            self.param_span(position),
+        );
+    }
+
+    /// The element at `position` the entry point writes, `@element` and
+    /// `@writes` together: the caller's place, refused unless it is an `out`
+    /// parameter, the one kind of argument that names a place to write.
+    fn overwritten(&mut self, position: usize) -> ParamUse {
+        let param = &self.declaration.params[position];
+        if !param.is_out {
+            let declared = self.declaration.name;
+            self.refuse(
+                format!(
+                    "`{declared}` writes the element `{}`, so it must be declared `out`",
+                    param.name
+                ),
+                self.param_span(position),
+            );
+        }
+        ParamUse::Overwrites
     }
 
     /// Where the parameter at `position` is written: its name, or the whole
@@ -363,10 +520,16 @@ impl<'a> Statements<'a> {
                         format!("`{declared}` states nothing about what it hands back: add `@returns_element`, `@copies` or `@allocates`"),
                         self.declaration.span,
                     );
+                } else {
+                    self.refuse_unsized_result();
                 }
                 ResultUse::Owned
             }
-            [(_, result)] => *result,
+            [(_, ResultUse::Element)] => ResultUse::Element,
+            [(_, result)] => {
+                self.refuse_unsized_result();
+                *result
+            }
             [(first, result), (second, _), ..] => {
                 self.refuse(
                     format!("`{declared}` states both `@{first}` and `@{second}`"),
@@ -377,6 +540,22 @@ impl<'a> Statements<'a> {
         }
     }
 
+    /// Refuse a result typed by the declaration's own type parameter that is
+    /// handed back as anything but an element, which alone is written through
+    /// storage sized for the call's instantiation.
+    fn refuse_unsized_result(&mut self) {
+        if !(self.declaration.return_type)
+            .is_some_and(|written| self.is_held_as_own_parameter(written))
+        {
+            return;
+        }
+        let declared = self.declaration.name;
+        self.refuse(
+            format!("`{declared}` hands back its own type parameter, which is one word only at some types: state `@returns_element`"),
+            self.declaration.span,
+        );
+    }
+
     /// Whether the declared result is `Self` or a type parameter, which says
     /// nothing about whether the caller owns it.
     fn result_needs_statement(&self, definitions: &HashMap<String, TypeDefinition>) -> bool {
@@ -384,6 +563,21 @@ impl<'a> Statements<'a> {
             .and_then(resolve_type_name)
             .is_some_and(|ty| is_open_type(&ty, definitions))
     }
+}
+
+/// The names of the type parameters `generics` declares, in order.
+fn own_parameter_names(generics: &[Expression]) -> Vec<String> {
+    (generics.iter())
+        .filter_map(|generic| {
+            let ExpressionKind::GenericType(name, _, _) = &generic.node else {
+                return None;
+            };
+            let ExpressionKind::Identifier(name, _) = &name.node else {
+                return None;
+            };
+            Some(name.clone())
+        })
+        .collect()
 }
 
 /// Whether `param` is a plain word: a number, a flag or a raw pointer.

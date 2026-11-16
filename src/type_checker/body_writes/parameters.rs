@@ -109,10 +109,8 @@ pub(super) fn writes_receiver(
     let Some(ty) = checker.get_type(object.id) else {
         return false;
     };
-    if let TypeKind::Custom(name, _) = &ty.kind {
-        if checker.receiver_writes.replaces_receiver(name, method) {
-            return true;
-        }
+    if checker.restores_receiver(ty, method) {
+        return true;
     }
     let Some(collection) = ty.kind.as_builtin_collection() else {
         return false;
@@ -151,7 +149,7 @@ fn runtime_writes_argument(
 
 /// Whether the argument written `index`th of a call of `callee` on
 /// `arguments` binds an `out` parameter, which the callee writes through.
-fn binds_out_parameter(
+pub fn binds_out_parameter(
     checker: &TypeChecker,
     callee: &Expression,
     arguments: &[Expression],

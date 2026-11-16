@@ -991,3 +991,26 @@ fn test_the_mer_own_001_explain_example_runs_its_drop_hook() {
         .expect("the page has an After example");
     assert_heap_guard_output(after, "Closing file");
 }
+
+#[test]
+fn a_generic_class_runs_its_drop_hook_at_each_instantiation() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.ops
+
+class Pair<T implements Equatable>
+    var a T
+    var b T
+
+    fn drop()
+        println(f"dropped {self.a.equals(self.b)}")
+
+fn main()
+    let s = Pair<String>(a: "x", b: "y")
+    let n = Pair<i32>(a: 7, b: 7)
+    println("live")
+"#,
+        "live\ndropped true\ndropped false",
+    );
+}

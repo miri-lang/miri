@@ -108,7 +108,7 @@ fn return_status(checker: &TypeChecker, stmt: &Statement) -> ReturnStatus {
         | StatementKind::Class(_)
         | StatementKind::Trait(_, _, _, _, _)
         | StatementKind::Type(_, _)
-        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _)
+        | StatementKind::RuntimeFunctionDeclaration(..)
         | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _)
         | StatementKind::Use(_, _)
         | StatementKind::Empty => ReturnStatus::None,
@@ -146,7 +146,7 @@ impl TypeChecker {
             | StatementKind::Class(_)
             | StatementKind::Trait(_, _, _, _, _)
             | StatementKind::Type(_, _)
-            | StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _)
+            | StatementKind::RuntimeFunctionDeclaration(..)
             | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _)
             | StatementKind::Use(_, _)
             | StatementKind::Empty => false,
@@ -280,7 +280,7 @@ pub(crate) fn collect_tail_statements<'a>(stmt: &'a Statement, out: &mut Vec<&'a
         | StatementKind::Class(_)
         | StatementKind::Trait(_, _, _, _, _)
         | StatementKind::Type(_, _)
-        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _)
+        | StatementKind::RuntimeFunctionDeclaration(..)
         | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _)
         | StatementKind::Use(_, _)
         | StatementKind::Empty => {}

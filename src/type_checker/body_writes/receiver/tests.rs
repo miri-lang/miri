@@ -36,6 +36,19 @@ fn written_name(expression: &Expression) -> Option<String> {
 
 /// What the list runtime entry points the fixtures declare do, as their
 /// stdlib declarations state it.
+/// What a parsed program's calls are known to do without a type checker:
+/// its runtime records, and no argument known to bind an `out` parameter.
+fn runtime_only(runtime: &RuntimeEffects) -> Callees<'_> {
+    Callees {
+        runtime,
+        binds_out: &binds_no_out_parameter,
+    }
+}
+
+fn binds_no_out_parameter(_: &Expression, _: &[Expression], _: usize) -> bool {
+    false
+}
+
 fn list_runtime() -> RuntimeEffects {
     use crate::runtime_effects::{ElementRole, ParamUse};
     let stated = [
@@ -81,7 +94,11 @@ fn main()
 /// The receiver writers `source` declares, as `Class.method`, sorted.
 fn writers(source: &str) -> Vec<String> {
     let program = parse(source);
-    let writes = ReceiverWrites::of(program.body.iter(), written_name, &list_runtime());
+    let writes = ReceiverWrites::of(
+        program.body.iter(),
+        written_name,
+        &runtime_only(&list_runtime()),
+    );
     let mut names: Vec<String> = (writes.writers.iter())
         .map(|(class, method)| format!("{class}.{method}"))
         .collect();
@@ -251,7 +268,11 @@ fn a_method_never_analysed_is_taken_to_write() {
     let writes = ReceiverWrites::default();
     assert!(writes.writes_receiver("List", "pop"));
     assert!(writes.writes_receiver("List", "length"));
-    let analysed = ReceiverWrites::of(parse(BAG).body.iter(), written_name, &list_runtime());
+    let analysed = ReceiverWrites::of(
+        parse(BAG).body.iter(),
+        written_name,
+        &runtime_only(&list_runtime()),
+    );
     assert!(!analysed.writes_receiver("Bag", "size"));
     assert!(analysed.writes_receiver("Bag", "no_such_method"));
     assert!(analysed.writes_receiver("Unseen", "size"));
@@ -338,7 +359,7 @@ fn split_of(writes: &ReceiverWrites, class: &str) -> (Vec<String>, Vec<String>) 
 fn the_standard_library_collections_write_only_through_their_writers() {
     let programs = standard_library();
     let statements = programs.iter().flat_map(|program| program.body.iter());
-    let writes = ReceiverWrites::of(statements, written_name, &stdlib_runtime());
+    let writes = ReceiverWrites::of(statements, written_name, &runtime_only(&stdlib_runtime()));
     for (class, expected) in [
         (
             "List",
@@ -403,7 +424,7 @@ const INTERCEPTED_WRITERS: [(&str, &str); 6] = [
 fn every_writer_lowering_intercepts_by_name_writes_its_receiver() {
     let programs = standard_library();
     let statements = programs.iter().flat_map(|program| program.body.iter());
-    let writes = ReceiverWrites::of(statements, written_name, &stdlib_runtime());
+    let writes = ReceiverWrites::of(statements, written_name, &runtime_only(&stdlib_runtime()));
     for (class, method) in INTERCEPTED_WRITERS {
         let key = (class.to_string(), method.to_string());
         assert!(writes.analysed.contains(&key), "{class}.{method} analysed");
@@ -415,7 +436,11 @@ fn every_writer_lowering_intercepts_by_name_writes_its_receiver() {
 /// `Type.method`, sorted.
 fn replacers(source: &str) -> Vec<String> {
     let program = parse(source);
-    let writes = ReceiverWrites::of(program.body.iter(), written_name, &list_runtime());
+    let writes = ReceiverWrites::of(
+        program.body.iter(),
+        written_name,
+        &runtime_only(&list_runtime()),
+    );
     let mut names: Vec<String> = (writes.replacers.iter())
         .map(|(owner, method)| format!("{owner}.{method}"))
         .collect();
@@ -457,7 +482,11 @@ class Cell
 /// call can restore it, as `Type.method`, sorted.
 fn refused_replacers(source: &str) -> Vec<String> {
     let program = parse(source);
-    let writes = ReceiverWrites::of(program.body.iter(), written_name, &list_runtime());
+    let writes = ReceiverWrites::of(
+        program.body.iter(),
+        written_name,
+        &runtime_only(&list_runtime()),
+    );
     let mut names: Vec<String> = (writes.refused.iter())
         .map(|refused| format!("{}.{}", refused.owner, refused.method))
         .collect();

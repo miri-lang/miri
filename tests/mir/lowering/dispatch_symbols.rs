@@ -864,3 +864,35 @@ fn slot_target_names(
         .map(|(method, target)| (method, target.map(|symbol| symbol.link_name())))
         .collect()
 }
+
+/// An enum's drop hook is a body codegen names without a MIR call when the
+/// enum declares no parameters. A generic enum's shared hook reads them
+/// open, and every release runs its instantiation's hook instead, so it is
+/// not named.
+#[test]
+fn synthesized_references_names_the_shared_hook_of_an_enum_without_parameters_only() {
+    let result = crate::type_checker::utils::type_checker_result(
+        "
+enum Plain
+    A
+    fn drop(self)
+        return
+
+enum Guard<T>
+    Held(T)
+    Empty
+    fn drop(self)
+        return
+",
+    );
+    let symbols = synthesized_references(result.type_checker.type_definitions());
+    let names: Vec<String> = symbols.iter().map(|symbol| symbol.link_name()).collect();
+    assert!(
+        names.iter().any(|name| name == "miri.Plain.drop"),
+        "{names:?}"
+    );
+    assert!(
+        !names.iter().any(|name| name.starts_with("miri.Guard.")),
+        "{names:?}"
+    );
+}

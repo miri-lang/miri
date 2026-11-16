@@ -5,7 +5,7 @@
 
 use crate::ast::expression::Expression;
 use crate::ast::statement::RECEIVER_PARAM_NAME;
-use crate::ast::types::{STRING_TYPE_NAME, TUPLE_TYPE_NAME};
+use crate::ast::types::TUPLE_TYPE_NAME;
 use crate::ast::{ExpressionKind, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
@@ -338,7 +338,7 @@ pub(super) struct StaticMethodCall<'a> {
     /// The local the receiver operand reads, when it reads one.
     pub receiver_temp: Option<Local>,
     /// The receiver's type when the callee takes the receiver's place and
-    /// restores it ([`restores_receiver`]).
+    /// restores it ([`TypeChecker::restores_receiver`]).
     pub restored_receiver: Option<Type>,
 }
 
@@ -439,7 +439,7 @@ fn is_counted_field(ctx: &LoweringContext, place: &Place, ty: &Type) -> bool {
 
 /// Passes a call's receiver, `args[0]`, as an `out` argument: the callee
 /// takes the receiver's place for the call and restores it with what it
-/// leaves there ([`restores_receiver`]). Every call of a body restoring its
+/// leaves there ([`TypeChecker::restores_receiver`]). Every call of a body restoring its
 /// receiver passes it so, whoever emits the call.
 ///
 /// A bare local of the body's own is passed as it is. A field, an element or
@@ -826,17 +826,6 @@ fn enclosing_parameter_bounds(
         .map(|generic| generic.bounds.clone())
 }
 
-/// Extract the class name from a type, handling builtins and custom types.
-pub(super) fn extract_class_name(tc: &TypeChecker, obj_ty: &Type) -> Option<String> {
-    match &obj_ty.kind {
-        TypeKind::Option(_) => tc.optional_enum().map(|optional| optional.name.clone()),
-        TypeKind::String => Some(STRING_TYPE_NAME.to_string()),
-        TypeKind::Tuple(_) => Some(TUPLE_TYPE_NAME.to_string()),
-        TypeKind::Custom(name, _) => Some(name.clone()),
-        k => k.as_builtin_collection().map(|b| b.name().to_string()),
-    }
-}
-
 /// Lower a method call on a class or trait object.
 ///
 /// This handles inheritance resolution, virtual vs static dispatch, and specialized
@@ -944,7 +933,7 @@ fn resolve_method_receiver(
         _ => return None,
     };
     let obj_ty = bounding_trait(ctx, &obj_ty, &method_name).unwrap_or(obj_ty);
-    let class_name = extract_class_name(ctx.type_checker, &obj_ty)?;
+    let class_name = ctx.type_checker.method_owner(&obj_ty)?;
     Some((obj_ty, class_name, method_name))
 }
 
@@ -1061,18 +1050,8 @@ fn emit_method_call(
     Ok(Some(op.clone()))
 }
 
-/// Whether the instance method `method`, called on a receiver of type
-/// `receiver_ty`, takes the receiver's place and restores it
-/// ([`crate::type_checker::TypeChecker::restores_receiver`]). Only an enum's
-/// method restores its receiver, and an enum neither extends nor is extended,
-/// so the receiver's type names the one body every call reaches. The body
-/// binding its receiver and every call of it read this one answer.
-pub(crate) fn restores_receiver(tc: &TypeChecker, receiver_ty: &Type, method: &str) -> bool {
-    extract_class_name(tc, receiver_ty).is_some_and(|owner| tc.restores_receiver(&owner, method))
-}
-
 /// The receiver's type, `receiver_ty`, when a call of the instance method
-/// `info` named `name` restores its receiver ([`restores_receiver`]): what
+/// `info` named `name` restores its receiver ([`TypeChecker::restores_receiver`]): what
 /// every site emitting a call of a method body reads to pass the receiver
 /// ([`lend_restored_receiver`]).
 pub(crate) fn restored_receiver(
@@ -1081,7 +1060,7 @@ pub(crate) fn restored_receiver(
     receiver_ty: &Type,
     name: &str,
 ) -> Option<Type> {
-    (!info.is_static && restores_receiver(ctx.type_checker, receiver_ty, name))
+    (!info.is_static && ctx.type_checker.restores_receiver(receiver_ty, name))
         .then(|| receiver_ty.clone())
 }
 
@@ -1953,7 +1932,7 @@ fn prepare_method_self<'e>(
     span: Span,
 ) -> Result<(Receiver<'e>, Option<Local>), LoweringError> {
     let cow = call_writes_receiver(ctx, obj_ty, class_name, method_name);
-    if cow.is_some() || restores_receiver(ctx.type_checker, obj_ty, method_name) {
+    if cow.is_some() || ctx.type_checker.restores_receiver(obj_ty, method_name) {
         let cow = cow.map(|cow| (obj_ty, cow));
         let (pending, temporary) = lower_pending_receiver(ctx, obj, cow, span)?;
         let temporary = temporary.map(|temporary| temporary.local());

@@ -120,6 +120,7 @@ use crate::mir::terminator::TerminatorKind;
 use crate::mir::terminator::{arg_mode, ArgMode};
 use crate::mir::visitor::Visitor;
 use crate::mir::{BasicBlock, Body, ExecutionModel, FunctionConstant, Local, Statement};
+use crate::runtime_effects::ElementRole;
 use drop_flags::{DropFlags, Partitioned};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -138,6 +139,7 @@ mod moved_out;
 mod optional_representation;
 mod optional_slots;
 mod optional_spelling;
+mod own_parameters;
 mod owned_copies;
 mod parameter_writes;
 mod program;
@@ -163,6 +165,7 @@ pub use moved_out::verify_moved_out;
 pub use optional_representation::{verify_optional_call_layouts, verify_optional_representation};
 pub use optional_slots::verify_optional_slots;
 pub use optional_spelling::verify_optional_spelling;
+pub use own_parameters::verify_own_parameter_instances;
 pub use owned_copies::verify_owned_copies;
 pub use parameter_writes::verify_parameter_writes;
 pub use program::{verify_backend_bodies, verify_program, ProgramReport};
@@ -342,6 +345,7 @@ pub fn verify_body_with_harmless_calls(
     let reachable = reachable_block_indices(body);
 
     violations.extend(verify_collection_element_width(body));
+    violations.extend(own_parameters::verify_own_parameter_instances(body));
     violations.extend(parameter_writes::verify_parameter_writes(body, ownership));
     flag_decref_on_params(body, ownership, &managed_params, &mut violations);
 
@@ -1758,8 +1762,18 @@ pub fn verify_collection_element_width(body: &Body) -> Vec<VerificationViolation
             continue;
         };
         let receiver_ty = &body.local_decls[receiver.0].ty;
-        for position in effect.element_positions() {
+        for (position, role) in effect.element_roles() {
             let Some(operand) = args.get(position) else {
+                continue;
+            };
+            let slot = match role {
+                ElementRole::Parameter => declared_parameter_slot(func, position, body),
+                ElementRole::Element | ElementRole::Key | ElementRole::Value => position
+                    .checked_sub(1)
+                    .and_then(|slot| concrete_collection_slot(receiver_ty, slot, body))
+                    .map(|slot_ty| (slot_ty, receiver_ty.clone())),
+            };
+            let Some((slot_ty, holder_ty)) = slot else {
                 continue;
             };
             violations.extend(element_width_violation(
@@ -1768,7 +1782,8 @@ pub fn verify_collection_element_width(body: &Body) -> Vec<VerificationViolation
                     symbol: func.called_runtime_name().unwrap_or_default(),
                     operand,
                     receiver,
-                    receiver_ty,
+                    holder_ty: &holder_ty,
+                    slot_ty: &slot_ty,
                     position,
                 },
             ));
@@ -1777,16 +1792,40 @@ pub fn verify_collection_element_width(body: &Body) -> Vec<VerificationViolation
     violations
 }
 
-/// One element a call hands a collection, and where it is going.
+/// The type a generic runtime entry point's declaration takes the argument
+/// at `position` at, read from the signature the call's function operand
+/// records for its instantiation, beside that signature; `None` where the
+/// operand records none or this body gives the type no width.
+fn declared_parameter_slot(
+    func: &Operand,
+    position: usize,
+    body: &Body,
+) -> Option<(crate::ast::types::Type, crate::ast::types::Type)> {
+    use crate::ast::types::TypeKind;
+    let Operand::Function(function) = func else {
+        return None;
+    };
+    let TypeKind::Function(signature) = &function.ty.kind else {
+        return None;
+    };
+    let declared = crate::type_checker::resolve_type_name(&signature.params.get(position)?.typ)?;
+    Some((pinned_type(&declared, body)?, function.ty.clone()))
+}
+
+/// One element a call hands an entry point, and the slot it fills.
 ///
-/// `position` is the element's own argument position in the call. The receiver
-/// takes the first, so the slot the element fills is the type argument one place
-/// before it: a map's key and its value are told apart by nothing else.
+/// `position` is the element's own argument position in the call. A
+/// collection's element fills the type argument of the receiver one place
+/// before it: a map's key and its value are told apart by nothing else. A
+/// value of the entry point's own type parameter fills the parameter its
+/// declaration takes there. `holder_ty` is what declares the slot: the
+/// receiver collection, or the entry point's instantiated signature.
 struct ElementArgument<'a> {
     symbol: &'a str,
     operand: &'a Operand,
     receiver: Local,
-    receiver_ty: &'a crate::ast::types::Type,
+    holder_ty: &'a crate::ast::types::Type,
+    slot_ty: &'a crate::ast::types::Type,
     position: usize,
 }
 
@@ -1796,8 +1835,7 @@ fn element_width_violation(
     body: &Body,
     argument: ElementArgument<'_>,
 ) -> Option<VerificationViolation> {
-    let slot = argument.position.checked_sub(1)?;
-    let slot_ty = concrete_collection_slot(argument.receiver_ty, slot, body)?;
+    let slot_ty = argument.slot_ty;
     let operand_ty = concrete_operand_type(argument.operand, body)?;
     let slot_bytes = compute_elem_size_from_type(&slot_ty.kind, body.layout_scope());
     let operand_bytes = compute_elem_size_from_type(&operand_ty.kind, body.layout_scope());
@@ -1808,13 +1846,13 @@ fn element_width_violation(
         local: argument.receiver,
         local_name: local_display_name(body, argument.receiver),
         message: format!(
-            "`{}` is handed, in argument {}, a {} of {} bytes where `{}` stores that slot as {} \
+            "`{}` is handed, in argument {}, a {} of {} bytes where `{}` declares that slot as {} \
              of {} bytes, so the bytes the two spell do not describe one element",
             argument.symbol,
             argument.position,
             operand_ty.kind,
             operand_bytes,
-            argument.receiver_ty.kind,
+            argument.holder_ty.kind,
             slot_ty.kind,
             slot_bytes
         ),

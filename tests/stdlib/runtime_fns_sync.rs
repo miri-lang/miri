@@ -55,8 +55,8 @@ fn extract_runtime_fn_names(source: &str) -> Vec<String> {
     for line in source.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("runtime \"core\" fn ") {
-            // rest = "miri_rt_xxx(...) ..."
-            if let Some(name) = rest.split('(').next() {
+            // rest = "miri_rt_xxx(...) ..." or "miri_rt_xxx<T>(...) ..."
+            if let Some(name) = rest.split(['(', '<']).next() {
                 let name = name.trim();
                 if !name.is_empty() {
                     names.push(name.to_owned());
@@ -290,20 +290,24 @@ fn runtime_decls(source: &str) -> Vec<RuntimeDecl> {
         let (Some(open), Some(close)) = (rest.find('('), rest.rfind(')')) else {
             continue;
         };
+        let (name, own) = match rest[..open].split_once('<') {
+            Some((name, own)) => (name, split_top_level(own.trim_end_matches('>'))),
+            None => (&rest[..open], Vec::new()),
+        };
+        let generics = (generics.iter().cloned())
+            .chain(own.iter().map(|g| g.trim().to_owned()))
+            .collect();
         decls.push(RuntimeDecl {
-            name: rest[..open].trim().to_owned(),
+            name: name.trim().to_owned(),
             params: split_top_level(&rest[open + 1..close])
                 .iter()
                 .map(|p| {
-                    p.trim()
-                        .split_once(' ')
-                        .map_or("", |(_, ty)| ty)
-                        .trim()
-                        .to_owned()
+                    let ty = p.trim().split_once(' ').map_or("", |(_, ty)| ty).trim();
+                    ty.strip_prefix("out ").unwrap_or(ty).trim().to_owned()
                 })
                 .collect(),
             returns: rest[close + 1..].trim().to_owned(),
-            generics: generics.clone(),
+            generics,
         });
     }
     decls

@@ -130,6 +130,7 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::Fn)?;
 
         let name = self.simple_identifier()?;
+        let generic_types = self.generic_types_expression()?;
         let parameters = self.function_params_expression()?;
         let return_type = self.return_type_expression()?;
 
@@ -138,6 +139,7 @@ impl<'source> Parser<'source> {
         Ok(ast::runtime_function_declaration(
             runtime_kind,
             &name,
+            generic_types,
             parameters,
             return_type,
         ))

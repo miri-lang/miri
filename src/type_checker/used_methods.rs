@@ -556,7 +556,7 @@ impl TypeChecker {
 
     /// The sites [`record_receiver_method_sites`](Self::record_receiver_method_sites)
     /// records.
-    fn receiver_sites(
+    pub(super) fn receiver_sites(
         &self,
         class_name: &str,
         method: &str,

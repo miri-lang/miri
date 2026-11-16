@@ -848,7 +848,7 @@ impl TypeChecker {
                 // Nested function declarations don't execute host code in outer scope
                 false
             }
-            StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _) => false,
+            StatementKind::RuntimeFunctionDeclaration(..) => false,
             StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
             StatementKind::GpuFrame(_, _, _) => false,
             StatementKind::GpuFrameBlock(_) => false,
@@ -944,7 +944,7 @@ impl TypeChecker {
                 // Nested function declarations don't reference params
                 false
             }
-            StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _) => false,
+            StatementKind::RuntimeFunctionDeclaration(..) => false,
             StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
             StatementKind::GpuFrame(_, _, _) => false,
             StatementKind::GpuFrameBlock(_) => false,
@@ -1290,7 +1290,7 @@ impl TypeChecker {
             StatementKind::Class(_) => false,
             StatementKind::Trait(_, _, _, _, _) => false,
             StatementKind::FunctionDeclaration(_) => false,
-            StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _) => false,
+            StatementKind::RuntimeFunctionDeclaration(..) => false,
             StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
             StatementKind::GpuFrame(_, _, _) => false,
             StatementKind::GpuFrameBlock(_) => false,
@@ -1382,7 +1382,7 @@ impl TypeChecker {
             StatementKind::Class(_) => false,
             StatementKind::Trait(_, _, _, _, _) => false,
             StatementKind::FunctionDeclaration(_) => false,
-            StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _) => false,
+            StatementKind::RuntimeFunctionDeclaration(..) => false,
             StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
             StatementKind::GpuFrame(_, _, _) => false,
             StatementKind::GpuFrameBlock(_) => false,

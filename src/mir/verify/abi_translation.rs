@@ -32,7 +32,7 @@ use std::collections::{HashMap, HashSet};
 use super::{local_display_name, VerificationViolation};
 use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
-use crate::mir::terminator::{ArgMode, TerminatorKind};
+use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
 use crate::mir::{Body, Local, Operand, Place, Rvalue, StatementKind};
 use crate::runtime_effects::RuntimeEffect;
 use crate::runtime_fns::{param_abi, RuntimeParamAbi};
@@ -217,13 +217,14 @@ impl Translation<'_> {
         }
         let mut spelled = Spelled::default();
         for (position, arg) in args.iter().enumerate() {
-            let words = self.argument(
-                effect,
-                position,
-                arg,
-                &is_args[spelled.args.min(is_args.len())..],
-            );
+            let start = spelled.args.min(is_args.len());
+            let words = self.argument(effect, position, arg, &is_args[start..]);
             spelled.widen(words, position, arg_modes, arg_handles);
+            if effect.overwrites(position) {
+                let mode = arg_mode(is_modes, start);
+                self.overwritten(position, arg, &is_args[start..], mode);
+                spelled.pass_as(mode);
+            }
         }
         let result = CallResult {
             destination,
@@ -281,6 +282,7 @@ impl Translation<'_> {
                 Local(0),
                 format!("argument {position} changed though it travels as itself"),
             ),
+            RuntimeParamAbi::Element if effect.overwrites(position) => {}
             RuntimeParamAbi::Element => {
                 let stored = effect.stores(position);
                 self.element(position, stored, arg, &rest[0], &rest[1])
@@ -338,6 +340,52 @@ impl Translation<'_> {
             Operand::Copy(_) | Operand::Move(_) | Operand::Function(_) => self.whole_kind(&read),
         };
         self.byte_count(position, kind.as_ref(), count);
+    }
+
+    /// The caller's place an entry point writes over, `arg`, spelled from
+    /// `rest` on and passed under `mode`: a whole local held in a register
+    /// passed as itself and `out`, so the backend reads back what the runtime
+    /// writes, or one held as its bytes passed as their address, then its byte
+    /// count either way.
+    fn overwritten(&mut self, position: usize, arg: &Operand, rest: &[Operand], mode: ArgMode) {
+        let [handed, count, ..] = rest else {
+            self.flag(
+                Local(0),
+                format!("argument {position} is a written element spelled without its address and byte count"),
+            );
+            return;
+        };
+        let place = match arg {
+            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => place,
+            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
+                self.flag(
+                    Local(0),
+                    format!("argument {position} is a written element that is not a whole local"),
+                );
+                return;
+            }
+        };
+        let kind = self.after.local_decls[place.local.0].ty.kind.clone();
+        let is_bytes = self.after.value_layout(&kind).is_some();
+        let right = match (is_bytes, self.address_of(handed)) {
+            (true, Some(addressed)) => addressed == *place && mode == ArgMode::Borrowed,
+            (false, None) => handed.place() == Some(place) && mode == ArgMode::Out,
+            (true, None) | (false, Some(_)) => false,
+        };
+        if !right {
+            self.flag(
+                place.local,
+                format!(
+                    "argument {position} is a written element not handed as {}",
+                    if is_bytes {
+                        "the address of its bytes"
+                    } else {
+                        "itself, passed `out`"
+                    }
+                ),
+            );
+        }
+        self.byte_count(position, Some(&kind), count);
     }
 
     /// A closure argument kept, followed by the address of a trampoline.
@@ -552,6 +600,21 @@ impl Spelled {
         if let Some(handle) = handles.get(position) {
             self.handles.push(*handle);
             self.handles.extend((1..words).map(|_| None));
+        }
+    }
+}
+
+impl Spelled {
+    /// The element just widened, a place the entry point writes over,
+    /// travels under `mode` rather than the mode it was lowered with:
+    /// [`Translation::overwritten`] has checked `mode` is the one its
+    /// representation needs.
+    fn pass_as(&mut self, mode: ArgMode) {
+        let Some(start) = self.args.checked_sub(2) else {
+            return;
+        };
+        if let Some(recorded) = self.modes.get_mut(start) {
+            *recorded = mode;
         }
     }
 }

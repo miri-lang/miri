@@ -2609,6 +2609,9 @@ impl TypeChecker {
         context: &Context,
     ) {
         match arg_expr.map(|e| &e.node) {
+            Some(ExpressionKind::Identifier(var_name, _)) if var_name == "self" => {
+                self.refuse_replacing_an_instance(arg_span, context);
+            }
             Some(ExpressionKind::Identifier(var_name, _)) => {
                 if !context.is_mutable(var_name) {
                     self.report_error(DiagnosticCode::TypImmutabilityViolation,

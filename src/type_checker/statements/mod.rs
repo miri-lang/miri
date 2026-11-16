@@ -89,7 +89,7 @@ impl TypeChecker {
             StatementKind::Class(class_data) => {
                 Some((&class_data.attributes, AttributeTarget::Class))
             }
-            StatementKind::RuntimeFunctionDeclaration(_, _, _, _, attributes) => {
+            StatementKind::RuntimeFunctionDeclaration(.., attributes) => {
                 Some((attributes, AttributeTarget::RuntimeFunction))
             }
             _ => None,
@@ -451,12 +451,14 @@ impl TypeChecker {
             StatementKind::RuntimeFunctionDeclaration(
                 _runtime,
                 name,
+                generics,
                 params,
                 return_type_expr,
                 attributes,
             ) => self.check_runtime_fn_decl(
                 &runtime_effects::RuntimeDeclaration {
                     name,
+                    generics: generics.as_deref(),
                     params,
                     return_type: return_type_expr.as_deref(),
                     attributes,
@@ -580,7 +582,7 @@ impl TypeChecker {
     ) {
         let (name, params) = (declaration.name, declaration.params);
         let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
-            generics: None,
+            generics: declaration.generics.map(<[Expression]>::to_vec),
             params: params.to_vec(),
             return_type: declaration.return_type.cloned().map(Box::new),
         })));
@@ -595,12 +597,18 @@ impl TypeChecker {
 
         context.define(name.to_string(), info);
 
+        if let Some(generics) = declaration.generics {
+            context.enter_scope();
+            self.define_in_order(generics, context);
+        }
         for param in params {
             self.resolve_type_expression(&param.typ, context);
         }
-
         if let Some(rt_expr) = declaration.return_type {
             self.resolve_type_expression(rt_expr, context);
+        }
+        if declaration.generics.is_some() {
+            context.exit_scope();
         }
         self.check_runtime_effects(declaration);
     }

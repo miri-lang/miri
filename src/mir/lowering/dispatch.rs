@@ -1798,6 +1798,55 @@ fn apply_generic_mangling(
     if let Some(symbol) = generic_function_symbol(ctx, callee, call_expr_id, func_span)? {
         *func_op = Operand::function(symbol, func_span);
     }
+    type_generic_runtime_call(ctx, callee, call_expr_id, func_op)
+}
+
+/// Type the operand naming a generic runtime entry point at the signature
+/// the call `call_expr_id` instantiates. The entry point is one symbol at
+/// every instantiation, so its operand is where a call records the types its
+/// own type parameters stand for: the slots its arguments fill are read from
+/// it.
+///
+/// A call the type checker recorded no instantiation for is an internal
+/// error in a body compiled for one instantiation, as it is for a generic
+/// Miri function: its arguments would fill slots no type settles. A shared
+/// body that leaves parameters open keeps the name's type. So is a runtime
+/// callee the type checker recorded no function type for.
+fn type_generic_runtime_call(
+    ctx: &LoweringContext,
+    callee: &Expression,
+    call_expr_id: usize,
+    func_op: &mut Operand,
+) -> Result<(), LoweringError> {
+    let Operand::Function(function) = func_op else {
+        return Ok(());
+    };
+    if ctx.callee_kind(callee) != CalleeKind::Runtime {
+        return Ok(());
+    }
+    let name = function.symbol.link_name();
+    let Some(declared) = ctx.type_checker.get_type(callee.id) else {
+        return Err(untyped_runtime_callee(
+            &name,
+            "has no type recorded",
+            callee.span,
+        ));
+    };
+    let TypeKind::Function(signature) = &declared.kind else {
+        let found = format!("is recorded as `{}`, not a function", declared.kind);
+        return Err(untyped_runtime_callee(&name, &found, callee.span));
+    };
+    if signature.generics.as_ref().is_none_or(Vec::is_empty) {
+        return Ok(());
+    }
+    let Some(mapping) = ctx.instantiated_call_mapping(call_expr_id) else {
+        if ctx.body.generics.open_params.is_empty() {
+            return Err(uninstantiated_generic_call(&name, callee.span));
+        }
+        return Ok(());
+    };
+    let bound: HashMap<String, Type> = mapping.into_iter().collect();
+    function.ty = apply_generic_sub(declared, &bound);
     Ok(())
 }
 
@@ -1805,8 +1854,11 @@ fn apply_generic_mangling(
 /// identifier `callee` targets, recorded on the body so the pipeline lowers
 /// that instantiation.
 ///
-/// `None` when the callee is no identifier or no generic function. A call
-/// pinning a parameter to a type with no name to compile a body at is refused.
+/// `None` when the callee is no identifier or no generic function, and for a
+/// runtime entry point, which is one symbol at every instantiation: the
+/// arguments its type parameters type travel as elements, by address and byte
+/// count. A call pinning a parameter to a type with no name to compile a body
+/// at is refused.
 /// A call to a generic function the type checker recorded no instantiation for
 /// is an internal error: the shared body it would otherwise link is laid out
 /// for no caller's types.
@@ -1819,6 +1871,9 @@ fn generic_function_symbol(
     let ExpressionKind::Identifier(func_name, _) = &callee.node else {
         return Ok(None);
     };
+    if ctx.callee_kind(callee) == CalleeKind::Runtime {
+        return Ok(None);
+    }
     let Some(type_args) = ctx.instantiated_call_mapping(call_expr_id) else {
         return refuse_uninstantiated_generic_call(ctx, callee, func_name, span);
     };
@@ -1867,6 +1922,20 @@ fn calls_a_generic_function(ctx: &LoweringContext, callee: &Expression) -> bool 
 /// The internal error for a call to the generic `func_name` that reached
 /// lowering with no instantiation: the shared body it would otherwise link is
 /// laid out for no caller's types.
+/// The internal error for a call to the runtime entry point `func_name`
+/// whose name the type checker gave no function type: `found` says what it
+/// recorded instead. Every call it accepted has its callee typed.
+fn untyped_runtime_callee(func_name: &str, found: &str, span: Span) -> LoweringError {
+    LoweringError::internal(
+        DiagnosticCode::MirCustomLoweringError,
+        format!(
+            "the call to the runtime entry point `{func_name}` reached lowering, but its \
+             callee {found}"
+        ),
+        span,
+    )
+}
+
 fn uninstantiated_generic_call(func_name: &str, span: Span) -> LoweringError {
     LoweringError::internal(
         DiagnosticCode::MirInvalidInstantiationArgument,
@@ -2323,3 +2392,6 @@ fn inject_allocator_arg(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

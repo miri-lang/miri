@@ -61,6 +61,18 @@ fn test_function_with_a_body_round_trips() {
 }
 
 #[test]
+fn test_a_runtime_declaration_keeps_its_type_parameters() {
+    let source =
+        "@element(\"item\")\n@returns_element\nruntime \"core\" fn miri_rt_echo<T>(item T) T\n";
+    let rendered = assert_render_is_a_fixed_point(source);
+    assert!(
+        rendered.contains("fn miri_rt_echo<T>(item T) T"),
+        "got: {rendered}"
+    );
+    assert_ast_survives(source);
+}
+
+#[test]
 fn test_parameters_render_without_a_colon() {
     let rendered = assert_render_is_a_fixed_point("fn add(a int, b int) int\n    return a + b\n");
     assert!(

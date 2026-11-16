@@ -342,6 +342,7 @@ use system.collections.list
 use system.collections.set
 use system.collections.map
 use system.collections.array
+use system.memory
 
 fn main()
     return

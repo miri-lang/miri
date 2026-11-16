@@ -361,7 +361,8 @@ impl TypeChecker {
         context: &Context,
     ) {
         let built = std::mem::take(&mut self.classes_built_in_bodies);
-        let rooted = self.default_copy_sites(context);
+        let mut rooted = self.default_copy_sites(context);
+        rooted.extend(self.drop_hook_sites(context));
         let mut walk = ReachWalk::over(&built);
         let refusal = (self.walk_reached_bodies((sites, &rooted), &mut walk, context)).err();
         self.reached_bodies = self.reached_bodies_of(&walk.reached, walk.verdicts, context);
@@ -615,7 +616,8 @@ impl TypeChecker {
     }
 
     /// Record `class`, built in the body `step` reached, at the types `step`
-    /// gives its arguments, when it binds every parameter they spell.
+    /// gives its arguments, when it binds every parameter they spell, and
+    /// reach its drop hook there, which releasing it runs ([`roots`]).
     /// Refuses it past a bound of [`super::instantiation_limits`].
     fn record_built_at(
         &mut self,
@@ -649,6 +651,9 @@ impl TypeChecker {
                 &class.class,
                 recorded,
             );
+        }
+        for hook in self.drop_hook_sites_at(&class.class, &arguments, context) {
+            self.follow(&hook, &builder, context, walk)?;
         }
         let built = (class.class.as_str(), arguments.as_slice());
         self.record_bases_built_at(built, (class.span, step), context, walk)

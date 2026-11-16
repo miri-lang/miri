@@ -4,7 +4,7 @@
 // Tests for `system.option`. Covers `is_some` and `is_none` on each way an
 // optional is spelled and laid out: `T?` and `Option<T>`, a payload held as
 // bytes, a counted payload held as its own pointer, and an optional of an
-// optional.
+// optional; and `take`, which hands the value back and leaves `None`.
 
 use system.collections.list
 use system.testing
@@ -44,9 +44,22 @@ fn test_is_some_on_a_returned_optional()
     assert(find(names, "b").is_some(), "a name in the list is found")
     assert(find(names, "c").is_none(), "a name missing from the list is not found")
 
+fn test_take_hands_back_the_value_and_leaves_none()
+    var present int? = Some(3)
+    let taken = present.take()
+    assert((taken ?? 0) == 3, "take hands back a value held as bytes")
+    assert(present.is_none(), "take leaves None in place of a value held as bytes")
+    var name String? = Some("a")
+    let held = name.take()
+    assert((held ?? "") == "a", "take hands back a counted payload")
+    assert(name.is_none(), "take leaves None in place of a counted payload")
+    var empty int? = None
+    assert(empty.take().is_none(), "take on None hands back None")
+
 fn main()
     test_is_some_and_is_none_on_a_value_held_as_bytes()
     test_is_some_on_a_counted_payload()
     test_is_some_on_the_generic_spelling()
     test_is_some_on_an_optional_of_an_optional()
     test_is_some_on_a_returned_optional()
+    test_take_hands_back_the_value_and_leaves_none()

@@ -236,3 +236,167 @@ fn test_enum_method_without_a_keyword_is_public_across_modules() {
         "1",
     );
 }
+
+#[test]
+fn two_generic_enums_hand_a_generic_function_an_out_place_of_their_own_shape() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+fn pick<T>(place out T, v T) T
+    return v
+
+enum A<T>
+    X(T)
+    Y
+
+    fn f(v A<T>) A<T>
+        return pick(self, v)
+
+enum B<T>
+    P(T)
+    Q
+
+    fn g(v T?) T?
+        var o = v
+        return pick(o, v)
+
+fn main()
+    var a A<String> = A.X("a")
+    let r = a.f(A.Y)
+    match r
+        A.X(s): println(s)
+        A.Y: println("y")
+    var b B<String> = B.Q
+    let s = b.g(Some("z"))
+    println(s ?? "-")
+"#,
+        "y\nz",
+    );
+}
+
+#[test]
+fn a_generic_enum_runs_its_drop_hook_at_each_instantiation() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.ops
+
+enum Guard<T implements Equatable>
+    Held(T, T)
+    Empty
+
+    fn drop(self)
+        match self
+            Guard.Held(a, b): println(f"dropped {a.equals(b)}")
+            Guard.Empty: println("dropped empty")
+
+fn main()
+    let g Guard<String> = Guard.Held("x", "y")
+    let h Guard<i32> = Guard.Held(7, 7)
+    let e Guard<int> = Guard.Empty
+    println("live")
+"#,
+        "live\ndropped empty\ndropped true\ndropped false",
+    );
+}
+
+#[test]
+fn a_generic_enum_drop_hook_builds_a_list_of_its_parameter() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+
+enum B<T>
+    P(T)
+    Q
+
+    fn drop(self)
+        let l = List<T>()
+        println(f"bdrop {l.length()}")
+
+fn main()
+    let b B<i8> = B.P(1)
+    println("live")
+"#,
+        "live\nbdrop 0",
+    );
+}
+
+#[test]
+fn a_generic_enum_drop_hook_beside_a_called_method_builds_a_list_of_its_parameter() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+
+enum B<T>
+    P(T)
+    Q
+
+    fn drop(self)
+        let l = List<T>()
+        println(f"bdrop {l.length()}")
+
+    fn ok() bool
+        return true
+
+fn main()
+    let b B<i8> = B.P(1)
+    println(f"live {b.ok()}")
+"#,
+        "live true\nbdrop 0",
+    );
+}
+
+#[test]
+fn a_generic_enum_built_in_a_generic_function_runs_a_drop_hook_that_builds_a_list() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+
+enum B<T>
+    P(T)
+    Q
+
+    fn drop(self)
+        let l = List<T>()
+        println(f"bdrop {l.length()}")
+
+fn hold<T>(x T)
+    let b B<T> = B.P(x)
+    println("held")
+
+fn main()
+    hold(2 as i16)
+    println("live")
+"#,
+        "held\nbdrop 0\nlive",
+    );
+}
+
+#[test]
+fn a_generic_enum_held_in_a_list_runs_a_drop_hook_that_builds_a_list() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+
+enum B<T>
+    P(T)
+    Q
+
+    fn drop(self)
+        let l = List<T>()
+        println(f"bdrop {l.length()}")
+
+fn main()
+    var xs = List<B<i16>>()
+    xs.push(B.P(1))
+    println("live")
+"#,
+        "live\nbdrop 0",
+    );
+}

@@ -21,6 +21,7 @@ mod local_borrows;
 mod moved_out;
 mod optional_representation;
 mod optional_spelling;
+mod own_parameter_widths;
 mod owned_copies;
 mod parameter_writes;
 mod reached_agreement;

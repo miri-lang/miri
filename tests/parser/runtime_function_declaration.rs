@@ -4,7 +4,8 @@
 use super::utils::{parser_error_test, parser_test};
 use miri::ast::common::RuntimeKind;
 use miri::ast::factory::{
-    parameter, runtime_function_declaration, type_expr_non_null, type_int, type_string,
+    generic_type, parameter, runtime_function_declaration, type_custom, type_expr_non_null,
+    type_int, type_string,
 };
 use miri::error::syntax::SyntaxErrorKind;
 
@@ -15,6 +16,7 @@ fn test_runtime_function_declaration_default_runtime() {
         vec![runtime_function_declaration(
             RuntimeKind::Core,
             "miri_rt_alloc",
+            None,
             vec![parameter(
                 "size".into(),
                 type_expr_non_null(type_int()),
@@ -33,6 +35,7 @@ fn test_runtime_function_declaration_explicit_core() {
         vec![runtime_function_declaration(
             RuntimeKind::Core,
             "miri_rt_alloc",
+            None,
             vec![parameter(
                 "size".into(),
                 type_expr_non_null(type_int()),
@@ -51,6 +54,7 @@ fn test_runtime_function_declaration_no_params_no_return() {
         vec![runtime_function_declaration(
             RuntimeKind::Core,
             "miri_rt_init",
+            None,
             vec![],
             None,
         )],
@@ -64,6 +68,7 @@ fn test_runtime_function_declaration_multiple_params() {
         vec![runtime_function_declaration(
             RuntimeKind::Core,
             "miri_rt_copy",
+            None,
             vec![
                 parameter("src".into(), type_expr_non_null(type_string()), None, None),
                 parameter("dst".into(), type_expr_non_null(type_string()), None, None),
@@ -80,8 +85,28 @@ fn test_runtime_function_declaration_explicit_gpu() {
         vec![runtime_function_declaration(
             RuntimeKind::Gpu,
             "miri_gpu_init",
+            None,
             vec![],
             None,
+        )],
+    );
+}
+
+#[test]
+fn test_runtime_function_declaration_type_parameters() {
+    parser_test(
+        "runtime \"core\" fn miri_rt_echo<T>(item T) T\n",
+        vec![runtime_function_declaration(
+            RuntimeKind::Core,
+            "miri_rt_echo",
+            Some(vec![generic_type("T", None)]),
+            vec![parameter(
+                "item".into(),
+                type_expr_non_null(type_custom("T", None)),
+                None,
+                None,
+            )],
+            Some(Box::new(type_expr_non_null(type_custom("T", None)))),
         )],
     );
 }

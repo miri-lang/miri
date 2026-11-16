@@ -892,7 +892,7 @@ impl TypeChecker {
     /// Refuses `self = ...` in a method of anything but an enum: an instance
     /// of a class holds its state in its fields, and a whole-receiver write
     /// could reach no binding of the caller's.
-    fn refuse_replacing_an_instance(&mut self, span: Span, context: &Context) {
+    pub(crate) fn refuse_replacing_an_instance(&mut self, span: Span, context: &Context) {
         let (Some(owner), Some(method)) = (
             context.current_class.as_deref(),
             context.current_function.as_deref(),

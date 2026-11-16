@@ -603,8 +603,9 @@ mod receiver;
 
 pub use capture_writes::{CapturedMentions, LostCaptureWrites};
 pub use held_operands::{HeldOperand, HeldOperands};
+pub use parameters::binds_out_parameter;
 pub use parameters::ParameterWrites;
-pub use receiver::ReceiverWrites;
+pub use receiver::{Callees, ReceiverWrites};
 
 #[cfg(test)]
 mod tests;

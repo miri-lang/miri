@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-/// Memory management traits for Miri.
+/// Memory management for Miri: copying a value, and moving one out of a place.
 ///
-/// Defines the Cloneable trait for types that support deep copying.
+/// Defines the Cloneable trait for types that support deep copying, and
+/// `replace`, the one way ownership of a value leaves a place.
 ///
 /// Types implementing `Cloneable` guarantee that `clone()` returns an
 /// independent copy: mutations to the original do not affect the clone
 /// and vice versa.
+
+@element("place, new")
+@writes("place")
+@stores("new")
+@returns_element
+runtime "core" fn miri_rt_replace<T>(place out T, new T) T
 
 /// Enables creating a deep copy of a value.
 ///
@@ -21,3 +28,18 @@
 ///     let b = a.clone()   // b is a separate copy
 public trait Cloneable
     public fn clone() Self
+
+/// Puts `new` in `place` and returns the value `place` held, in one step.
+///
+/// The value returned is the caller's own: reading a value out of a place
+/// only borrows it, and `replace` is how it leaves the place instead. The
+/// place is never empty, and no value is copied: a value with a `drop` hook
+/// runs it once, where the returned value ends.
+///
+/// Example:
+///     use system.memory
+///     var name = "old"
+///     let previous = replace(name, "new")
+///     println(f"{previous} {name}")   // old new
+public fn replace<T>(place out T, new T) T
+    return miri_rt_replace(place, new)

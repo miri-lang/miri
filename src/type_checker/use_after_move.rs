@@ -591,7 +591,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             StatementKind::Empty
             | StatementKind::Use(_, _)
             | StatementKind::Type(_, _)
-            | StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _)
+            | StatementKind::RuntimeFunctionDeclaration(..)
             | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
         }
     }

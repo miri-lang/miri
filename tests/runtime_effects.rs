@@ -8,7 +8,7 @@
 use crate::mir::utils::{every_runtime_record, runtime_callee};
 use miri::ast::types::BuiltinCollectionKind;
 use miri::mir::compiler_intrinsics::copy_on_write_of;
-use miri::runtime_effects::{ParamUse, RuntimeEffect};
+use miri::runtime_effects::{ElementRole, ParamUse, RuntimeEffect};
 use miri::runtime_fns::rt;
 
 /// What the entry point `name` is recorded to do.
@@ -320,4 +320,29 @@ fn the_string_and_io_entry_points_only_read_their_strings() {
             "{name} takes nothing over"
         );
     }
+}
+
+/// `replace` writes new bytes over the caller's place, which it never writes
+/// in place as a collection's block, keeps the new value there, and hands the
+/// old one back for the caller to own.
+#[test]
+fn replace_overwrites_its_place_and_hands_back_what_it_held() {
+    let effect = record(rt::REPLACE);
+    assert!(effect.overwrites(0), "the place is overwritten");
+    assert!(!effect.writes_in_place(0), "no block is written in place");
+    assert!(!effect.only_reads(0), "the place is written");
+    assert!(effect.stores(1), "the new value stays in the place");
+    assert_eq!(
+        effect.element_roles(),
+        vec![(0, ElementRole::Parameter), (1, ElementRole::Parameter)],
+        "both are values of its own type parameter, no collection's elements"
+    );
+    assert!(effect.returns_element_value() && !effect.hands_back_a_borrow());
+    assert_eq!(effect.type_parameters, vec!["T".to_string()]);
+    assert_eq!(
+        effect.typed_by,
+        vec![Some(0), Some(0)],
+        "both are declared as `T`"
+    );
+    assert_eq!(effect.result_typed_by, Some(0), "so is the result");
 }

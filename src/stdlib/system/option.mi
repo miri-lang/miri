@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use system.memory
+
 /// A value that may be absent: either `Some(value)` or `None`.
 ///
 /// `T?` is this type, written short: `int?` and `Option<int>` are one type.
@@ -46,3 +48,17 @@ enum Option<T>
         match self
             Some(_): false
             None: true
+
+    /// Takes the value out, leaving `None` in its place.
+    ///
+    /// The value returned is the caller's own, so a value with a `drop` hook
+    /// runs it once, where the returned value ends. Taking from `None` returns
+    /// `None`.
+    ///
+    /// Example:
+    ///     var found String? = Some("a")
+    ///     let taken = found.take()
+    ///     assert(taken.is_some())
+    ///     assert(found.is_none())
+    public fn take() T?
+        return replace(self, None)

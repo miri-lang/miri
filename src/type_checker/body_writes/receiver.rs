@@ -24,7 +24,8 @@
 //!   so a write through any of those reaches the receiver's block itself.
 //!
 //! An enum method replaces its receiver when it assigns `self` whole,
-//! `self = ...`, or calls on `self` a method that does. Every call of such a
+//! `self = ...`, hands `self` itself to an `out` parameter, or calls on
+//! `self` a method that does. Every call of such a
 //! method takes the receiver's place and restores it with what the method
 //! leaves there, the way an `out` argument is. A call of a method with no
 //! body found replaces nothing. The methods that run as an instance is built
@@ -57,6 +58,14 @@ use std::collections::{HashMap, HashSet};
 
 /// The name the receiver goes by inside a method body.
 const RECEIVER: &str = "self";
+
+/// What the analysis knows of the functions a body calls: what each runtime
+/// entry point does with its arguments, and whether the argument written
+/// `index`th of a call of `callee` on `arguments` binds an `out` parameter.
+pub struct Callees<'c> {
+    pub runtime: &'c RuntimeEffects,
+    pub binds_out: &'c dyn Fn(&Expression, &[Expression], usize) -> bool,
+}
 
 /// The methods of every class and enum that write their receiver, by the
 /// identity of the type the receiver is an instance of and the method's name,
@@ -153,14 +162,14 @@ impl ReceiverWrites {
     pub(crate) fn of<'s>(
         statements: impl Iterator<Item = &'s Statement>,
         identity: impl Fn(&Expression) -> Option<String>,
-        runtime: &RuntimeEffects,
+        callees: &Callees,
     ) -> Self {
         let declarations = Declarations::of(statements, &identity);
         let mut writes = Self::default();
         for class in &declarations.classes {
             let is_enum = declarations.enums.contains(class);
             let methods = declarations.methods_of(class);
-            let analysis = Analysis::of(&declarations, &methods, runtime);
+            let analysis = Analysis::of(&declarations, &methods, callees);
             let writers = analysis.closure(|fact| fact.writes, true);
             let replacers = analysis.closure(|fact| fact.replaced_at.is_some(), false);
             for (name, node) in &methods {
@@ -342,7 +351,7 @@ impl<'s, 'd> Analysis<'s, 'd> {
     fn of(
         declarations: &'d Declarations<'s>,
         methods: &'d HashMap<&'d str, Node<'d>>,
-        runtime: &RuntimeEffects,
+        callees: &Callees,
     ) -> Self {
         let mut facts = HashMap::new();
         let mut pending: Vec<Node<'d>> = methods.values().copied().collect();
@@ -353,7 +362,7 @@ impl<'s, 'd> Analysis<'s, 'd> {
             let Some(body) = declarations.body(node) else {
                 continue;
             };
-            let fact = BodyFacts::of(body, runtime);
+            let fact = BodyFacts::of(body, callees);
             pending.extend(
                 (fact.calls_on_super.iter())
                     .filter_map(|method| declarations.inherited(node.0, method)),
@@ -482,11 +491,11 @@ struct BodyFacts<'b> {
 impl<'b> BodyFacts<'b> {
     /// The facts of the function body `body`, read off its mentions of the
     /// receiver ([`BodyWrites`]).
-    fn of(body: &'b Statement, runtime: &RuntimeEffects) -> Self {
+    fn of(body: &'b Statement, callees: &Callees) -> Self {
         let mut facts = Self::default();
         for mention in &BodyWrites::of(body).mentions {
             if let Some(word) = receiver_word(mention.expression) {
-                facts.receiver_mention(mention, word, runtime);
+                facts.receiver_mention(mention, word, callees);
             }
         }
         facts
@@ -495,13 +504,9 @@ impl<'b> BodyFacts<'b> {
     /// A mention of the receiver: a write when a closure holds it, when it
     /// starts an assignment's target, when it is handed to a runtime entry
     /// point that does not only read it, or when it stands anywhere but a
-    /// read; a call to follow when a method is called on it.
-    fn receiver_mention(
-        &mut self,
-        mention: &Mention<'b>,
-        word: ReceiverWord,
-        runtime: &RuntimeEffects,
-    ) {
+    /// read; a replacement when it is assigned whole or handed whole to an
+    /// `out` parameter; a call to follow when a method is called on it.
+    fn receiver_mention(&mut self, mention: &Mention<'b>, word: ReceiverWord, callees: &Callees) {
         self.mentions_receiver = true;
         if mention.scope == Scope::Closure {
             self.writes = true;
@@ -529,10 +534,26 @@ impl<'b> BodyFacts<'b> {
             }
             Some(Role::Argument {
                 callee,
+                arguments,
                 index,
                 is_bare,
                 ..
-            }) => match runtime_callee(callee, runtime).filter(|_| is_bare) {
+            }) if is_bare
+                && word == ReceiverWord::Itself
+                && mention.scope == Scope::Body
+                && (callees.binds_out)(callee, arguments, index) =>
+            {
+                self.writes = true;
+                if self.replaced_at.is_none() {
+                    self.replaced_at = Some(mention.expression.span);
+                }
+            }
+            Some(Role::Argument {
+                callee,
+                index,
+                is_bare,
+                ..
+            }) => match runtime_callee(callee, callees.runtime).filter(|_| is_bare) {
                 Some(effect) => self.writes |= !effect.only_reads(index),
                 None => self.writes |= mention.place == Place::Value,
             },
