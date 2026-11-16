@@ -270,20 +270,14 @@ fn a_managed_struct_is_never_held_as_bytes() {
 }
 
 /// An optional of a scalar or of a value held as its bytes is itself held as
-/// its bytes: taken by address and returned in registers, its tag first,
-/// however the optional is spelled.
+/// its bytes: taken by address and returned in registers, its tag first.
 #[test]
 fn a_body_over_optionals_held_as_bytes_takes_them_by_address_and_returns_their_members() {
-    let written_option = |payload: TypeKind| {
-        TypeKind::Custom("Option".to_string(), Some(vec![type_argument(ty(payload))]))
-    };
     let of_i32 = [types::I8, types::I32];
     let of_point = [types::I8, types::I64, types::F64];
     for (optional, returns) in [
         (TypeKind::Option(Box::new(ty(TypeKind::I32))), &of_i32[..]),
         (TypeKind::Option(Box::new(ty(point()))), &of_point[..]),
-        (written_option(TypeKind::I32), &of_i32[..]),
-        (written_option(point()), &of_point[..]),
     ] {
         let body = body_of(optional.clone(), &[optional.clone()]);
         let signature = body_signature(&body, CALL_CONV, PTR);

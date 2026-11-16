@@ -152,7 +152,7 @@ fn peel_optionals<'t>(kind: &'t TypeKind, scope: LayoutScope<'_>) -> Peeled<'t> 
     let mut expansions_left = scope.definitions.len();
     loop {
         if first_held_depth.is_none()
-            && (matches!(&*value, TypeKind::Option(_)) || written_option_payload(&value).is_some())
+            && matches!(&*value, TypeKind::Option(_))
             && held_value_layout(&value, scope).is_some()
         {
             first_held_depth = Some(layers);
@@ -160,40 +160,23 @@ fn peel_optionals<'t>(kind: &'t TypeKind, scope: LayoutScope<'_>) -> Peeled<'t> 
         value = match value {
             Cow::Borrowed(TypeKind::Option(inner)) => Cow::Borrowed(&inner.kind),
             Cow::Owned(TypeKind::Option(inner)) => Cow::Owned(inner.kind),
-            other => match written_option_payload(&other) {
-                Some(payload) => Cow::Owned(payload.kind),
-                None => match scope.resolve_alias(&other) {
-                    Some(target) if expansions_left > 0 => {
-                        expansions_left -= 1;
-                        value = Cow::Owned(target.kind);
-                        continue;
+            other => match scope.resolve_alias(&other) {
+                Some(target) if expansions_left > 0 => {
+                    expansions_left -= 1;
+                    value = Cow::Owned(target.kind);
+                    continue;
+                }
+                Some(_) | None => {
+                    return Peeled {
+                        layers,
+                        first_held_depth,
+                        value: other,
                     }
-                    Some(_) | None => {
-                        return Peeled {
-                            layers,
-                            first_held_depth,
-                            value: other,
-                        }
-                    }
-                },
+                }
             },
         };
         layers += 1;
     }
-}
-
-/// The payload of an optional written as the generic type `Option<T>`: the
-/// optional `T?` under another spelling, peeled alike.
-fn written_option_payload(kind: &TypeKind) -> Option<Type> {
-    let TypeKind::Custom(name, Some(args)) = kind else {
-        return None;
-    };
-    let [payload] = args.as_slice() else {
-        return None;
-    };
-    (name == crate::ast::types::OPTION_TYPE_NAME)
-        .then(|| crate::mir::instantiation::type_argument(payload))
-        .flatten()
 }
 
 /// Whether a value of `kind` is an optional held as its payload's own pointer,

@@ -174,7 +174,7 @@ struct Point: x int
 var p Point? = Point(1)
 var x = p.x
         ",
-        "does not have members",
+        "Type 'Point?' has no member 'x'",
     );
 }
 

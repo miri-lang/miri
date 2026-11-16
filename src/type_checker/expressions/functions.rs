@@ -71,7 +71,7 @@ impl TypeChecker {
         let old_gpu_for_depth = context.gpu_for_depth;
         context.gpu_for_depth = 0;
 
-        self.define_lambda_parameters(params, context);
+        let params = self.define_lambda_parameters(params, context);
 
         let implicit_return_type = self.infer_lambda_body(body, context);
         let final_return_type_expr = self.finalize_lambda_return_type(
@@ -94,7 +94,7 @@ impl TypeChecker {
 
         make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: generics.clone(),
-            params: params.to_vec(),
+            params,
             return_type: final_return_type_expr,
         })))
     }
@@ -129,21 +129,43 @@ impl TypeChecker {
         expected_return_type
     }
 
-    fn define_lambda_parameters(&mut self, params: &[Parameter], context: &mut Context) {
-        for param in params {
-            let param_type = self.resolve_type_expression(&param.typ, context);
-            context.define(
-                param.name.clone(),
-                SymbolInfo::new(
-                    param_type,
-                    false,
-                    false,
-                    MemberVisibility::Public,
-                    self.modules.current_module.clone(),
-                    None,
-                ),
-            );
-        }
+    /// Defines each parameter in the lambda's scope and returns the
+    /// parameters as the lambda's type carries them: each type resolved, so
+    /// later stages read one spelling of every type (an optional written
+    /// `Option<T>` is `T?`) rather than resolving the written one again.
+    fn define_lambda_parameters(
+        &mut self,
+        params: &[Parameter],
+        context: &mut Context,
+    ) -> Vec<Parameter> {
+        params
+            .iter()
+            .map(|param| {
+                let param_type = self.resolve_type_expression(&param.typ, context);
+                context.define(
+                    param.name.clone(),
+                    SymbolInfo::new(
+                        param_type.clone(),
+                        false,
+                        false,
+                        MemberVisibility::Public,
+                        self.modules.current_module.clone(),
+                        None,
+                    ),
+                );
+                Parameter {
+                    typ: Box::new(self.resolved_type_expression(&param.typ, param_type)),
+                    ..param.clone()
+                }
+            })
+            .collect()
+    }
+
+    /// The type expression for `resolved`, at the span `written` was spelled at.
+    fn resolved_type_expression(&self, written: &Expression, resolved: Type) -> Expression {
+        let mut expression = self.create_type_expression(resolved);
+        expression.span = written.span;
+        expression
     }
 
     fn infer_lambda_body(&mut self, body: &Statement, context: &mut Context) -> Type {
@@ -197,7 +219,9 @@ impl TypeChecker {
     ) -> Option<Box<Expression>> {
         if let Some(expected) = expected_return_type {
             self.validate_explicit_return_type(&expected, &implicit_return_type, body, context);
-            return_type_expr.clone()
+            return_type_expr
+                .as_ref()
+                .map(|written| Box::new(self.resolved_type_expression(written, expected)))
         } else {
             let collected_returns = context
                 .inferred_return_types

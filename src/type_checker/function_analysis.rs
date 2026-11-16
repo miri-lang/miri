@@ -140,6 +140,11 @@ pub(crate) struct FunctionAnalysis {
     /// built-in variant constructor. Every other expression names a
     /// [`CalleeKind::Program`] callee.
     pub(crate) callee_kinds: HashMap<usize, CalleeKind>,
+    /// Every callee expression, by id, that names an enum variant built by a
+    /// call (`Shape.Circle`, `Option<int>.Some`, a bare `Some`): the enum's
+    /// identity and the variant. The id is the one a call marks as its callee,
+    /// the member's own for `Type.Variant`.
+    pub(crate) variant_callees: HashMap<usize, (String, String)>,
     /// Every identifier expression, by id, that resolved in its scope to a
     /// [`CalleeKind::Program`] function, with the declaration it resolved to.
     pub(crate) declared_callees: HashMap<usize, DeclaredFunction>,
@@ -162,6 +167,7 @@ impl FunctionAnalysis {
             diverging_callees: HashSet::new(),
             fn_residencies: HashMap::new(),
             callee_kinds: HashMap::new(),
+            variant_callees: HashMap::new(),
             declared_callees: HashMap::new(),
             intrinsic_names: HashMap::new(),
             declaring_modules: HashMap::new(),

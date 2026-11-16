@@ -26,8 +26,8 @@ use crate::mir::lowering::expression::match_expr::{
     emit_regex_predicate_test, emit_simple_predicate_test,
 };
 use crate::mir::lowering::helpers::{
-    bind_pattern, is_option_some_pattern, literal_to_u128, resolve_argument_type,
-    variant_payload_types,
+    bind_pattern, is_option_none_pattern, is_option_some_pattern, literal_to_u128,
+    resolve_argument_type, variant_payload_types,
 };
 
 /// Whether `pattern`, written in a payload position, can fail to match.
@@ -292,7 +292,7 @@ fn bind_testing_variant_payloads(
     fail: ArmExit,
 ) -> Result<(), LoweringError> {
     let subject_ty = ctx.body.local_decls[subject.0].ty.clone();
-    let is_some = is_option_some_pattern(&subject_ty, parent);
+    let is_some = is_option_some_pattern(ctx.type_checker, &subject_ty, parent);
     let payload_types = if is_some {
         None
     } else {
@@ -404,10 +404,12 @@ fn payload_test(
     let test = match pattern {
         // An optional's own value is its discriminant: zero is `None`.
         Pattern::Literal(Literal::None) => PayloadTest::Discriminant(own_value(), Expected::Is(0)),
-        Pattern::Member(..) if is_option_none_pattern(&payload_ty, pattern) => {
+        Pattern::Member(..) if is_option_none_pattern(ctx.type_checker, &payload_ty, pattern) => {
             PayloadTest::Discriminant(own_value(), Expected::Is(0))
         }
-        Pattern::EnumVariant(parent, _) if is_option_some_pattern(&payload_ty, parent) => {
+        Pattern::EnumVariant(parent, _)
+            if is_option_some_pattern(ctx.type_checker, &payload_ty, parent) =>
+        {
             PayloadTest::Discriminant(own_value(), Expected::IsNot(0))
         }
         Pattern::Literal(Literal::String(_) | Literal::Float(_)) => PayloadTest::Equals,
@@ -432,19 +434,6 @@ fn payload_test(
         Pattern::Tuple(_) | Pattern::Identifier(_) | Pattern::Default => PayloadTest::Irrefutable,
     };
     Ok(test)
-}
-
-/// Whether `pattern` is `Option.None` written against an optional value.
-fn is_option_none_pattern(value_ty: &Type, pattern: &Pattern) -> bool {
-    let Pattern::Member(type_pattern, variant) = pattern else {
-        return false;
-    };
-    matches!(value_ty.kind, TypeKind::Option(_))
-        && variant == "None"
-        && matches!(
-            type_pattern.as_ref(),
-            Pattern::Identifier(name) if name == crate::ast::types::OPTION_TYPE_NAME
-        )
 }
 
 /// End the current block with a branch to `pass` when `discr` meets

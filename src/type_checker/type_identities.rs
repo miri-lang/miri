@@ -76,6 +76,17 @@ impl TypeChecker {
         }
     }
 
+    /// Remembers that the written type `expr_id` names the optional as
+    /// `Option<T>`, so the stages after checking read it as `T?`, the one
+    /// spelling every layout, count and release decision reads.
+    pub(crate) fn record_generic_optional(&mut self, expr_id: usize) {
+        // A synthesized expression carries id 0, which many share.
+        if expr_id != 0 {
+            self.modules.generic_optional_spellings.insert(expr_id);
+            self.modules.spelling_recorded = true;
+        }
+    }
+
     fn record_qualified_name_at(&mut self, expr_id: usize, identity: &str) {
         // A synthesized expression carries id 0, which many share.
         if expr_id != 0 && type_identity::is_qualified(identity) {
@@ -254,10 +265,13 @@ impl TypeChecker {
 
     /// `ty` with each name written in a component of it — a type argument, a
     /// closure's parameter or return — that checking resolved to a type a
-    /// module keeps private spelled as that type's identity. A closure type
-    /// read off a declaration carries the parameter types its module wrote.
+    /// module keeps private spelled as that type's identity, and each written
+    /// `Option<T>` spelled `T?`. A closure type read off a declaration carries
+    /// the parameter types its module wrote.
     pub(crate) fn qualified_components(&self, ty: &Type) -> Type {
-        if self.modules.qualified_type_names.is_empty() {
+        if self.modules.qualified_type_names.is_empty()
+            && self.modules.generic_optional_spellings.is_empty()
+        {
             return ty.clone();
         }
         self.qualified_type(ty, 0)
@@ -273,6 +287,9 @@ impl TypeChecker {
         let inner = |ty: &Type| Box::new(self.qualified_type(ty, id));
         match kind {
             TypeKind::Custom(name, args) => {
+                if let Some(payload) = self.generic_optional_payload(args.as_deref(), id) {
+                    return TypeKind::Option(Box::new(payload));
+                }
                 let name = self.modules.qualified_type_names.get(&id).unwrap_or(name);
                 let args = args.as_deref().map(|args| self.qualified_arguments(args));
                 TypeKind::Custom(name.clone(), args)
@@ -314,6 +331,25 @@ impl TypeChecker {
             | TypeKind::Void
             | TypeKind::Error => kind.clone(),
         }
+    }
+
+    /// The payload, qualified, of the written type `id` when it names the
+    /// optional as `Option<T>`; a payload written `U?` is the optional `U?`.
+    fn generic_optional_payload(&self, args: Option<&[TypeArgument]>, id: usize) -> Option<Type> {
+        if !self.modules.generic_optional_spellings.contains(&id) {
+            return None;
+        }
+        let [payload] = args? else {
+            return None;
+        };
+        let TypeArgKind::Type(payload, is_nullable) = self.qualified_argument(payload).node else {
+            return None;
+        };
+        if is_nullable {
+            let span = payload.span;
+            return Some(Type::new(TypeKind::Option(payload), span));
+        }
+        Some(*payload)
     }
 
     /// A closure type with the names its parameters and return write

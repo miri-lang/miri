@@ -98,6 +98,24 @@ fn lower_call_form(
     lower_call(ctx, &expr.span, expr.id, func, args, dest)
 }
 
+/// Whether the callee `func` is the present variant of the enum marked
+/// `@optional`, however it is spelled (`Some`, `Option.Some`,
+/// `Option<int>.Some`): the variant the type checker resolved the callee to.
+fn names_present_optional_variant(ctx: &LoweringContext, func: &Expression) -> bool {
+    let Some(optional) = ctx.type_checker.optional_enum() else {
+        return false;
+    };
+    let callee_id = match &func.node {
+        ExpressionKind::Member(_, variant) => variant.id,
+        _ => func.id,
+    };
+    ctx.type_checker
+        .variant_callee(callee_id)
+        .is_some_and(|(enum_name, variant)| {
+            enum_name == optional.name && variant == optional.present_variant
+        })
+}
+
 fn try_lower_option_some(
     ctx: &mut LoweringContext,
     func: &Expression,
@@ -105,22 +123,7 @@ fn try_lower_option_some(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let is_option_some = match &func.node {
-        ExpressionKind::Identifier(name, _) => name == "Some",
-        ExpressionKind::Member(enum_expr, variant_expr) => {
-            if let ExpressionKind::Identifier(type_name, _) = &enum_expr.node {
-                if let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node {
-                    type_name == crate::ast::types::OPTION_TYPE_NAME && variant_name == "Some"
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        }
-        _ => false,
-    };
-
+    let is_option_some = names_present_optional_variant(ctx, func);
     if !is_option_some || args.len() != 1 {
         return Ok(None);
     }

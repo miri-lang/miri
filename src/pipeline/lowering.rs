@@ -701,6 +701,31 @@ fn register_base_class_instantiations(type_checker: &mut TypeChecker) -> Result<
     }
 }
 
+/// The receiver an enum method compiled once for every instantiation holds:
+/// the bare enum, or for the enum `T?` spells, `T?` at its own parameter, the
+/// way every caller holds it.
+fn shared_enum_self_type(result: &PipelineResult, enum_name: &str, span: Span) -> Type {
+    match result.type_checker.optional_enum() {
+        Some(optional) if optional.name == enum_name => optional.shared_self_type(span),
+        Some(_) | None => Type::new(TypeKind::Custom(enum_name.to_string(), None), span),
+    }
+}
+
+/// The recorded instantiations a value can be held and released as. An
+/// instance of the enum `T?` spells is recorded only so its methods are
+/// compiled at it: every value of it is held as `T?` and released by the
+/// optional's own plan, never by an enum drop thunk.
+#[cfg(feature = "cranelift")]
+fn released_instantiations(
+    type_checker: &crate::type_checker::TypeChecker,
+) -> std::collections::HashMap<String, Vec<Vec<Type>>> {
+    let mut instances = type_checker.generic_class_instantiations.clone();
+    if let Some(optional) = type_checker.optional_enum() {
+        instances.remove(&optional.name);
+    }
+    instances
+}
+
 /// The type facts the CPU backend reads, settled over `bodies`.
 ///
 /// Drop thunks run on the host only, so a kernel body — which holds no value
@@ -717,10 +742,7 @@ pub(super) fn settled_type_facts(
         .collect();
     mir::type_facts::TypeFacts::new(
         pipeline_result.type_checker.type_definitions().clone(),
-        pipeline_result
-            .type_checker
-            .generic_class_instantiations
-            .clone(),
+        released_instantiations(&pipeline_result.type_checker),
         pipeline_result.vtable_fills.clone(),
         host_bodies.iter().copied(),
     )
@@ -1946,11 +1968,7 @@ impl Pipeline {
                     else {
                         continue;
                     };
-
-                    let self_type = crate::ast::types::Type::new(
-                        crate::ast::types::TypeKind::Custom(enum_name.to_string(), None),
-                        stmt.span,
-                    );
+                    let self_type = shared_enum_self_type(result, enum_name, stmt.span);
 
                     for (method_stmt, method_decl) in shared_method_bodies(methods) {
                         let symbol = Symbol::method(enum_name, &[], &method_decl.name, &[]);
@@ -2074,9 +2092,7 @@ impl Pipeline {
                     else {
                         continue;
                     };
-
-                    let self_type =
-                        Type::new(TypeKind::Custom(enum_name.to_string(), None), stmt.span);
+                    let self_type = shared_enum_self_type(result, enum_name, stmt.span);
 
                     for (method_stmt, method_decl) in shared_method_bodies(methods) {
                         let symbol = Symbol::method(enum_name, &[], &method_decl.name, &[]);

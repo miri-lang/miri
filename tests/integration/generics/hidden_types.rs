@@ -167,7 +167,7 @@ fn every_kind_of_type_in_scope_is_hidden_by_a_parameter_of_its_name() {
                     "fn main()\n    println(\"x\")\n",
                 ),
             )],
-            refusal: Some("type parameter `Option` hides the type `Option`"),
+            refusal: Some("type parameter `Option` hides the enum `Option`"),
         },
         Case {
             name: "Option in a struct",
@@ -178,7 +178,7 @@ fn every_kind_of_type_in_scope_is_hidden_by_a_parameter_of_its_name() {
                     "fn main()\n    println(\"x\")\n",
                 ),
             )],
-            refusal: Some("type parameter `Option` hides the type `Option`"),
+            refusal: Some("type parameter `Option` hides the enum `Option`"),
         },
         Case {
             name: "a type the program imports",

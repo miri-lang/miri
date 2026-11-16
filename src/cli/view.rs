@@ -980,6 +980,7 @@ fn render_members(
     let mut out = String::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     out.push_str(&member_header(type_name, definition));
+    out.push_str(&short_spelling(type_name, definition, checker));
     out.push('\n');
     collect_members(
         type_name,
@@ -994,6 +995,22 @@ fn render_members(
         out.push_str("    (no members)\n");
     }
     out
+}
+
+/// The short spelling a type is also written in, as a header suffix: the
+/// enum marked `@optional` is written `T?`. Every other type has none.
+fn short_spelling(
+    type_name: &str,
+    definition: &crate::type_checker::context::TypeDefinition,
+    checker: &crate::type_checker::TypeChecker,
+) -> String {
+    let is_optional = checker
+        .optional_enum()
+        .is_some_and(|optional| optional.name == type_name);
+    match definition.generics().and_then(<[_]>::first) {
+        Some(parameter) if is_optional => format!(", written {}?", parameter.name),
+        _ => String::new(),
+    }
 }
 
 /// The declaration line a member list sits under.
@@ -1319,7 +1336,6 @@ pub fn members(
     let definitions = &checker.type_table.global_type_definitions;
     let text = match definitions.get(type_name) {
         Some(definition) => render_members(type_name, definition, checker, public_only),
-        None if type_name == crate::ast::types::OPTION_TYPE_NAME => option_members(),
         None => {
             return failure(
                 &shape,
@@ -1338,22 +1354,6 @@ pub fn members(
         Vec::new(),
         source,
         source_path,
-    )
-}
-
-/// The listing for the built-in optional type.
-///
-/// `T?` is part of the language rather than a declaration in some module, so no
-/// type table holds it, yet it is among the types a reader most often asks
-/// about. It carries no methods: its value is reached only through the forms the
-/// type checker accepts as a check, which this listing names instead.
-fn option_members() -> String {
-    format!(
-        "built-in {}<T>, written T?\n    \
-         Some(T)\n    \
-         None\n    \
-         // no methods: read the value with `if let Some(v) = x`, a `match`, or `x ?? fallback`\n",
-        crate::ast::types::OPTION_TYPE_NAME
     )
 }
 

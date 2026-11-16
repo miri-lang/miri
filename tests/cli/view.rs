@@ -1665,24 +1665,23 @@ fn test_a_primitive_type_is_said_to_have_no_members_to_list() {
 }
 
 #[test]
-fn test_type_option_says_how_an_optional_value_is_read() {
-    // `T?` is built into the language rather than declared in a module, so no
-    // type table holds it; the answer has to come from the view itself.
+fn test_type_option_lists_the_declared_enum_and_its_short_spelling() {
+    // `T?` is the enum the standard library declares `@optional`, so the
+    // listing is that declaration's, with the short spelling beside it.
     let (stdout, stderr, ok) = view(&["--type", "Option", "--public"]);
 
+    assert!(ok, "Option resolves from the prelude, got:\n{stderr}");
     assert!(
-        ok,
-        "Option resolves although no module declares it, got:\n{stderr}"
+        stdout.contains("enum Option<T>, written T?"),
+        "the header names the declaration and the `T?` spelling, got:\n{stdout}"
     );
     assert!(
-        stdout.contains("T?") && stdout.contains("Some(T)") && stdout.contains("None"),
-        "the listing names the `T?` spelling and both variants with their payload, \
-         got:\n{stdout}"
+        stdout.contains("Option.None") && stdout.contains("Option.Some(T)"),
+        "each variant carries the payload a pattern binds, got:\n{stdout}"
     );
     assert!(
-        stdout.contains("no methods") && stdout.contains("if let Some(") && stdout.contains("??"),
-        "an optional value has no methods, so the listing names the forms that read \
-         it, got:\n{stdout}"
+        stdout.contains("fn is_some() bool") && stdout.contains("fn is_none() bool"),
+        "the methods the declaration carries are listed, got:\n{stdout}"
     );
 }
 

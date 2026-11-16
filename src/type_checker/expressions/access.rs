@@ -767,7 +767,65 @@ impl TypeChecker {
             self.report_method_used_as_value(prop_name, span);
             return make_type(TypeKind::Error);
         }
+        if let Some(enum_name) = self.payload_variant_owner(&obj_type, prop_name) {
+            if call_arity.is_none() {
+                self.report_variant_used_as_value(&enum_name, prop_name, span);
+                return make_type(TypeKind::Error);
+            }
+            self.fn_analysis
+                .variant_callees
+                .insert(prop.id, (enum_name, prop_name.clone()));
+        }
         member
+    }
+
+    /// The enum and variant the callee expression `callee_id` was resolved
+    /// to, when it names a variant built by a call.
+    pub fn variant_callee(&self, callee_id: usize) -> Option<(&str, &str)> {
+        let (enum_name, variant) = self.fn_analysis.variant_callees.get(&callee_id)?;
+        Some((enum_name, variant))
+    }
+
+    /// The enum `obj_type` names when it is an enum type and `prop_name` is
+    /// one of its variants that carries a payload: a variant built by a call.
+    fn payload_variant_owner(&self, obj_type: &Type, prop_name: &str) -> Option<String> {
+        let TypeKind::Meta(inner) = &obj_type.kind else {
+            return None;
+        };
+        let TypeKind::Custom(name, _) = &inner.kind else {
+            return None;
+        };
+        let Some(TypeDefinition::Enum(definition)) =
+            self.type_table.global_type_definitions.get(name)
+        else {
+            return None;
+        };
+        let carries_payload =
+            (definition.variants.get(prop_name)).is_some_and(|payloads| !payloads.is_empty());
+        carries_payload.then(|| name.clone())
+    }
+
+    /// Refuse a variant carrying a payload read as a value: it builds a value
+    /// only when called with that payload.
+    pub(crate) fn report_variant_used_as_value(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        span: Span,
+    ) {
+        let shown = crate::type_checker::diagnostics::shown_type_name(enum_name);
+        self.report_error_with_help(
+            DiagnosticCode::TypMethodUsedAsValue,
+            format!(
+                "the variant `{shown}.{variant}` is read as a value, but a variant carrying a \
+                 payload can only be called"
+            ),
+            span,
+            format!(
+                "call it with its payload, `{shown}.{variant}(x)`, or wrap that call in a \
+                 lambda to hand it on as a value"
+            ),
+        );
     }
 
     /// Whether `prop_name` read off a value of `obj_type` names a method — of
@@ -780,6 +838,16 @@ impl TypeChecker {
             return bounds
                 .iter()
                 .any(|bound| self.member_is_a_method(&bound.ty, prop_name));
+        }
+        if let TypeKind::Option(_) = &obj_type.kind {
+            let defs = &self.type_table.global_type_definitions;
+            return self.optional_enum().is_some_and(|optional| {
+                matches!(
+                    defs.get(&optional.name),
+                    Some(TypeDefinition::Enum(definition))
+                        if definition.methods.contains_key(prop_name)
+                )
+            });
         }
         let TypeKind::Custom(name, _) = &obj_type.kind else {
             return false;
@@ -1385,7 +1453,7 @@ impl TypeChecker {
                 Some(RESULT_TYPE_NAME.to_string()),
                 Some(vec![*ok.clone(), *err.clone()]),
             ),
-            TypeKind::Option(_) => (None, None),
+            TypeKind::Option(payload) => self.extract_optional_member_type(payload, span, context),
             TypeKind::Generic(_, bounds) if !bounds.is_empty() => {
                 bounds.only().map_or((None, None), |bound| {
                     self.extract_constrained_generic_member_type(&bound.ty)
@@ -1443,6 +1511,29 @@ impl TypeChecker {
         (
             Some(TUPLE_TYPE_NAME.to_string()),
             Some(vec![element, length]),
+        )
+    }
+
+    /// The owner and type arguments a member of the optional `payload?` is
+    /// read on: the enum `T?` spells, at the payload. An optional's type does
+    /// not spell that enum, so the instantiation a call reaches is recorded
+    /// here, as a tuple's is, for its methods to be compiled at it. With no
+    /// enum declared `@optional`, an optional has no members.
+    fn extract_optional_member_type(
+        &mut self,
+        payload: &Type,
+        span: Span,
+        context: &Context,
+    ) -> (Option<String>, Option<Vec<TypeArgument>>) {
+        let Some(name) = self.optional_enum().map(|optional| optional.name.clone()) else {
+            return (None, None);
+        };
+        let instance = [payload.clone()];
+        self.record_class_named_in_body((&name, &instance, Naming::Held), span, context);
+        self.record_generic_class_instantiation(&name, instance.to_vec());
+        (
+            Some(name),
+            Some(vec![self.create_type_argument(payload.clone())]),
         )
     }
 
@@ -2282,6 +2373,41 @@ impl TypeChecker {
         methods
     }
 
+    /// Report a member the enum `name` does not declare.
+    ///
+    /// An optional is read as its payload so often that a member of the
+    /// payload asked of the optional is the usual slip, so its report names
+    /// the forms that reach the payload.
+    fn report_missing_enum_member(
+        &mut self,
+        name: &str,
+        prop_name: &str,
+        obj_type: &Type,
+        span: Span,
+    ) {
+        if matches!(obj_type.kind, TypeKind::Option(_)) {
+            self.report_error_with_help(
+                DiagnosticCode::TypFieldNotFound,
+                format!("Type '{obj_type}' has no member '{prop_name}'"),
+                span,
+                format!(
+                    "the value inside a '{obj_type}' is read once it is known to be present: \
+                     `if let Some(v) = x`, a `match`, or `x ?? fallback`"
+                ),
+            );
+            return;
+        }
+        self.report_error(
+            DiagnosticCode::TypFieldNotFound,
+            format!(
+                "Enum '{}' has no method '{}'",
+                crate::type_checker::diagnostics::shown_type_name(name),
+                prop_name
+            ),
+            span,
+        );
+    }
+
     fn infer_member_enum(
         &mut self,
         enum_def: &crate::type_checker::context::EnumDefinition,
@@ -2292,15 +2418,7 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         let Some(method_info) = enum_def.methods.get(prop_name) else {
-            self.report_error(
-                DiagnosticCode::TypFieldNotFound,
-                format!(
-                    "Enum '{}' has no method '{}'",
-                    crate::type_checker::diagnostics::shown_type_name(name),
-                    prop_name
-                ),
-                span,
-            );
+            self.report_missing_enum_member(name, prop_name, obj_type, span);
             return make_type(TypeKind::Error);
         };
         if !self.enum_method_is_visible(method_info, name, prop_name, span, context) {
@@ -2637,6 +2755,9 @@ impl TypeChecker {
                 None
             };
 
+            if variant_types.is_empty() && self.is_optional_enum(enum_name) {
+                return self.optional_at(type_args.as_deref());
+            }
             if variant_types.is_empty() {
                 // A payload-less variant of a generic enum carries no
                 // value to infer the arguments from, and the enum's own name
@@ -2695,14 +2816,35 @@ impl TypeChecker {
             self.substitute_variant_types(variant_types, def, type_args);
         let params = self.build_variant_params(&substituted_variant_types);
         let (fn_generics, return_type_args) = self.build_variant_generics(def, type_args);
+        let returned = if self.is_optional_enum(name) {
+            self.optional_at(return_type_args.as_deref())
+        } else {
+            make_type(TypeKind::Custom(name.to_string(), return_type_args))
+        };
 
         make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: fn_generics,
             params,
-            return_type: Some(Box::new(self.create_type_expression(make_type(
-                TypeKind::Custom(name.to_string(), return_type_args),
-            )))),
+            return_type: Some(Box::new(self.create_type_expression(returned))),
         })))
+    }
+
+    /// Whether `enum_name` is the enum marked `@optional`.
+    fn is_optional_enum(&self, enum_name: &str) -> bool {
+        self.optional_enum()
+            .is_some_and(|optional| optional.name == enum_name)
+    }
+
+    /// The optional at `type_args`, the one argument the enum marked
+    /// `@optional` takes, spelled `T?` as every optional is. A variant reached
+    /// with no argument written is the absent placeholder `None` is, which
+    /// takes its payload from the place it flows into.
+    fn optional_at(&self, type_args: Option<&[TypeArgument]>) -> Type {
+        let payload = type_args
+            .and_then(<[_]>::first)
+            .and_then(|argument| self.extract_type_from_argument(argument).ok())
+            .unwrap_or_else(|| make_type(TypeKind::Void));
+        make_type(TypeKind::Option(Box::new(payload)))
     }
 
     fn substitute_variant_types(

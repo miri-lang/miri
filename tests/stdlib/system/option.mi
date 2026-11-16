@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `system.option`. Covers `is_some` and `is_none` on each way an
+// optional is spelled and laid out: `T?` and `Option<T>`, a payload held as
+// bytes, a counted payload held as its own pointer, and an optional of an
+// optional.
+
+use system.collections.list
+use system.testing
+
+fn find(names [String], wanted String) int?
+    for i in 0..names.length()
+        if names[i] == wanted
+            return Some(i)
+    return None
+
+fn test_is_some_and_is_none_on_a_value_held_as_bytes()
+    let present int? = Some(3)
+    let absent int? = None
+    assert(present.is_some(), "Some(3) held as bytes is present")
+    assert(not present.is_none(), "Some(3) held as bytes is not absent")
+    assert(absent.is_none(), "None held as bytes is absent")
+    assert(not absent.is_some(), "None held as bytes is not present")
+
+fn test_is_some_on_a_counted_payload()
+    let present String? = Some("hi")
+    let absent String? = None
+    assert(present.is_some(), "a counted payload held as its pointer is present")
+    assert(absent.is_none(), "a null pointer is absent")
+
+fn test_is_some_on_the_generic_spelling()
+    let present Option<int> = Some(7)
+    assert(present.is_some(), "Option<int> is int? and is present")
+
+fn test_is_some_on_an_optional_of_an_optional()
+    let outer Option<int?> = Some(None)
+    let empty Option<int?> = None
+    assert(outer.is_some(), "Some(None) is a present outer optional")
+    assert(empty.is_none(), "None is an absent outer optional")
+
+fn test_is_some_on_a_returned_optional()
+    let names = List(["a", "b"])
+    assert(find(names, "b").is_some(), "a name in the list is found")
+    assert(find(names, "c").is_none(), "a name missing from the list is not found")
+
+fn main()
+    test_is_some_and_is_none_on_a_value_held_as_bytes()
+    test_is_some_on_a_counted_payload()
+    test_is_some_on_the_generic_spelling()
+    test_is_some_on_an_optional_of_an_optional()
+    test_is_some_on_a_returned_optional()

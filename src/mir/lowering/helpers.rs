@@ -15,6 +15,7 @@ use crate::mir::{
     Discriminant, ExecutionModel, Operand, Place, PlaceElem, Rvalue,
     StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
+use crate::type_checker::optional_enum::OptionalEnum;
 use crate::type_checker::TypeChecker;
 
 use super::context::LoweringContext;
@@ -220,7 +221,7 @@ pub fn bind_pattern(
         Pattern::EnumVariant(parent, bindings) => {
             // Handle Option Some(x) pattern — bind subject directly (identity, like unwrap)
             let subject_ty = &ctx.body.local_decls[subject_local.0].ty;
-            if is_option_some_pattern(subject_ty, parent) {
+            if is_option_some_pattern(ctx.type_checker, subject_ty, parent) {
                 if let Some(Pattern::Identifier(name)) = bindings
                     .first()
                     .filter(|first| !matches!(first, Pattern::Identifier(n) if is_discard(n)))
@@ -290,19 +291,24 @@ pub fn bind_pattern(
     Ok(())
 }
 
-/// Whether a variant pattern whose variant is written `parent` is `Some(..)`
-/// matched against an optional of type `subject_ty`.
-pub(crate) fn is_option_some_pattern(subject_ty: &Type, parent: &Pattern) -> bool {
+/// Whether a variant pattern whose variant is written `parent` names the
+/// present variant of the optional (`Some(..)` or `Option.Some(..)`), matched
+/// against an optional of type `subject_ty`.
+pub(crate) fn is_option_some_pattern(
+    type_checker: &TypeChecker,
+    subject_ty: &Type,
+    parent: &Pattern,
+) -> bool {
+    let Some(optional) = type_checker.optional_enum() else {
+        return false;
+    };
     if !matches!(subject_ty.kind, TypeKind::Option(_)) {
         return false;
     }
     match parent {
-        Pattern::Identifier(name) => name == "Some",
+        Pattern::Identifier(name) => *name == optional.present_variant,
         Pattern::Member(enum_pat, variant) => {
-            matches!(
-                enum_pat.as_ref(),
-                Pattern::Identifier(n) if n == crate::ast::types::OPTION_TYPE_NAME
-            ) && variant == "Some"
+            names_optional_enum(optional, enum_pat) && *variant == optional.present_variant
         }
         Pattern::Literal(_)
         | Pattern::EnumVariant(..)
@@ -310,6 +316,29 @@ pub(crate) fn is_option_some_pattern(subject_ty: &Type, parent: &Pattern) -> boo
         | Pattern::Regex(_)
         | Pattern::Default => false,
     }
+}
+
+/// Whether `pattern` is the absent variant of the optional written through
+/// the enum (`Option.None`), matched against an optional of type `value_ty`.
+pub(crate) fn is_option_none_pattern(
+    type_checker: &TypeChecker,
+    value_ty: &Type,
+    pattern: &Pattern,
+) -> bool {
+    let (Some(optional), Pattern::Member(type_pattern, variant)) =
+        (type_checker.optional_enum(), pattern)
+    else {
+        return false;
+    };
+    matches!(value_ty.kind, TypeKind::Option(_))
+        && *variant == optional.absent_variant
+        && names_optional_enum(optional, type_pattern)
+}
+
+/// Whether `type_pattern`, the enum a member pattern is written through,
+/// names the enum marked `@optional`.
+fn names_optional_enum(optional: &OptionalEnum, type_pattern: &Pattern) -> bool {
+    matches!(type_pattern, Pattern::Identifier(name) if *name == optional.name)
 }
 
 /// The identity of the enum a variant pattern matched against a value of

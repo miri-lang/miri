@@ -74,6 +74,7 @@ pub mod literal_hooks;
 pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
+pub mod optional_enum;
 pub use iteration_plan::{IterationPlan, PositionalAccess, ProtocolWalk};
 pub(crate) use operators::{named_class, ValueOrdering, ValueStepping};
 pub mod open_consumption;

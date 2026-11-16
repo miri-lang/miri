@@ -45,8 +45,12 @@ impl TypeChecker {
         let contents = walk::contents(&program.body);
         // Two of the checks ask the same question of the same statements —
         // which names does this file read anywhere — so they are answered once.
-        let file_references = names::References::of_statements(&program.body);
-        let import_references = self.references_reached_through_signatures(&file_references);
+        let mut file_references = names::References::of_statements(&program.body);
+        let mut import_references = self.references_reached_through_signatures(&file_references);
+        if let Some(optional) = self.optional_enum() {
+            file_references.name_the_optional(&optional.name);
+            import_references.name_the_optional(&optional.name);
+        }
         self.report_unused_locals(&contents);
         self.report_unused_parameters(&contents);
         self.report_unused_imports(program, &import_references);

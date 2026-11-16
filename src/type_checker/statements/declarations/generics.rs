@@ -60,16 +60,42 @@ impl TypeChecker {
     /// A value parameter is built the same way. It stands for a value, and
     /// substitution replaces it with the marker wrapping that value, which
     /// resolution returns unchanged rather than looking up as a name.
+    ///
+    /// The enum `T?` spells names itself `T?`, so its methods hold their
+    /// receiver as every caller does.
     pub(crate) fn type_at_own_parameters(
         &self,
         name: &str,
         generics: Option<&[Expression]>,
         context: &Context,
     ) -> Type {
-        let type_args: Vec<TypeArgument> = generics
+        let is_optional = self
+            .optional_enum()
+            .is_some_and(|optional| optional.name == name);
+        self.own_type(name, generics, is_optional, context)
+    }
+
+    /// [`Self::type_at_own_parameters`] for an enum `is_optional` says is the
+    /// one `T?` spells: `T?` at its one parameter.
+    pub(crate) fn own_type(
+        &self,
+        name: &str,
+        generics: Option<&[Expression]>,
+        is_optional: bool,
+        context: &Context,
+    ) -> Type {
+        let mut parameters: Vec<Type> = generics
             .unwrap_or_default()
             .iter()
             .filter_map(|generic| self.generic_parameter_type(generic, context))
+            .collect();
+        if is_optional && parameters.len() == 1 {
+            if let Some(payload) = parameters.pop() {
+                return crate::type_checker::optional_enum::OptionalEnum::type_at(payload);
+            }
+        }
+        let type_args: Vec<TypeArgument> = parameters
+            .into_iter()
             .map(|param| self.create_type_argument(param))
             .collect();
         let type_args = (!type_args.is_empty()).then_some(type_args);

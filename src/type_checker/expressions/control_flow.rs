@@ -43,7 +43,7 @@
 //! - Generic type instantiation
 
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind, OPTION_TYPE_NAME};
+use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::repair::{RepairRequest, VariantPatternSite};
 use crate::diagnostics::DiagnosticCode;
@@ -351,7 +351,10 @@ impl TypeChecker {
             })
             .unwrap_or_default();
         let lookup = |name: &str| self.listed_enum_variants(name, context);
-        let coverage = Coverage { variants: &lookup };
+        let coverage = Coverage {
+            variants: &lookup,
+            optional: self.optional_enum(),
+        };
         remaining_variants.retain(|variant| {
             // A pattern names the enum as its module writes it.
             let constructor = Constructor::Variant {
@@ -395,21 +398,22 @@ impl TypeChecker {
         let (has_some, has_none, is_exhaustive) = self.extract_option_coverage(branches, context);
 
         if !(is_exhaustive || has_some && has_none) {
+            let Some(optional) = self.optional_enum() else {
+                return;
+            };
             let mut missing = Vec::new();
             if !has_some {
-                missing.push("Some");
+                missing.push(optional.present_variant.as_str());
             }
             if !has_none {
-                missing.push("None");
+                missing.push(optional.absent_variant.as_str());
             }
-            self.report_error(
-                DiagnosticCode::TypEnumVariant,
-                format!(
-                    "Non-exhaustive match on Option. Missing variants: {}",
-                    missing.join(", ")
-                ),
-                span,
+            let message = format!(
+                "Non-exhaustive match on {}. Missing variants: {}",
+                optional.name,
+                missing.join(", ")
             );
+            self.report_error(DiagnosticCode::TypEnumVariant, message, span);
         }
     }
 
@@ -422,7 +426,10 @@ impl TypeChecker {
     ) -> (bool, bool, bool) {
         let rows = coverage_rows(branches);
         let lookup = |name: &str| self.listed_enum_variants(name, context);
-        let coverage = Coverage { variants: &lookup };
+        let coverage = Coverage {
+            variants: &lookup,
+            optional: self.optional_enum(),
+        };
         (
             coverage.covers(&rows, &Constructor::Some, 1),
             coverage.covers(&rows, &Constructor::None, 0),
@@ -477,7 +484,10 @@ impl TypeChecker {
     ) -> Option<(String, String)> {
         let rows = coverage_rows(branches);
         let lookup = |name: &str| self.listed_enum_variants(name, context);
-        let coverage = Coverage { variants: &lookup };
+        let coverage = Coverage {
+            variants: &lookup,
+            optional: self.optional_enum(),
+        };
         if coverage.is_exhaustive(&rows) {
             return None;
         }
@@ -821,10 +831,10 @@ impl TypeChecker {
         context: &mut Context,
     ) {
         if let Pattern::Identifier(parent_name) = parent {
-            if parent_name == OPTION_TYPE_NAME
-                && member == "None"
-                && matches!(subject_type.kind, TypeKind::Option(_))
-            {
+            let is_absent_variant = self.optional_enum().is_some_and(|optional| {
+                *parent_name == optional.name && member == optional.absent_variant
+            });
+            if is_absent_variant && matches!(subject_type.kind, TypeKind::Option(_)) {
                 return;
             }
 
@@ -956,16 +966,20 @@ impl TypeChecker {
 
     /// Checks if a pattern is an `Option.Some` variant.
     fn is_option_some_pattern(&self, parent_pattern: &Pattern) -> bool {
+        let Some(optional) = self.optional_enum() else {
+            return false;
+        };
         match parent_pattern {
-            Pattern::Identifier(name) => name == "Some",
+            Pattern::Identifier(name) => *name == optional.present_variant,
             Pattern::Member(enum_pat, variant) => {
-                if let Pattern::Identifier(name) = &**enum_pat {
-                    name == OPTION_TYPE_NAME && variant == "Some"
-                } else {
-                    false
-                }
+                matches!(&**enum_pat, Pattern::Identifier(name) if *name == optional.name)
+                    && *variant == optional.present_variant
             }
-            _ => false,
+            Pattern::Literal(_)
+            | Pattern::EnumVariant(..)
+            | Pattern::Tuple(_)
+            | Pattern::Regex(_)
+            | Pattern::Default => false,
         }
     }
 
@@ -1197,12 +1211,9 @@ fn unresolved_variant_patterns(
     subject_type: &Type,
     branches: &[MatchBranch],
 ) -> Vec<UnresolvedVariantPattern> {
-    // `Option` reaches here spelled either way — as the sugar `T?` or as the
-    // named type — and its constructors are written bare in both.
-    let Some(enum_name) = subject_enum_name(subject_type) else {
-        return Vec::new();
-    };
-    if enum_name == OPTION_TYPE_NAME {
+    // An optional subject is `T?` however it was written, and names no enum
+    // here, so its bare constructors are never reported.
+    if subject_enum_name(subject_type).is_none() {
         return Vec::new();
     }
     let mut unresolved = Vec::new();

@@ -7,6 +7,10 @@ use crate::error::syntax::Span;
 /// module must carry an `else` arm.
 pub const NON_EXHAUSTIVE_ATTRIBUTE: &str = "non_exhaustive";
 
+/// Marks the enum `T?` spells: the one enum, of one type parameter, with a
+/// variant without a payload and a variant carrying that parameter.
+pub const OPTIONAL_ATTRIBUTE: &str = "optional";
+
 /// Marks a type whose values may not be silently discarded.
 pub const MUST_USE_ATTRIBUTE: &str = "must_use";
 

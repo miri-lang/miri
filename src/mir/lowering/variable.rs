@@ -17,7 +17,7 @@ use crate::mir::{
 };
 
 use super::helpers::{coerce_rvalue_in, release_coerced_source};
-use super::{lower_expression, resolve_argument_type, LoweringContext};
+use super::{lower_expression, LoweringContext};
 use crate::error::lowering::LoweringError;
 
 /// Fence outstanding device writes and copy the gpu binding `initializer` names
@@ -161,10 +161,6 @@ pub(crate) fn canonical_declared_type(tc: &crate::type_checker::TypeChecker, ty:
     let TypeKind::Custom(name, Some(args)) = &resolved.kind else {
         return resolved;
     };
-    if name == crate::ast::types::OPTION_TYPE_NAME && args.len() == 1 {
-        let payload = canonical_declared_type(tc, &resolve_argument_type(tc, &args[0]));
-        return Type::new(TypeKind::Option(Box::new(payload)), resolved.span);
-    }
     let canonical_args = args
         .iter()
         .map(|arg| canonical_type_argument(tc, arg))

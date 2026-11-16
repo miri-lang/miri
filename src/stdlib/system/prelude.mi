@@ -19,6 +19,10 @@
 /// with their names kept private, so a literal resolves while naming the type
 /// still requires an explicit `use system.collections.*`.
 ///
+/// `system.option` declares `Option`, the enum `T?` spells. It comes first
+/// and imports nothing, so every module after it, and every program, reads
+/// `T?` as that one declaration.
+use system.option
 /// `system.range` declares the `Range` range syntax (`a..b`, `a..=b`)
 /// builds, so the name is reserved for it.
 use system.range

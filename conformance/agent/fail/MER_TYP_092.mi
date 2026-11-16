@@ -1,0 +1,14 @@
+// expect: MER_TYP_092
+// summary: Triggers MER_TYP_092: a program marks its own enum `@optional`, which the standard library's Option already is.
+use system.io
+
+@optional
+enum Maybe<T>
+    Nothing
+    Just(T)
+
+fn main()
+    let m = Maybe.Just(4)
+    match m
+        Maybe.Just(n): println(f"{n}")
+        Maybe.Nothing: println("nothing")

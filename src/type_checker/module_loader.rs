@@ -120,9 +120,14 @@ pub struct ModuleLoader {
     /// syntax again after checking. An expression naming any other type names
     /// it by its identity already.
     pub qualified_type_names: HashMap<usize, String>,
-    /// Whether a qualified identity or a folded value argument was recorded
-    /// since the resolution of the written type enclosing the current one
-    /// began: the written type then needs a spelling of its own.
+    /// The ids of the written types that name the optional generically, as
+    /// `Option<T>`: each is spelled `T?` for the stages after checking, which
+    /// read the optional under that one spelling.
+    pub generic_optional_spellings: HashSet<usize>,
+    /// Whether a qualified identity, a folded value argument or a generic
+    /// optional was recorded since the resolution of the written type
+    /// enclosing the current one began: the written type then needs a
+    /// spelling of its own.
     pub spelling_recorded: bool,
     /// The value each value argument written in a type resolved to, folded or
     /// with its constants replaced, keyed by the argument's id, when that
@@ -130,8 +135,9 @@ pub struct ModuleLoader {
     pub folded_value_arguments: HashMap<usize, crate::ast::type_arguments::TypeArgument>,
     /// The spelling of each written type the stages after checking cannot
     /// read as written: one naming a type a module keeps private, with those
-    /// names spelled as identities, or one with a value argument that folds,
-    /// spelled with its folded value. Keyed by the type expression's id.
+    /// names spelled as identities, one with a value argument that folds,
+    /// spelled with its folded value, or one naming the optional as
+    /// `Option<T>`, spelled `T?`. Keyed by the type expression's id.
     pub written_type_spellings: HashMap<usize, crate::ast::types::Type>,
     /// For each module, the program under [`PROGRAM_MODULE`] included, the
     /// identity of every type its declarations registered.
@@ -180,6 +186,7 @@ impl ModuleLoader {
             program_declarations: HashSet::new(),
             private_type_identities: HashMap::new(),
             qualified_type_names: HashMap::new(),
+            generic_optional_spellings: HashSet::new(),
             spelling_recorded: false,
             folded_value_arguments: HashMap::new(),
             written_type_spellings: HashMap::new(),

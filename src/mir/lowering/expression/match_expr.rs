@@ -358,11 +358,12 @@ fn compute_pattern_discriminants(
                 }
                 return arm_discrs;
             }
-            Pattern::Member(parent, member)
-                if matches!(
-                    &**parent,
-                    Pattern::Identifier(n) if n == crate::ast::types::OPTION_TYPE_NAME
-                ) && member == "None" =>
+            Pattern::Member(..)
+                if crate::mir::lowering::helpers::is_option_none_pattern(
+                    ctx.type_checker,
+                    subject_ty,
+                    pattern,
+                ) =>
             {
                 arm_discrs.push(0);
                 if seen_discrs.insert(0) {
@@ -371,16 +372,11 @@ fn compute_pattern_discriminants(
                 return arm_discrs;
             }
             Pattern::EnumVariant(parent, _) => {
-                let is_some = match &**parent {
-                    Pattern::Identifier(name) => name == "Some",
-                    Pattern::Member(enum_pat, variant) => {
-                        matches!(
-                            &**enum_pat,
-                            Pattern::Identifier(n) if n == crate::ast::types::OPTION_TYPE_NAME
-                        ) && variant == "Some"
-                    }
-                    _ => false,
-                };
+                let is_some = crate::mir::lowering::helpers::is_option_some_pattern(
+                    ctx.type_checker,
+                    subject_ty,
+                    parent,
+                );
                 if is_some {
                     if otherwise_bb.is_none() {
                         *otherwise_bb = Some(branch_bb);
@@ -401,8 +397,13 @@ fn compute_pattern_discriminants(
                 }
             }
         }
+        // An earlier arm that already claims `otherwise` (a `Some` arm, a
+        // tuple, a binding) keeps every value it matches; a value it refuses
+        // falls through to the next arm, so this one must not take them all.
         Pattern::Default => {
-            *otherwise_bb = Some(branch_bb);
+            if otherwise_bb.is_none() {
+                *otherwise_bb = Some(branch_bb);
+            }
         }
         Pattern::Identifier(_) => {
             if otherwise_bb.is_none() {

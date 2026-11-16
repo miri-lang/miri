@@ -17,7 +17,7 @@
 
 use crate::ast::literal::Literal;
 use crate::ast::pattern::Pattern;
-use crate::ast::types::OPTION_TYPE_NAME;
+use crate::type_checker::optional_enum::OptionalEnum;
 
 /// One way a match can be entered: a pattern per column, `None` where any
 /// value matches.
@@ -46,6 +46,9 @@ pub(crate) type VariantLookup<'a> = dyn Fn(&str) -> Option<Vec<(String, usize)>>
 /// Answers coverage questions, looking enum variant sets up through `variants`.
 pub(crate) struct Coverage<'a> {
     pub variants: &'a VariantLookup<'a>,
+    /// The enum marked `@optional`, whose two variants are the constructors
+    /// `Some` and `None` however a pattern spells them.
+    pub optional: Option<&'a OptionalEnum>,
 }
 
 impl Coverage<'_> {
@@ -57,7 +60,7 @@ impl Coverage<'_> {
         constructor: &Constructor,
         arity: usize,
     ) -> bool {
-        self.is_exhaustive(&specialize(rows, constructor, arity))
+        self.is_exhaustive(&specialize(rows, constructor, arity, self.optional))
     }
 
     /// Whether every combination of values for the columns is matched by
@@ -71,7 +74,12 @@ impl Coverage<'_> {
         }
         let heads: Vec<Constructor> = rows
             .iter()
-            .filter_map(|row| row.first().copied().flatten().map(|p| constructor_of(p).0))
+            .filter_map(|row| {
+                row.first()
+                    .copied()
+                    .flatten()
+                    .map(|p| constructor_of(p, self.optional).0)
+            })
             .collect();
         match self.complete_signature(&heads) {
             Some(signature) => signature
@@ -132,6 +140,7 @@ fn specialize<'p>(
     rows: &[CoverageRow<'p>],
     constructor: &Constructor,
     arity: usize,
+    optional: Option<&OptionalEnum>,
 ) -> Vec<CoverageRow<'p>> {
     rows.iter()
         .filter_map(|row| {
@@ -139,7 +148,7 @@ fn specialize<'p>(
             let payloads: CoverageRow<'p> = match head {
                 None => vec![None; arity],
                 Some(pattern) => {
-                    let (head_constructor, payloads) = constructor_of(pattern);
+                    let (head_constructor, payloads) = constructor_of(pattern, optional);
                     if head_constructor != *constructor {
                         return None;
                     }
@@ -163,15 +172,26 @@ fn default_rows<'p>(rows: &[CoverageRow<'p>]) -> Vec<CoverageRow<'p>> {
 
 /// The constructor a non-wildcard `pattern` names, and the patterns written
 /// for its payloads.
-fn constructor_of(pattern: &Pattern) -> (Constructor, &[Pattern]) {
+fn constructor_of<'p>(
+    pattern: &'p Pattern,
+    optional: Option<&OptionalEnum>,
+) -> (Constructor, &'p [Pattern]) {
     match pattern {
         Pattern::Literal(Literal::None) => (Constructor::None, &[]),
         Pattern::Literal(Literal::Boolean(value)) => (Constructor::Bool(*value), &[]),
-        Pattern::Member(type_pattern, variant) => (named_constructor(type_pattern, variant), &[]),
+        Pattern::Member(type_pattern, variant) => {
+            (named_constructor(type_pattern, variant, optional), &[])
+        }
         Pattern::EnumVariant(parent, payloads) => {
             let constructor = match parent.as_ref() {
-                Pattern::Identifier(name) if name == "Some" => Constructor::Some,
-                Pattern::Member(type_pattern, variant) => named_constructor(type_pattern, variant),
+                Pattern::Identifier(name)
+                    if optional.is_some_and(|optional| *name == optional.present_variant) =>
+                {
+                    Constructor::Some
+                }
+                Pattern::Member(type_pattern, variant) => {
+                    named_constructor(type_pattern, variant, optional)
+                }
                 Pattern::Identifier(_)
                 | Pattern::Literal(_)
                 | Pattern::EnumVariant(..)
@@ -188,15 +208,20 @@ fn constructor_of(pattern: &Pattern) -> (Constructor, &[Pattern]) {
     }
 }
 
-/// The constructor `Type.variant` names.
-fn named_constructor(type_pattern: &Pattern, variant: &str) -> Constructor {
+/// The constructor `Type.variant` names: `Some` or `None` when `Type` is the
+/// enum marked `@optional`, else that enum's variant.
+fn named_constructor(
+    type_pattern: &Pattern,
+    variant: &str,
+    optional: Option<&OptionalEnum>,
+) -> Constructor {
     let Pattern::Identifier(type_name) = type_pattern else {
         return Constructor::Unlisted;
     };
-    match (type_name.as_str(), variant) {
-        (OPTION_TYPE_NAME, "Some") => Constructor::Some,
-        (OPTION_TYPE_NAME, "None") => Constructor::None,
-        _ => Constructor::Variant {
+    match optional.filter(|optional| optional.name == *type_name) {
+        Some(optional) if variant == optional.present_variant => Constructor::Some,
+        Some(optional) if variant == optional.absent_variant => Constructor::None,
+        Some(_) | None => Constructor::Variant {
             enum_name: type_name.clone(),
             variant: variant.to_string(),
         },

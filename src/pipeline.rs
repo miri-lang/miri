@@ -1587,7 +1587,8 @@ impl Pipeline {
             .map(|(symbol, body)| (gpu_names.emitted_name(&symbol, &body), body))
             .collect();
         result.device_helpers = gpu_names.into_helpers();
-        Self::refuse_unresolved_self(&bodies)?;
+        let optional = result.type_checker.optional_enum().map(|o| o.name.as_str());
+        Self::refuse_unresolved_spellings(&bodies, optional)?;
 
         // Check RC invariants and optional and value layouts after RC insertion,
         // and that every call passes an owned argument exactly where its
@@ -1714,14 +1715,26 @@ impl Pipeline {
         Self::append_agreement_record(result, &lines)
     }
 
-    /// Refuse a lowered body that still spells `Self`, on every build: it has
-    /// no layout codegen can agree on, and reference counting would read it as
-    /// an uncounted parameter, so compiling it would fail with no diagnostic.
-    fn refuse_unresolved_self(bodies: &[(String, mir::Body)]) -> Result<(), CompilerError> {
+    /// Refuse a lowered body that still spells `Self`, or the optional by its
+    /// generic name, on every build. A `Self` has no layout codegen can agree
+    /// on, and reference counting would read it as an uncounted parameter; an
+    /// `Option<T>` would be laid out as a generic enum while every other holder
+    /// of the value reads it as `T?`. Compiling either would fail with no
+    /// diagnostic, or not fail at all.
+    ///
+    /// `optional` is the identity of the enum marked `@optional`, the one
+    /// specification the second rule shares with the type checker.
+    fn refuse_unresolved_spellings(
+        bodies: &[(String, mir::Body)],
+        optional: Option<&str>,
+    ) -> Result<(), CompilerError> {
         let found = bodies
             .iter()
             .flat_map(|(name, body)| {
-                let violations = mir::verify::verify_resolved_self(body);
+                let mut violations = mir::verify::verify_resolved_self(body);
+                if let Some(optional) = optional {
+                    violations.extend(mir::verify::verify_optional_spelling(body, optional));
+                }
                 violations.into_iter().map(move |v| (name.clone(), v))
             })
             .collect();

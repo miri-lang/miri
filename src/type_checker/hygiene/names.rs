@@ -24,8 +24,7 @@ use crate::ast::statement::{
 };
 use crate::ast::type_arguments::{TypeArgKind, TypeArgument, ValueArg};
 use crate::ast::types::{
-    BuiltinCollectionKind, Type, TypeKind, OPTION_TYPE_NAME, RESULT_TYPE_NAME, STRING_TYPE_NAME,
-    TUPLE_TYPE_NAME,
+    BuiltinCollectionKind, Type, TypeKind, RESULT_TYPE_NAME, STRING_TYPE_NAME, TUPLE_TYPE_NAME,
 };
 use std::collections::HashSet;
 
@@ -33,6 +32,10 @@ use std::collections::HashSet;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct References {
     names: HashSet<String>,
+    /// Whether a type is written `T?`, which names the enum marked
+    /// `@optional` without spelling it; [`Self::name_the_optional`] records
+    /// that enum's name once the caller knows it.
+    spells_optional: bool,
 }
 
 impl References {
@@ -93,6 +96,14 @@ impl References {
     /// or not the file spells any of them.
     pub(crate) fn add_declared_type(&mut self, declared: &Type) {
         self.typ(declared);
+    }
+
+    /// Records `optional`, the enum marked `@optional`, when a type was
+    /// written `T?`: the short spelling reads that enum as surely as its name.
+    pub(crate) fn name_the_optional(&mut self, optional: &str) {
+        if self.spells_optional {
+            self.record(optional);
+        }
     }
 
     fn record(&mut self, name: &str) {
@@ -319,7 +330,10 @@ impl References {
             // An import path reaches here only as the path of a `use`, which
             // the statement walker never descends into.
             ExpressionKind::ImportPath(_, _) => {}
-            ExpressionKind::Type(typ, _) => self.typ(typ),
+            ExpressionKind::Type(typ, is_nullable) => {
+                self.spells_optional |= *is_nullable;
+                self.typ(typ);
+            }
             ExpressionKind::GenericType(name, bounds, _) => {
                 self.expression(name);
                 self.expressions(bounds);
@@ -487,7 +501,7 @@ impl References {
                 self.arguments(arguments.as_deref().unwrap_or_default());
             }
             TypeKind::Option(inner) => {
-                self.record(OPTION_TYPE_NAME);
+                self.spells_optional = true;
                 self.typ(inner);
             }
             TypeKind::Meta(inner) | TypeKind::Linear(inner) => self.typ(inner),

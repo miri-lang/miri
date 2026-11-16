@@ -118,6 +118,34 @@ fn lower_custom_field_access(
     }
 }
 
+/// Whether `type_name` is the enum marked `@optional`.
+fn is_optional_enum(ctx: &LoweringContext, type_name: &str) -> bool {
+    (ctx.type_checker.optional_enum()).is_some_and(|optional| optional.name == type_name)
+}
+
+/// Lower the payload-free variant of the optional (`Option.None`) as the
+/// `None` it is: the optional's absent value in its own layout, at the type
+/// the checker gave the expression.
+fn lower_absent_optional(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let absent = Operand::Constant(Box::new(Constant {
+        span: expr.span,
+        ty: ctx.resolved_type(expr),
+        literal: crate::ast::literal::Literal::None,
+    }));
+    let Some(d) = dest else {
+        return Ok(absent);
+    };
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(absent)),
+        span: expr.span,
+    });
+    Ok(Operand::Copy(d))
+}
+
 /// Lower a unit enum variant access (e.g., Status.Ok).
 fn lower_enum_unit_variant(
     ctx: &mut LoweringContext,
@@ -507,6 +535,9 @@ pub(crate) fn lower_member_expr(
         let ExpressionKind::Identifier(variant_name, _) = &prop.node else {
             unreachable!("enum_unit_variant matched a variant by its identifier")
         };
+        if is_optional_enum(ctx, &type_name) {
+            return lower_absent_optional(ctx, expr, dest);
+        }
         return lower_enum_unit_variant(ctx, &type_name, variant_name, discriminant, expr, dest);
     }
 

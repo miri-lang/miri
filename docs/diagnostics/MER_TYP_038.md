@@ -16,7 +16,7 @@ A match must also give every value of its subject an arm, as a statement or as a
 - `Enum variant '{enum}.{variant}' expects {expected} arguments, got {actual}`
 - `Type mismatch in enum variant '{enum}.{variant}': expected {expected}, got {actual}`
 - `Non-exhaustive match on Enum '{enum}'. Missing variants: {missing}`
-- `Non-exhaustive match on Option. Missing variants: {missing}`
+- `Non-exhaustive match on {optional}. Missing variants: {missing}`
 - `Non-exhaustive match on {type}. Missing values: {missing}`
 - `Non-exhaustive match on {type}. Missing a catch-all arm`
 - `Invalid enum variant name`

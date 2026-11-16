@@ -34,6 +34,8 @@ pub(crate) struct TypeTable {
     /// `global_type_definitions` but NOT in this set are internal-only
     /// (e.g. transitive trait dependencies kept for vtable generation).
     pub(crate) visible_type_names: HashSet<String>,
+    /// The enum `T?` spells, once a module has declared it `@optional`.
+    pub(crate) optional: Option<super::optional_enum::OptionalEnum>,
 }
 
 impl TypeTable {
@@ -49,6 +51,7 @@ impl TypeTable {
             global_scope,
             global_type_definitions,
             visible_type_names,
+            optional: None,
         }
     }
 }

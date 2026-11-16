@@ -92,16 +92,6 @@ fn identifier_name(expr: &Expression) -> Option<&str> {
     Some(name.as_str())
 }
 
-/// True for an optional operand, in either of the two forms an optional takes:
-/// the dedicated kind, and the generic instantiation a declaration produces.
-fn is_optional_type(ty: &Type) -> bool {
-    matches!(ty.kind, TypeKind::Option(_))
-        || matches!(
-            &ty.kind,
-            TypeKind::Custom(name, _) if name == crate::ast::types::OPTION_TYPE_NAME
-        )
-}
-
 impl TypeChecker {
     /// Infers the type of a binary operation.
     ///
@@ -630,7 +620,10 @@ impl TypeChecker {
         op: &BinaryOp,
         right_ty: &Type,
     ) -> Option<BinaryOpRemedy> {
-        if is_arithmetic_op(op) && (is_optional_type(left_ty) || is_optional_type(right_ty)) {
+        if is_arithmetic_op(op)
+            && (matches!(left_ty.kind, TypeKind::Option(_))
+                || matches!(right_ty.kind, TypeKind::Option(_)))
+        {
             return Some(BinaryOpRemedy::UnwrapOptional);
         }
 

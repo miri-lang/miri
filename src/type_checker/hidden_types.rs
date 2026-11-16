@@ -16,14 +16,14 @@
 
 use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::TypeChecker;
-use crate::ast::types::{TypeDeclarationKind, LINEAR_TYPE_NAME, OPTION_TYPE_NAME};
+use crate::ast::types::{TypeDeclarationKind, LINEAR_TYPE_NAME};
 use crate::ast::{Expression, ExpressionKind};
 use crate::diagnostics::DiagnosticCode;
 
 /// How a reader calls a trait.
 const TRAIT: &str = "trait";
 
-/// How a reader calls a built-in type such as `Option`.
+/// How a reader calls a built-in type such as `Linear`.
 const BUILT_IN: &str = "type";
 
 impl TypeChecker {
@@ -145,7 +145,7 @@ fn generic_name(generic: &Expression) -> Option<&Expression> {
 /// alone, with no declaration any module imports: it is in scope in every
 /// module.
 fn is_builtin_type_spelling(name: &str) -> bool {
-    name == OPTION_TYPE_NAME || name == LINEAR_TYPE_NAME
+    name == LINEAR_TYPE_NAME
 }
 
 /// What a hidden type is, as a reader calls it; `None` for another type

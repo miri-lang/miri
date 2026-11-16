@@ -34,7 +34,6 @@
 
 use crate::ast::literal::Literal;
 use crate::ast::types::{Type, TypeKind};
-use crate::mir::instantiation::type_argument;
 use crate::mir::option_layout::{is_absent_placeholder, OptionalLayers};
 use crate::mir::place_type::{ArgumentSlot, CalleeParameters, PlaceTypes};
 use crate::mir::rvalue::{AggregateKind, BinOp, Rvalue};
@@ -522,20 +521,12 @@ fn wrapped(
     Rvalue::Aggregate(AggregateKind::Option(slot.clone()), vec![payload])
 }
 
-/// The payload type of the optional `ty`, written either way.
+/// The payload type of the optional `ty`.
 fn payload_type(ty: &Type) -> Option<Type> {
-    if let TypeKind::Option(inner) = &ty.kind {
-        return Some((**inner).clone());
-    }
-    let TypeKind::Custom(name, Some(args)) = &ty.kind else {
+    let TypeKind::Option(inner) = &ty.kind else {
         return None;
     };
-    let [payload] = args.as_slice() else {
-        return None;
-    };
-    (name == crate::ast::types::OPTION_TYPE_NAME)
-        .then(|| type_argument(payload))
-        .flatten()
+    Some((**inner).clone())
 }
 
 /// Hand the consumer at `seam` `replacement` in place of its operand.

@@ -827,8 +827,9 @@ fn enclosing_parameter_bounds(
 }
 
 /// Extract the class name from a type, handling builtins and custom types.
-pub(super) fn extract_class_name(obj_ty: &Type) -> Option<String> {
+pub(super) fn extract_class_name(tc: &TypeChecker, obj_ty: &Type) -> Option<String> {
     match &obj_ty.kind {
+        TypeKind::Option(_) => tc.optional_enum().map(|optional| optional.name.clone()),
         TypeKind::String => Some(STRING_TYPE_NAME.to_string()),
         TypeKind::Tuple(_) => Some(TUPLE_TYPE_NAME.to_string()),
         TypeKind::Custom(name, _) => Some(name.clone()),
@@ -943,7 +944,7 @@ fn resolve_method_receiver(
         _ => return None,
     };
     let obj_ty = bounding_trait(ctx, &obj_ty, &method_name).unwrap_or(obj_ty);
-    let class_name = extract_class_name(&obj_ty)?;
+    let class_name = extract_class_name(ctx.type_checker, &obj_ty)?;
     Some((obj_ty, class_name, method_name))
 }
 
@@ -975,7 +976,7 @@ fn emit_resolved_method_call(
         _ => resolve_generic_class_monomorph(ctx, m.obj_ty, m.method_name, m.method_info),
     };
     if mono.is_some() {
-        ctx.record_class_instantiations(&receiver_class_type(m.obj_ty));
+        ctx.record_class_instantiations(&receiver_class_type(ctx.type_checker, m.obj_ty));
     }
     let return_ty = call_result_type(ctx, &m, mono.as_ref());
     let arg_types = method_argument_types(ctx, &m)?;
@@ -1067,7 +1068,7 @@ fn emit_method_call(
 /// so the receiver's type names the one body every call reaches. The body
 /// binding its receiver and every call of it read this one answer.
 pub(crate) fn restores_receiver(tc: &TypeChecker, receiver_ty: &Type, method: &str) -> bool {
-    extract_class_name(receiver_ty).is_some_and(|owner| tc.restores_receiver(&owner, method))
+    extract_class_name(tc, receiver_ty).is_some_and(|owner| tc.restores_receiver(&owner, method))
 }
 
 /// The receiver's type, `receiver_ty`, when a call of the instance method
@@ -1807,11 +1808,11 @@ fn super_instantiation(ctx: &LoweringContext) -> Option<(String, Vec<Type>)> {
 /// parameters (`class Child extends Base<String>`), and every body the child
 /// inherits belongs to that instantiation of the parent.
 fn receiver_instantiation(ctx: &LoweringContext, obj_ty: &Type) -> Option<(String, Vec<Type>)> {
-    let obj_ty = receiver_class_type(obj_ty);
+    let obj_ty = receiver_class_type(ctx.type_checker, obj_ty);
+    let defs = &ctx.type_checker.type_definitions();
     let TypeKind::Custom(name, arg_exprs) = &obj_ty.kind else {
         return None;
     };
-    let defs = &ctx.type_checker.type_definitions();
     let definition = defs.get(name.as_str())?;
     if !matches!(
         definition,
@@ -1830,8 +1831,21 @@ fn receiver_instantiation(ctx: &LoweringContext, obj_ty: &Type) -> Option<(Strin
 ///
 /// A tuple keeps its per-element type, while the type checker gives a tuple
 /// whose elements share one type the methods of the tuple class at that type
-/// and its length. Every other receiver is its own class type.
-fn receiver_class_type(obj_ty: &Type) -> Cow<'_, Type> {
+/// and its length. An optional is the enum marked `@optional` at its payload.
+/// Every other receiver is its own class type.
+fn receiver_class_type<'t>(type_checker: &TypeChecker, obj_ty: &'t Type) -> Cow<'t, Type> {
+    if let TypeKind::Option(payload) = &obj_ty.kind {
+        let Some(optional) = type_checker.optional_enum() else {
+            return Cow::Borrowed(obj_ty);
+        };
+        let args = vec![crate::ast::type_arguments::type_argument(
+            (**payload).clone(),
+        )];
+        return Cow::Owned(Type::new(
+            TypeKind::Custom(optional.name.clone(), Some(args)),
+            obj_ty.span,
+        ));
+    }
     let TypeKind::Tuple(elements) = &obj_ty.kind else {
         return Cow::Borrowed(obj_ty);
     };

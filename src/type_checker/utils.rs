@@ -21,8 +21,8 @@ use crate::ast::types::{
     is_range_type_name, is_vector_component, scalar_width, vec_dim, vec_type_dim,
     BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME,
     DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME,
-    KERNEL_TYPE_NAME, LINEAR_TYPE_NAME, LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME,
-    SET_LOWERCASE_ALIAS, TUPLE_TYPE_NAME, VECTOR_COMPONENT_TYPE_NAMES, WARP_CONTEXT_TYPE_NAME,
+    KERNEL_TYPE_NAME, LINEAR_TYPE_NAME, LIST_LOWERCASE_ALIAS, SET_LOWERCASE_ALIAS, TUPLE_TYPE_NAME,
+    VECTOR_COMPONENT_TYPE_NAMES, WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -2241,7 +2241,10 @@ impl TypeChecker {
     ///
     /// The payload is resolved as the expression the optional is written in,
     /// so what its name resolved to is recorded against that expression, as it
-    /// is for the payload of any other written type.
+    /// is for the payload of any other written type. An optional read back
+    /// from the spelling recorded for `written` has its names recorded
+    /// already, and resolving its payload under the same id would read that
+    /// spelling, the optional itself, again.
     fn resolve_option_type(
         &mut self,
         inner: Type,
@@ -2249,7 +2252,9 @@ impl TypeChecker {
         context: &Context,
     ) -> Type {
         let mut inner_expr = self.create_type_expression(inner);
-        inner_expr.id = written.id;
+        if self.written_type_spelling(written).is_none() {
+            inner_expr.id = written.id;
+        }
         let resolved_inner = self.resolve_type_expression(&inner_expr, context);
         make_type(TypeKind::Option(Box::new(resolved_inner)))
     }
@@ -2332,6 +2337,9 @@ impl TypeChecker {
 
         // Handle built-in generic type aliases
         if let Some(resolved) = self.resolve_builtin_type_alias(name, &args, context) {
+            if matches!(resolved.kind, TypeKind::Option(_)) {
+                self.record_generic_optional(expr.id);
+            }
             return resolved;
         }
 
@@ -2526,8 +2534,13 @@ impl TypeChecker {
         }
 
         // Non-collection types using constants
+        if self
+            .optional_enum()
+            .is_some_and(|optional| optional.name == name)
+        {
+            return self.resolve_alias_option(args, context);
+        }
         match name {
-            n if n == OPTION_TYPE_NAME => self.resolve_alias_option(args, context),
             n if n == LINEAR_TYPE_NAME => self.resolve_alias_linear(args, context),
             _ => None,
         }

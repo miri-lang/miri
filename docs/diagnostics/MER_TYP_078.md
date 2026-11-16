@@ -5,10 +5,12 @@ A method is called on the value it is read from: `k.a()` runs `a` with `k` as it
 ## Messages
 
 - `` the method `{method}` is read as a value, but a method can only be called ``
+- `` the variant `{enum}.{variant}` is read as a value, but a variant carrying a payload can only be called ``
 
 ## Help
 
 - `` call it, or wrap the call in a lambda to hand it on as a value: `fn() int: obj.method()` ``
+- `` call it with its payload, `{enum}.{variant}(x)`, or wrap that call in a lambda to hand it on as a value ``
 
 ## Before
 

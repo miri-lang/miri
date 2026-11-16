@@ -184,6 +184,29 @@ fn main()
 }
 
 #[test]
+fn test_an_import_of_the_optional_read_only_as_t_question_is_not_reported() {
+    let code = r#"
+use system.option.{Option}
+
+fn main()
+    let found int? = Some(1)
+    println(f"{found ?? 0}")
+"#;
+    assert_no_warning(code, "MER_IMP_005");
+}
+
+#[test]
+fn test_an_import_of_the_optional_nothing_reads_is_reported() {
+    let code = r#"
+use system.option.{Option}
+
+fn main()
+    println("done")
+"#;
+    assert_compiler_warning(code, "MER_IMP_005");
+}
+
+#[test]
 fn test_an_import_used_only_in_a_type_annotation_is_not_reported() {
     let code = r#"
 use system.collections.list

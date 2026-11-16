@@ -718,20 +718,12 @@ fn function_parameters(ty: &Type) -> Option<Vec<Type>> {
         .collect()
 }
 
-/// The payload type of the optional `ty`, written either way.
+/// The payload type of the optional `ty`.
 fn optional_payload(ty: &Type) -> Option<Type> {
-    if let TypeKind::Option(payload) = &ty.kind {
-        return Some((**payload).clone());
-    }
-    let TypeKind::Custom(name, Some(args)) = &ty.kind else {
+    let TypeKind::Option(payload) = &ty.kind else {
         return None;
     };
-    let [payload] = args.as_slice() else {
-        return None;
-    };
-    (name == crate::ast::types::OPTION_TYPE_NAME)
-        .then(|| type_argument(payload))
-        .flatten()
+    Some((**payload).clone())
 }
 
 /// Element `slot` of the tuple `ty`.

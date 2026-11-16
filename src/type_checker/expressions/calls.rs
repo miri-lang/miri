@@ -2453,7 +2453,7 @@ impl TypeChecker {
     ///
     /// A type the callee's module keeps private is refused at `call_site`,
     /// where the caller receives it, not where the callee's module wrote it.
-    fn reading_declared_signature<T>(
+    pub(crate) fn reading_declared_signature<T>(
         &mut self,
         call_site: Span,
         read: impl FnOnce(&mut Self) -> T,

@@ -293,6 +293,28 @@ fn main()
 }
 
 #[test]
+fn test_a_function_read_as_a_value_before_its_declaration_spells_its_optionals_as_checked() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+fn main()
+    let t = takes
+    println(f"{t(None)} {t(Some(4))} {t(5)}")
+    let back = gives
+    println(f"{back(3) ?? -1}")
+
+fn takes(n Option<int>) int
+    return n ?? -1
+
+fn gives(n int) Option<int?>
+    return Some(Some(n))
+"#,
+        "-1 4 5\nSome(3)",
+    );
+}
+
+#[test]
 fn test_an_optional_read_out_of_a_holder_is_wrapped_once() {
     assert_heap_guard_output(
         r#"

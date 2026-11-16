@@ -185,11 +185,11 @@ let r = Shape.Rect(3, 4)
 fn test_enum_generic_variant_construction() {
     // Test that generic enum variant construction with explicit type args works
     let code = "
-enum Option<T>
-    Some(T)
-    None
+enum Maybe<T>
+    Just(T)
+    Nothing
 
-let n = Option.None
+let n = Maybe.Nothing
     ";
     type_checker_test(code);
 }

@@ -1,0 +1,14 @@
+// summary: Accepted counterpart of MER_TYP_092: the enum of the optional's shape is declared without the marker, beside `T?`.
+// expect-stdout: 4 5
+use system.io
+
+enum Maybe<T>
+    Nothing
+    Just(T)
+
+fn main()
+    let m = Maybe.Just(4)
+    let o int? = Some(5)
+    match m
+        Maybe.Just(n): println(f"{n} {o ?? 0}")
+        Maybe.Nothing: println("nothing")

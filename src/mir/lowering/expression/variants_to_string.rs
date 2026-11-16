@@ -29,11 +29,27 @@ struct VariantRenderContext {
     span: Span,
 }
 
+/// The names the enum marked `@optional` gives its absent and present
+/// variants, which an optional renders as. An optional with no declaration
+/// to name its variants has no rendering.
+fn optional_variant_names(
+    ctx: &LoweringContext,
+    span: crate::error::syntax::Span,
+) -> Result<(String, String), LoweringError> {
+    let optional = ctx.type_checker.optional_enum().ok_or_else(|| {
+        LoweringError::unsupported_type("an optional, with no enum marked `@optional`", span)
+    })?;
+    Ok((
+        optional.absent_variant.clone(),
+        optional.present_variant.clone(),
+    ))
+}
+
 /// Emit MIR to render an Option value as a string.
 ///
 /// Generates a SwitchInt on the option discriminant:
-/// - discriminant 0: "None"
-/// - otherwise: "Some(" + payload + ")"
+/// - discriminant 0: the absent variant's name, `None`
+/// - otherwise: the present variant's name, `Some`, then "(" + payload + ")"
 pub(super) fn emit_option_to_string(
     ctx: &mut LoweringContext,
     operand: Operand,
@@ -73,7 +89,7 @@ pub(super) fn emit_option_to_string(
             Rvalue::Use(Operand::Constant(Box::new(Constant {
                 span: *span,
                 ty: Type::new(TypeKind::String, *span),
-                literal: Literal::String("None".to_string()),
+                literal: Literal::String(optional_variant_names(ctx, *span)?.0),
             }))),
         ),
         span: *span,
@@ -216,8 +232,9 @@ fn emit_option_some_block(
         ctx.emit_temp_drop(payload_temp, render_ctx.watermark, render_ctx.span);
     }
 
-    // Build the result: "Some(" + payload + ")"
-    let some_prefix = emit_string_literal(ctx, "Some(", render_ctx.span)?;
+    // Build the result: the present variant's name, "(", payload, ")".
+    let prefix = format!("{}(", optional_variant_names(ctx, render_ctx.span)?.1);
+    let some_prefix = emit_string_literal(ctx, &prefix, render_ctx.span)?;
     let concat1_result = emit_string_concat(ctx, some_prefix, payload_string, &render_ctx.span)?;
     // Release the Some( literal and the payload string after concat
     ctx.emit_temp_drop(some_prefix, render_ctx.watermark, render_ctx.span);

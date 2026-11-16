@@ -66,7 +66,8 @@ impl TypeChecker {
         // written `Self`, `Holder<T>` or the bare `Holder` all mean the same
         // type and substitute to the receiver's instantiation at a call site.
         let generics = declaration.generics.as_deref();
-        let self_type = self.type_at_own_parameters(&name, generics, context);
+        let is_marked_optional = self.may_be_optional_enum(&name, declaration.attributes);
+        let self_type = self.own_type(&name, generics, is_marked_optional, context);
         context.enter_class(name.clone(), None, self_type);
 
         let variant_map = self.collect_enum_variants(declaration.variants, context);
@@ -85,11 +86,17 @@ impl TypeChecker {
             ),
         };
 
+        let is_local = context.scopes.len() != 2;
+        self.record_optional_enum(
+            (&name, &enum_def),
+            declaration.attributes,
+            (declaration.name.span, is_local),
+        );
         // An enum declared inside a function body is defined only in
         // its own scope, which closes below, so subsequent statements find no
         // such type.
         context.define_type(name.clone(), TypeDefinition::Enum(enum_def.clone()));
-        if context.scopes.len() == 2 {
+        if !is_local {
             // scopes.len() == 2: base_scope + enum_scope
             self.register_type_definition(name.clone(), TypeDefinition::Enum(enum_def));
         }

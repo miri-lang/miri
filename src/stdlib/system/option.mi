@@ -1,0 +1,48 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+/// A value that may be absent: either `Some(value)` or `None`.
+///
+/// `T?` is this type, written short: `int?` and `Option<int>` are one type.
+/// An operation with one obvious absence returns it (`map.get`, `first`,
+/// `index_of`), and the caller decides what absence means, with `match`,
+/// `if let` or a default through `??`.
+///
+/// The compiler lays an optional out by its payload rather than as an enum:
+/// an optional of a counted value is that value's own pointer, null when
+/// absent, so wrapping a value in `Some` allocates nothing.
+///
+/// Example:
+///     fn find(names [String], wanted String) int?
+///         for i in 0..names.length()
+///             if names[i] == wanted
+///                 return Some(i)
+///         return None
+///
+///     match find(List(["a", "b"]), "b")
+///         Some(i): println(f"found at {i}")
+///         None: println("missing")
+@optional
+enum Option<T>
+    None
+    Some(T)
+
+    /// Whether a value is present.
+    ///
+    /// Example:
+    ///     let found int? = Some(3)
+    ///     assert(found.is_some())
+    public fn is_some() bool
+        match self
+            Some(_): true
+            None: false
+
+    /// Whether the value is absent.
+    ///
+    /// Example:
+    ///     let missing String? = None
+    ///     assert(missing.is_none())
+    public fn is_none() bool
+        match self
+            Some(_): false
+            None: true

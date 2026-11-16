@@ -53,7 +53,13 @@ pub(crate) fn try_lower_function_reference(
     let Some(info) = ctx.type_checker.global_scope().get(name) else {
         return Ok(None);
     };
-    let TypeKind::Function(func_data) = &info.ty.kind else {
+    // The type checked at the reference spells each type the declaration
+    // writes as checking resolved it; the declaration's own type keeps them
+    // as written.
+    let fn_ty = (ctx.type_checker.get_type(expr.id))
+        .filter(|ty| matches!(ty.kind, TypeKind::Function(_)))
+        .unwrap_or(&info.ty);
+    let TypeKind::Function(func_data) = &fn_ty.kind else {
         return Ok(None);
     };
     // The type checker refuses a generic function used as a value; one that
@@ -71,7 +77,7 @@ pub(crate) fn try_lower_function_reference(
         ));
     }
     let func_data = func_data.clone();
-    let fn_ty = info.ty.clone();
+    let fn_ty = fn_ty.clone();
     let declared = super::identifier_expr::declared_name(info, name);
     let target = super::identifier_expr::global_function_symbol(ctx, expr, declared)?;
     lower_function_reference(ctx, expr, expr, &target, &fn_ty, &func_data, dest).map(Some)

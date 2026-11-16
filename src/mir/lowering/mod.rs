@@ -686,6 +686,9 @@ fn stamp_residency_param_handles(
 /// enum/class methods; reading them from the type definition closes that gap so
 /// RC insertion does not treat unresolved placeholders as concrete heap-managed types.
 fn class_level_generic_names(self_type: &Type, tc: &TypeChecker) -> Vec<String> {
+    if let (TypeKind::Option(_), Some(optional)) = (&self_type.kind, tc.optional_enum()) {
+        return vec![optional.parameter.clone()];
+    }
     let TypeKind::Custom(class_name, _) = &self_type.kind else {
         return Vec::new();
     };
@@ -774,7 +777,8 @@ pub fn lower_class_method_at_with_compilation_ids(
 /// its concrete width. A generic absent from `subs` (an unsubstituted
 /// value-generic size) is emitted as a bare identifier placeholder that codegen
 /// leaves untouched. Falls back to the bare class type when the class is
-/// non-generic.
+/// non-generic. The enum `T?` spells is `T?` at its argument: its methods
+/// hold their receiver as every caller does.
 pub fn monomorphized_self_type(
     class_name: &str,
     tc: &TypeChecker,
@@ -791,6 +795,15 @@ pub fn monomorphized_self_type(
     let Some(generics) = generics.filter(|g| !g.is_empty()) else {
         return Type::new(TypeKind::Custom(class_name.to_string(), None), span);
     };
+    if let (Some(optional), [payload]) = (tc.optional_enum(), generics) {
+        if optional.name == class_name {
+            let payload = subs
+                .get(&payload.name)
+                .cloned()
+                .unwrap_or_else(|| Type::new(TypeKind::Custom(payload.name.clone(), None), span));
+            return crate::type_checker::optional_enum::OptionalEnum::type_at(payload);
+        }
+    }
     if class_name == TUPLE_TYPE_NAME {
         if let Some(tuple) = held_tuple_type(generics, subs, span) {
             return tuple;

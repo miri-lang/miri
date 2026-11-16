@@ -30,7 +30,7 @@ use crate::ast::type_arguments::TypeArgKind;
 use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{
     vec_type_dim, BuiltinCollectionKind, Type, TypeKind, ATOMIC_TYPE_NAME, AUTO_COPY_MAX_SIZE,
-    EQUALS_METHOD_NAME, OPTION_TYPE_NAME,
+    EQUALS_METHOD_NAME,
 };
 use crate::type_checker::context::{
     EnumDefinition, GenericDefinition, StructDefinition, TypeDefinition,
@@ -454,9 +454,6 @@ impl<'a> Classifier<'a> {
                 return self.classify_parameter(Some(parameter));
             }
         }
-        if let Some(payload) = option_payload(name, args.as_deref(), names) {
-            return self.classify_option(payload);
-        }
         if let Some(dim) = vec_type_dim(kind) {
             return self.classify_vector(dim, args.as_deref(), names);
         }
@@ -730,23 +727,6 @@ fn atomic_component<'n, 'a>(
         return None;
     }
     Argument::written(args?.first()?, names)
-}
-
-/// The payload `T` of an optional written as the generic type `Option<T>`,
-/// which is the optional `T?` under another spelling: classified alike, so
-/// no consumer of the authority meets two layouts for one type.
-fn option_payload<'n, 'a>(
-    name: &str,
-    args: Option<&'a [TypeArgument]>,
-    names: Names<'n, 'a>,
-) -> Option<Argument<'n, 'a>> {
-    if name != OPTION_TYPE_NAME {
-        return None;
-    }
-    let [payload] = args? else {
-        return None;
-    };
-    Argument::written(payload, names)
 }
 
 /// The scalar `kind` is, or `None` for every kind that is not one.

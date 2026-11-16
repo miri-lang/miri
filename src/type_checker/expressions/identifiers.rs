@@ -75,13 +75,13 @@ impl TypeChecker {
                 || self.resolve_value_name(name, context).is_none()
         });
         if let Some(ty) = builtin {
-            // A built-in that is a function is a variant constructor: `Some`,
-            // `Ok`, `Err`.
-            if matches!(ty.kind, TypeKind::Function(_)) {
-                self.fn_analysis
-                    .callee_kinds
-                    .insert(expr_id, crate::type_checker::CalleeKind::VariantConstructor);
+            if self.is_uncalled_present_variant(name, &ty, expr_id) {
+                if let Some(optional) = self.optional_enum().map(|o| o.name.clone()) {
+                    self.report_variant_used_as_value(&optional, name, span);
+                }
+                return ast_factory::make_type(TypeKind::Error);
             }
+            self.record_builtin_constructor(name, &ty, expr_id);
             return ty;
         }
 
@@ -161,16 +161,20 @@ impl TypeChecker {
 
     /// Whether `name` is one of the builtin variant constructors (`Some`, `Ok`,
     /// `Err`), each a call whose result holds its argument.
+    // TODO: `Some` is matched by name here, not through the enum marked
+    // `@optional`. The escape analysis and the use-after-move check ask this
+    // with only the type definitions in hand, and none of them records the
+    // marker; deciding it through the declaration needs the marked enum's
+    // present variant handed to those analyses.
     pub(crate) fn is_builtin_variant_constructor(name: &str) -> bool {
         matches!(name, "Some" | "Ok" | "Err")
     }
 
     fn try_builtin_identifier(&self, name: &str) -> Option<Type> {
+        if let Some(optional) = self.optional_variant_identifier(name) {
+            return Some(optional);
+        }
         match name {
-            "None" => Some(ast_factory::make_type(TypeKind::Option(Box::new(
-                ast_factory::make_type(TypeKind::Void),
-            )))),
-            "Some" => Some(self.make_some_type()),
             "Ok" => Some(self.make_ok_type()),
             "Err" => Some(self.make_err_type()),
             // Vector-only builtins are placeholders; dispatch happens in infer_call_dispatch.
@@ -185,6 +189,48 @@ impl TypeChecker {
             )),
             _ => None,
         }
+    }
+
+    /// Record the built-in `name`, typed `ty` at `expr_id`, as a variant
+    /// constructor when it is a function (`Some`, `Ok`, `Err`), and the
+    /// optional's present variant as the variant it builds.
+    fn record_builtin_constructor(&mut self, name: &str, ty: &Type, expr_id: usize) {
+        if !matches!(ty.kind, TypeKind::Function(_)) {
+            return;
+        }
+        self.fn_analysis
+            .callee_kinds
+            .insert(expr_id, crate::type_checker::CalleeKind::VariantConstructor);
+        let Some(optional) = self.optional_enum() else {
+            return;
+        };
+        if optional.present_variant == name {
+            let resolved = (optional.name.clone(), name.to_string());
+            self.fn_analysis.variant_callees.insert(expr_id, resolved);
+        }
+    }
+
+    /// Whether `name`, typed `ty` at `expr_id`, is the optional's present
+    /// variant written bare and read without being called.
+    fn is_uncalled_present_variant(&self, name: &str, ty: &Type, expr_id: usize) -> bool {
+        matches!(ty.kind, TypeKind::Function(_))
+            && self.callee_expr_id != Some(expr_id)
+            && self
+                .optional_enum()
+                .is_some_and(|optional| optional.present_variant == name)
+    }
+
+    /// The type of a variant of the enum marked `@optional` written bare: the
+    /// absent one is the placeholder `T?` whose payload the place it flows
+    /// into supplies, the present one a constructor from its payload to `T?`.
+    fn optional_variant_identifier(&self, name: &str) -> Option<Type> {
+        let optional = self.optional_enum()?;
+        if name == optional.absent_variant {
+            return Some(ast_factory::make_type(TypeKind::Option(Box::new(
+                ast_factory::make_type(TypeKind::Void),
+            ))));
+        }
+        (name == optional.present_variant).then(|| self.make_some_type())
     }
 
     fn make_some_type(&self) -> Type {
@@ -320,10 +366,39 @@ impl TypeChecker {
                 }
             }
 
-            return Some(info.ty);
+            if self.callee_expr_id == Some(expr_id) {
+                return Some(info.ty);
+            }
+            return Some(self.spelled_function_value(info.ty, span, context));
         }
 
         None
+    }
+
+    /// `ty`, the type of a binding read as a value, as the stages after
+    /// checking read it. A declared function's type keeps the parameter and
+    /// return types its declaration writes, and a function value carries
+    /// that type to every later stage, which reads those written types with
+    /// no module to resolve their names in. Each is resolved here, as a call
+    /// resolves its callee's, and spelled as its resolution recorded.
+    fn spelled_function_value(&mut self, ty: Type, span: Span, context: &Context) -> Type {
+        let TypeKind::Function(function) = &ty.kind else {
+            return ty;
+        };
+        // TODO: the written types resolve in the reading module's scope. A
+        // function imported from another module whose signature names a type
+        // that module keeps private, or one the reader shadows, is resolved
+        // against the wrong names; resolving in the declaring module's scope
+        // needs that scope kept beside the function's signature.
+        self.reading_declared_signature(span, |checker| {
+            for param in &function.params {
+                checker.resolve_type_expression(&param.typ, context);
+            }
+            if let Some(return_type) = &function.return_type {
+                checker.resolve_type_expression(return_type, context);
+            }
+        });
+        self.qualified_components(&ty)
     }
 
     /// The binding `name` names: a local or any other scoped binding first, as
