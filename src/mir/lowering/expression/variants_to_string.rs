@@ -81,7 +81,7 @@ pub(super) fn emit_option_to_string(
         *span,
     ));
 
-    // None block: assign "None" to result
+    // Absent block: assign the absent variant's name to the result
     ctx.set_current_block(none_block);
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(

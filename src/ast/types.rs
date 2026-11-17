@@ -149,14 +149,6 @@ pub const RESULT_TYPE_NAME: &str = "Result";
 /// on this constant.
 pub const TUPLE_TYPE_NAME: &str = "Tuple";
 
-/// Canonical class name for the built-in `Option<T>` sum type.
-///
-/// `TypeKind::Option(t)` is the canonical variant; the type checker also
-/// recognizes `TypeKind::Custom(OPTION_TYPE_NAME, [t])` produced from generic
-/// instantiations. Centralized so dispatch and pattern-match code share one
-/// spelling instead of scattering `"Option"` literals.
-pub const OPTION_TYPE_NAME: &str = "Option";
-
 /// Canonical class name for the built-in `String` type when referred to by
 /// class-method dispatch (e.g. `String_length`). The primitive form is
 /// [`TypeKind::String`]; this constant is used for symbol mangling and
@@ -233,7 +225,7 @@ pub const LINEAR_TYPE_NAME: &str = "Linear";
 ///
 /// `a..b` and `a..=b` build a `Range<T>`, the generic struct the reserved
 /// prelude declares (`system.range`). The compiler knows the struct by this
-/// name, the way it knows `Option` by `OPTION_TYPE_NAME`. The positions and
+/// name. The positions and
 /// types of its fields come from the declaration; their names are fixed by
 /// the constants below, which range syntax fills.
 pub const RANGE_TYPE_NAME: &str = "Range";
@@ -607,7 +599,11 @@ pub enum TypeKind {
     Custom(String, Option<Vec<TypeArgument>>),
     /// Metatype (type of a type).
     Meta(Box<Type>),
-    /// Option type wrapper (e.g., `T?` or `Option<T>`).
+    /// An optional: `T?`, which is the standard library's enum marked
+    /// `@optional`, written short. Every spelling of it (`T?`, `Option<T>`)
+    /// is this one variant once the type checker has resolved it; the
+    /// marked declaration supplies its members and variants, and its layout
+    /// is decided by the payload.
     Option(Box<Type>),
     /// Void type.
     Void,

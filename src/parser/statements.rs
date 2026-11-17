@@ -704,9 +704,7 @@ impl<'source> Parser<'source> {
             None
         };
 
-        // `Some(x)` is the MIR catch-all, so use `None` as its complement; any
-        // other pattern falls through to `_` (Default).
-        let else_pattern = option_pattern_complement(&pattern);
+        let else_pattern = Pattern::Default;
 
         let then_branch = MatchBranch {
             patterns: vec![pattern],
@@ -806,7 +804,7 @@ impl<'source> Parser<'source> {
         let value = self.expression()?;
         let body = self.statement_body()?;
 
-        let break_pattern = option_pattern_complement(&pattern);
+        let break_pattern = Pattern::Default;
 
         let match_branch = MatchBranch {
             patterns: vec![pattern],
@@ -1289,18 +1287,6 @@ impl<'source> Parser<'source> {
         let mut block = ast::block(body);
         block.trivia.opening_comment = opening_comment;
         Ok(block)
-    }
-}
-
-fn option_pattern_complement(pattern: &Pattern) -> Pattern {
-    if matches!(
-        pattern,
-        Pattern::EnumVariant(parent, _)
-            if matches!(parent.as_ref(), Pattern::Identifier(n) if n == "Some")
-    ) {
-        Pattern::Literal(crate::ast::literal::Literal::None)
-    } else {
-        Pattern::Default
     }
 }
 
