@@ -870,7 +870,7 @@ fn slot_target_names(
 /// open, and every release runs its instantiation's hook instead, so it is
 /// not named.
 #[test]
-fn synthesized_references_names_the_shared_hook_of_an_enum_without_parameters_only() {
+fn synthesized_references_names_the_shared_hook_of_every_enum_its_shared_drop_thunk_runs() {
     let result = crate::type_checker::utils::type_checker_result(
         "
 enum Plain
@@ -892,7 +892,7 @@ enum Guard<T>
         "{names:?}"
     );
     assert!(
-        !names.iter().any(|name| name.starts_with("miri.Guard.")),
+        names.iter().any(|name| name == "miri.Guard.drop"),
         "{names:?}"
     );
 }

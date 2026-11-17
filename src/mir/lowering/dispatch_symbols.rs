@@ -319,9 +319,10 @@ pub fn clone_method_symbol(type_name: &str, type_defs: &HashMap<String, TypeDefi
 }
 
 /// Every function symbol codegen names without a MIR call carrying it: the
-/// drop hook of every class and of every enum declaring no parameters (a
-/// generic enum's release runs the hook compiled for its instantiation, not
-/// the shared one), and, for every class, the body each runtime thunk calls
+/// drop hook of every class and every enum, which the type's shared drop
+/// thunk runs where its arguments are still open (an instantiation's own
+/// thunk runs the hook compiled for it), and, for every class, the body each
+/// runtime thunk calls
 /// to copy, order, match or hash its elements, which the type checker
 /// answers ([`thunk_body`]) for the thunks and the ownership verdict alike.
 /// A vtable slot is named only where a reached body constructs an instance
@@ -330,10 +331,8 @@ pub fn clone_method_symbol(type_name: &str, type_defs: &HashMap<String, TypeDefi
 pub fn synthesized_references(type_defs: &HashMap<String, TypeDefinition>) -> HashSet<Symbol> {
     let mut symbols = HashSet::new();
     for (type_name, definition) in type_defs {
-        if let TypeDefinition::Enum(enum_def) = definition {
-            if enum_def.generics.as_ref().is_none_or(Vec::is_empty) {
-                symbols.extend(drop_hook_symbol(type_name, type_defs));
-            }
+        if let TypeDefinition::Enum(_) = definition {
+            symbols.extend(drop_hook_symbol(type_name, type_defs));
         }
         let TypeDefinition::Class(_) = definition else {
             continue;
