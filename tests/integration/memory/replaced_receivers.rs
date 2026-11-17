@@ -170,9 +170,37 @@ fn main()
 }
 
 #[test]
+fn a_resource_method_returning_its_old_self_through_a_local_is_refused() {
+    assert_refused_at(
+        r#"
+enum Res
+    Open(int)
+    Shut
+
+    fn drop(self)
+        println("closed")
+
+    fn take() Res
+        let old = self
+        self = Res.Shut
+        return old
+
+fn main()
+    var r = Res.Open(1)
+    let old = r.take()
+    println("taken")
+"#,
+        "MER_OWN_008",
+        "        return old",
+    );
+}
+
+#[test]
 fn a_resource_method_taking_its_old_self_leaves_the_caller_owning_both() {
     assert_heap_guard_output(
         r#"
+use system.memory
+
 enum Res
     Open(int)
     Shut
@@ -183,9 +211,7 @@ enum Res
             Res.Shut: println("closed shut")
 
     fn take() Res
-        let old = self
-        self = Res.Shut
-        return old
+        return replace(self, Res.Shut)
 
 fn main()
     var r = Res.Open(1)
@@ -200,6 +226,8 @@ fn main()
 fn a_receiver_restored_by_its_method_is_not_consumed_by_the_call() {
     assert_runs_with_output(
         r#"
+use system.memory
+
 enum Res
     Open(int)
     Shut
@@ -208,9 +236,7 @@ enum Res
         println("closed")
 
     fn take() Res
-        let old = self
-        self = Res.Shut
-        return old
+        return replace(self, Res.Shut)
 
     fn is_open() bool
         match self

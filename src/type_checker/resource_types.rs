@@ -5,9 +5,12 @@
 //! run a drop hook.
 //!
 //! A class or an enum declaring the hook is one. A struct or a class holding
-//! a resource in a field is one, the field read at the type its owner's
-//! instantiation gives it: `Wrap<Handle>` holds a resource where `Wrap<int>`
-//! holds none, so a generic definition is decided per instantiation. A class
+//! a resource in a field is one, and an enum holding one in a variant's
+//! payload — the optional `T?` among them, one exactly when `T` is. A member
+//! is read at the type its owner's instantiation gives it: `Wrap<Handle>`
+//! holds a resource where `Wrap<int>` holds none, and `Slot<Handle>` where
+//! `Slot<int>` does not, so a generic definition is decided per
+//! instantiation. A class
 //! is also one when the base it extends is one at the arguments its `extends`
 //! clause binds.
 //!
@@ -154,7 +157,18 @@ impl ResourceTypes {
         if let TypeKind::Generic(_, bounds) = kind {
             return bounds.entail(|bound| self.holds(&bound.ty.kind));
         }
+        if let TypeKind::Option(payload) = kind {
+            return self.holds(&payload.kind);
+        }
         false
+    }
+
+    /// The positions of the type parameters of `name` at which an argument
+    /// that is a resource makes an instance one, when not every instance is.
+    pub fn positions_making_a_resource(&self, name: &str) -> impl Iterator<Item = usize> + '_ {
+        (self.conditions.get(name).into_iter())
+            .filter(|condition| !condition.always)
+            .flat_map(|condition| condition.through.iter().copied())
     }
 
     /// Whether an instance of the type `name` is a resource, its argument at
@@ -210,7 +224,14 @@ impl ResourceTypes {
                     });
                 fields.or(self.base_condition(def, scope))
             }
-            TypeDefinition::Enum(_) => Self::condition_if(has_drop_hook(name, definitions)),
+            TypeDefinition::Enum(_) if has_drop_hook(name, definitions) => Condition::always(),
+            TypeDefinition::Enum(def) => {
+                let scope = def.generics.as_deref().unwrap_or_default();
+                (def.variants.values().flatten())
+                    .fold(Condition::default(), |condition, payload| {
+                        condition.or(self.condition_in(&payload.kind, scope))
+                    })
+            }
             TypeDefinition::Trait(_) | TypeDefinition::Generic(_) | TypeDefinition::Alias(_) => {
                 Condition::default()
             }
@@ -290,6 +311,9 @@ impl ResourceTypes {
                 Condition::through(at)
             };
         }
+        if let TypeKind::Option(payload) = kind {
+            return self.condition_in(&payload.kind, scope);
+        }
         if let TypeKind::Custom(name, args) = kind {
             let Some(condition) = self.conditions.get(name) else {
                 return Condition::default();
@@ -328,11 +352,12 @@ impl ResourceTypes {
     }
 }
 
-/// The type a type argument names. A nullable argument names the optional it
-/// denotes, which runs no hook of its own, and a value argument names none.
+/// The type a type argument names, as far as being a resource goes. A
+/// nullable argument names the optional it denotes, which is one exactly when
+/// its payload is, so it answers as its payload; a value argument names none.
 fn argument_kind(arg: &TypeArgument) -> Option<&TypeKind> {
     match &arg.node {
-        TypeArgKind::Type(ty, false) => Some(&ty.kind),
-        TypeArgKind::Type(_, true) | TypeArgKind::Value(_) => None,
+        TypeArgKind::Type(ty, _) => Some(&ty.kind),
+        TypeArgKind::Value(_) => None,
     }
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::utils::{miri_build, miri_check, miri_run, miri_run_project};
+use crate::utils::{miri_build, miri_check, miri_check_json, miri_run, miri_run_project};
 
 /// Checks whether the output contains an error header in either format:
 /// - `error:` (plain, no error code)
@@ -137,6 +137,29 @@ pub fn assert_compiler_error(code: &str, expected_error: &str) {
             expected_error, output
         );
     }
+}
+
+/// Asserts `code` is refused with the diagnostic `expected_code` at the
+/// first line containing `marker`, and returns that diagnostic for the
+/// caller to read its message and help.
+pub fn assert_refused_at(
+    code: &str,
+    expected_code: &str,
+    marker: &str,
+) -> miri::diagnostics::json::JsonDiagnostic {
+    let line = (code.lines().position(|line| line.contains(marker)))
+        .map(|index| index + 1)
+        .unwrap_or_else(|| panic!("'{marker}' is in the program:\n{code}"));
+    let envelope = miri_check_json(code);
+    let diagnostic = (envelope.diagnostics.into_iter())
+        .find(|d| d.code.as_deref() == Some(expected_code))
+        .unwrap_or_else(|| panic!("a {expected_code} refusal of:\n{code}"));
+    assert_eq!(
+        diagnostic.line,
+        Some(line),
+        "the {expected_code} refusal points at '{marker}': {diagnostic:#?}"
+    );
+    diagnostic
 }
 
 /// Assert that the code compiles all the way through a build.

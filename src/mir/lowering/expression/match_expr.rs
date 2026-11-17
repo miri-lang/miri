@@ -727,7 +727,8 @@ pub(crate) fn lower_match_expr(
     } = subject_info;
 
     ctx.push_scope();
-    register_subject_temps(ctx, &subject_info);
+    let releases_source = register_subject_temps(ctx, &subject_info);
+    record_scrutinee_holders(ctx, subject, &subject_info, releases_source);
 
     let result_ty = resolve_type(ctx.type_checker, expr);
     let result_local = if let Some(ref dest_place) = dest {
@@ -839,13 +840,42 @@ fn lower_match_subject(
 /// release it twice.
 ///
 /// The scope releases these in reverse, so the subject temp goes first.
-fn register_subject_temps(ctx: &mut LoweringContext, subject: &MatchSubject) {
-    if let Some(source_local) = subject.source_local {
-        if source_local != subject.local
+/// Whether it took the operand's own local.
+fn register_subject_temps(ctx: &mut LoweringContext, subject: &MatchSubject) -> bool {
+    let releases_source = subject.source_local.is_some_and(|source_local| {
+        source_local != subject.local
             && ctx.is_released_by_expression(source_local, subject.watermark)
-        {
-            ctx.register_scope_temp(source_local);
-        }
+    });
+    if let (true, Some(source_local)) = (releases_source, subject.source_local) {
+        ctx.register_scope_temp(source_local);
     }
     ctx.register_scope_temp(subject.local);
+    releases_source
+}
+
+/// Records the locals the match holds its scrutinee `subject` in, which a
+/// keeper taking a payload of a scrutinee the scope owns ends: the subject
+/// temp, the temporary the subject was lowered into when the match releases
+/// it, and the binding a whole-binding subject names when it is the body's
+/// own rather than its caller's.
+fn record_scrutinee_holders(
+    ctx: &mut LoweringContext,
+    subject: &Expression,
+    subject_info: &MatchSubject,
+    releases_source: bool,
+) {
+    let source = subject_info
+        .source_local
+        .filter(|&source| source != subject_info.local);
+    let is_own_binding = |source| {
+        matches!(
+            subject.node,
+            ExpressionKind::Identifier(..) | ExpressionKind::Super
+        ) && crate::mir::lowering::variable::is_own_binding(ctx, source)
+    };
+    let held_source = source.filter(|&source| releases_source || is_own_binding(source));
+    let holders = std::iter::once(subject_info.local)
+        .chain(held_source)
+        .collect();
+    ctx.matched_scrutinees.insert(subject.id, holders);
 }

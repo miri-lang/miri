@@ -106,12 +106,33 @@ fn main()
     );
 }
 
-/// A `for` binding over base-typed elements owns no reference of its own, so
-/// a slot owning the receiver is handed a funded copy: the keeper's shelf
-/// releases its copy, the base's adapter releases its copy, and the hook runs
-/// once, where the list ends.
+/// A `for` binding over base-typed elements is the element it walks, so a
+/// slot owning the receiver cannot take it.
 #[test]
-fn a_for_binding_at_a_base_handed_to_an_owning_slot_is_a_funded_copy() {
+fn a_for_binding_at_a_base_handed_to_an_owning_slot_is_refused() {
+    assert_refused_at(
+        &format!(
+            "use system.collections.list\n{}",
+            with_bases(
+                r#"
+fn main()
+    var l = List<Base>()
+    l.push(Derived(3))
+    for b in l
+        println(f"{b.shelve(1)}")
+"#,
+            )
+        ),
+        "MER_OWN_008",
+        "b.shelve(1)",
+    );
+}
+
+/// Removing each base-typed element instead hands it to the slot owning the
+/// receiver: the keeper's shelf releases the derived one, the base's adapter
+/// the other, each as its call ends.
+#[test]
+fn elements_at_a_base_removed_in_a_loop_are_handed_to_an_owning_slot() {
     assert_heap_guard_output(
         &format!(
             "use system.collections.list\n{}",
@@ -121,21 +142,23 @@ fn main()
     var l = List<Base>()
     l.push(Derived(3))
     l.push(Base(4))
-    for b in l
-        println(f"{b.shelve(1)}")
+    while true
+        match l.remove_at(0)
+            Some(b): println(f"{b.shelve(1)}")
+            None: break
     println("end")
 "#,
             )
         ),
-        "shelved\nleaving shelve\n1\nbase 4\n1\nend\nclosed derived 3",
+        "shelved\nclosed derived 3\nleaving shelve\n1\nbase 4\n1\nend",
     );
 }
 
-/// A pattern's payload binding at a base reads the payload and owns no
-/// reference of its own, so a slot owning the receiver is handed a funded
-/// copy, and the hook runs once, where the optional ends.
+/// A payload bound at a base out of an optional the scope owns is handed
+/// over: the slot owning the receiver consumes the optional, which ends at
+/// the call, so the hook runs where the keeper's shelf ends.
 #[test]
-fn a_payload_binding_at_a_base_handed_to_an_owning_slot_is_a_funded_copy() {
+fn a_payload_binding_at_a_base_handed_to_an_owning_slot_is_handed_over() {
     assert_heap_guard_output(
         &with_bases(
             r#"
@@ -147,7 +170,7 @@ fn main()
     println("end")
 "#,
         ),
-        "shelved\nleaving shelve\n1\nend\nclosed derived 5",
+        "shelved\nclosed derived 5\nleaving shelve\n1\nend",
     );
 }
 

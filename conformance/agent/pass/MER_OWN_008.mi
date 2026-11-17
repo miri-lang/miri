@@ -1,0 +1,25 @@
+// summary: Accepted counterpart of MER_OWN_008: the element is removed from the list and handed over owned.
+// expect-stdout: true
+// expect-stdout: closed 1
+// expect-stdout: left 1
+// expect-stdout: closed 2
+use system.collections.list
+
+class Conn
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"closed {self.id}")
+
+fn keep(c Conn) Conn?
+    return Some(c)
+
+fn main()
+    let conns = List([Conn(1), Conn(2)])
+    match conns.remove_at(0)
+        Some(c):
+            let kept = keep(c)
+            println(f"{kept.is_some()}")
+        None: println("empty")
+    println(f"left {conns.length()}")

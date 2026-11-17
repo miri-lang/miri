@@ -302,11 +302,11 @@ fn main()
     );
 }
 
-/// An `out` parameter is the caller's binding: the method is funded with a
-/// reference of its own, and the caller's binding keeps the value.
+/// An `out` parameter is the caller's place, restored on every exit, so a
+/// method keeping its receiver cannot take it.
 #[test]
-fn an_out_parameter_used_as_a_kept_receiver_stays_the_callers() {
-    assert_heap_guard_output(
+fn an_out_parameter_used_as_a_kept_receiver_is_refused() {
+    assert_refused_at(
         &with_handle(
             r#"
 fn take(h out Handle)
@@ -318,7 +318,33 @@ fn main()
     println("after")
 "#,
         ),
-        "on shelf\nleaving put_on\nafter\nclosed 5",
+        "MER_OWN_008",
+        "    h.put_on(2)",
+    );
+}
+
+/// `replace` hands the method the `out` parameter's old value, owned, and
+/// leaves a new one in the caller's place: the old value's hook runs where
+/// the method's new owner ends, the new one's where the caller's binding
+/// ends.
+#[test]
+fn an_out_parameter_replaced_for_a_kept_receiver_hands_over_its_old_value() {
+    assert_heap_guard_output(
+        &format!(
+            "use system.memory\n{}",
+            with_handle(
+                r#"
+fn take(h out Handle)
+    replace(h, Handle(9)).put_on(2)
+
+fn main()
+    var h = Handle(5)
+    take(h)
+    println(f"after {h.id}")
+"#,
+            )
+        ),
+        "on shelf\nclosed 5\nleaving put_on\nafter 9\nclosed 9",
     );
 }
 
@@ -814,22 +840,46 @@ fn main()
     );
 }
 
-/// A receiver read out of a list element is funded for the method with a
-/// reference of its own, and the list keeps the element until it ends.
+/// A list element is the list's, so a method keeping its receiver cannot
+/// be called on one.
 #[test]
-fn an_element_receiver_is_funded_and_its_list_still_releases_it() {
-    assert_heap_guard_output(
-        &with_handle(
-            r#"
-use system.collections.list
-
+fn an_element_used_as_a_kept_receiver_is_refused() {
+    assert_refused_at(
+        &format!(
+            "use system.collections.list\n{}",
+            with_handle(
+                r#"
 fn main()
     let l = List([Handle(1)])
     l[0].put_on(2)
     println("after")
 "#,
+            )
         ),
-        "on shelf\nleaving put_on\nafter\nclosed 1",
+        "MER_OWN_008",
+        "l[0].put_on(2)",
+    );
+}
+
+/// An element removed from its list is the caller's own: the method keeping
+/// it as its receiver releases it where its new owner ends.
+#[test]
+fn an_element_removed_for_a_kept_receiver_is_released_by_the_method() {
+    assert_heap_guard_output(
+        &format!(
+            "use system.collections.list\n{}",
+            with_handle(
+                r#"
+fn main()
+    let l = List([Handle(1)])
+    match l.remove_at(0)
+        Some(h): h.put_on(2)
+        None: println("none")
+    println(f"after {l.length()}")
+"#,
+            )
+        ),
+        "on shelf\nclosed 1\nleaving put_on\nafter 0",
     );
 }
 

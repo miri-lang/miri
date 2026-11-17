@@ -60,5 +60,6 @@ enum Option<T>
     ///     let taken = found.take()
     ///     assert(taken.is_some())
     ///     assert(found.is_none())
+    @empties
     public fn take() T?
         return replace(self, None)

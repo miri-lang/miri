@@ -146,6 +146,11 @@ pub struct LoweringContext<'a> {
     /// site consuming it ends exactly that binding
     /// ([`super::variable::consumed_read`]).
     pub(crate) consumed_reads: HashMap<usize, super::variable::ConsumedRead>,
+    /// The locals each `match` holds its scrutinee in, by the scrutinee's
+    /// expression id: a keeper taking a payload of a scrutinee the scope owns
+    /// ends them where the payload is handed over
+    /// ([`super::kept_parameters::hand_over_kept_arguments`]).
+    pub(crate) matched_scrutinees: HashMap<usize, Vec<Local>>,
 }
 
 /// A source file as lowering reads spans against it: the number the body
@@ -259,6 +264,7 @@ impl<'a> LoweringContext<'a> {
             compilation_ids: new_shared_compilation_ids(),
             held_reads: super::sequencing::HeldReads::default(),
             consumed_reads: HashMap::new(),
+            matched_scrutinees: HashMap::new(),
         };
         // Create the first basic block
         ctx.body.basic_blocks.push(BasicBlockData::new(None));

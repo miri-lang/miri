@@ -367,7 +367,7 @@ pub(crate) fn consumed_operand_locals(
 }
 
 /// The value an argument passes: a named argument's value, or the argument.
-fn argument_value(arg: &Expression) -> &Expression {
+pub(crate) fn argument_value(arg: &Expression) -> &Expression {
     if let ExpressionKind::NamedArgument(_, value) = &arg.node {
         value
     } else {

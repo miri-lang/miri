@@ -9,6 +9,7 @@ A function declaration has an invalid signature. This covers multiple family mem
 - `Regex literals cannot be used inside a GPU function; use Regex.compile() at host level and pass it as a parameter`
 - `parameter '{param}' is explicitly marked 'gpu' but received host-resident argument`
 - `expected mutable variable for 'out' parameter '{param}', but got a non-variable expression`
+- `` '{method}' cannot be marked `@empties`: {reason} ``
 
 ## Before
 

@@ -25,6 +25,9 @@ class Pair<A, B>
         Pair<B, A>(a: self.b, b: self.a)
 "#;
 
+/// The optional field holding a resource is taken out of `p`, which a
+/// keeper may not otherwise take it from, so `q` holds it alone and releases
+/// it.
 #[test]
 fn a_generic_instance_built_from_another_ones_optional_fields_releases_everything() {
     assert_heap_guard_output(
@@ -32,14 +35,14 @@ fn a_generic_instance_built_from_another_ones_optional_fields_releases_everythin
             "{NODE_AND_PAIR}
 fn main()
     let p = Pair<Node, int>(a: Some(Node(name: \"c\" + \"1\")), b: Some(3))
-    let q = Pair<int, Node>(a: p.b, b: p.a)
+    let q = Pair<int, Node>(a: p.b, b: p.a.take())
     match q.b
         Some(n): println(f\"got {{n.name}}\")
         None: println(\"none\")
     println(f\"{{q.a ?? 0}}\")
 "
         ),
-        "got c1\n3\ndrop pair\ndrop pair\ndrop c1",
+        "got c1\n3\ndrop pair\ndrop c1\ndrop pair",
     );
 }
 

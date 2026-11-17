@@ -58,6 +58,7 @@ mod format_specs;
 mod function_analysis;
 pub use function_analysis::{CalleeKind, DeclaredFunction, ModuleId};
 pub mod body_writes;
+pub(crate) mod emptying_methods;
 pub(crate) mod generics;
 mod gpu_buffer_init;
 mod gpu_integer_width;
@@ -75,6 +76,7 @@ pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
 pub mod optional_enum;
+mod place_reads;
 pub use iteration_plan::{IterationPlan, PositionalAccess, ProtocolWalk};
 pub(crate) use operators::{named_class, ValueOrdering, ValueStepping};
 pub mod open_consumption;
@@ -624,6 +626,20 @@ impl TypeChecker {
         self.consumed_arguments.consumes_if_handed_on(expr) && self.hands_on_in_copy(copy_type)
     }
 
+    /// The scrutinee expression a keeper taking the payload binding
+    /// `argument` ends: one the scope owns, which the hand-over consumes
+    /// ([`use_after_move::ConsumedArguments::ended_scrutinee`]).
+    pub fn ended_scrutinee(&self, argument: &Expression) -> Option<usize> {
+        self.consumed_arguments.ended_scrutinee(argument)
+    }
+
+    /// Whether a keeper handed `argument` is handed a copy it funds while
+    /// its holder keeps its own
+    /// ([`use_after_move::ConsumedArguments::is_funded_copy`]).
+    pub fn is_funded_copy(&self, argument: &Expression) -> bool {
+        self.consumed_arguments.is_funded_copy(argument)
+    }
+
     /// The bindings the kept closure `lambda` takes over in the copy of its
     /// body being lowered: each resource it captures, and each value of an
     /// open type it captures where the copy reads it as one, `copy_type_of`
@@ -997,6 +1013,7 @@ impl TypeChecker {
             },
         );
         self.report_unrestorable_replacements();
+        self.report_misused_emptying_marks(top_level_statements(program));
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_kept_parameters(program, &context);
         self.run_pass_use_after_move(program, &context);
@@ -1117,7 +1134,10 @@ impl TypeChecker {
         if !self.diagnostics.is_empty() {
             return;
         }
-        let mut findings = self.use_after_move_checker(context).check_program(program);
+        let repairs = self.place_repairs(program);
+        let mut findings = (self.use_after_move_checker(context))
+            .with_place_repairs(&repairs)
+            .check_program(program);
         self.diagnostics
             .extend_warnings(std::mem::take(&mut findings.warnings));
         self.record_consumption(findings, None);
@@ -1125,6 +1145,7 @@ impl TypeChecker {
             .map(|(file, statements)| {
                 let statements = self.imported_statements.get(statements.clone());
                 let mut findings = (self.use_after_move_checker(context))
+                    .with_place_repairs(&repairs)
                     .check_statements(statements.unwrap_or_default());
                 if file.is_library {
                     findings.open_refusals.clear();
@@ -1137,6 +1158,23 @@ impl TypeChecker {
         for (findings, source) in imported {
             self.record_consumption(findings, source);
         }
+    }
+
+    /// The spellings a refusal of handing a value out of a place names its
+    /// repair in, found among the declarations of `program` and of every
+    /// module it loads ([`place_reads::PlaceRepairs::declared`]).
+    fn place_repairs(&self, program: &Program) -> place_reads::PlaceRepairs {
+        let imported = (self.modules.imported_bodies.iter())
+            .filter_map(|(_, statements)| self.imported_statements.get(statements.clone()));
+        place_reads::PlaceRepairs::declared(
+            std::iter::once(program.body.as_slice()).chain(imported),
+            (
+                self.optional_enum(),
+                &self.type_table.global_type_definitions,
+                &self.receiver_writes,
+            ),
+            (&self.runtime_effects, &self.fn_analysis.declaring_modules),
+        )
     }
 
     /// The consumption check over the checked program's facts.
@@ -1211,6 +1249,7 @@ impl TypeChecker {
         }
         self.thunk_bodies =
             thunk_methods::ThunkBodies::of(&self.type_table.global_type_definitions);
+        let repairs = self.place_repairs(program);
         let type_definitions = &self.type_table.global_type_definitions;
         let facts = kept_parameters::KeepFacts {
             restored: &self.receiver_writes,
@@ -1219,6 +1258,7 @@ impl TypeChecker {
             escape_summaries: &context.escape_summaries,
             modules: &self.fn_analysis.declaring_modules,
             names: self.declared_names(),
+            repairs: &repairs,
         };
         let decision = kept_parameters::decide_kept_parameters(
             top_level_statements(program).chain(&self.imported_statements),
@@ -1231,6 +1271,19 @@ impl TypeChecker {
                 error
             })
             .collect();
+        self.diagnostics.extend_errors(refusals);
+        let open_refusals = (decision.open_refusals.into_iter())
+            .map(|(declaration, mut refusal)| {
+                refusal.error.source_override = self.declaration_source(declaration);
+                refusal
+            })
+            .collect();
+        let copies = open_consumption::Copies {
+            type_definitions,
+            resources: self.resource_types(),
+            instantiations: self.ownership_instantiations(),
+        };
+        let refusals = open_consumption::refusals_at_copies(open_refusals, &copies);
         self.diagnostics.extend_errors(refusals);
         self.dispatch_table = vtable_selectors::DispatchTable::of(type_definitions);
         self.slot_conventions = slot_conventions::decide_slot_conventions(

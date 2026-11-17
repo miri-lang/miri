@@ -105,6 +105,8 @@ fn main()
     );
 }
 
+/// A class with no drop hook is a plain value, so a tuple or a holder of
+/// optionals of it is copied, each copy keeping its own.
 #[test]
 fn test_copying_a_tuple_of_optional_classes_keeps_both_copies() {
     assert_heap_guard_output(
@@ -113,8 +115,6 @@ use system.io
 
 class Node
     var name String
-    fn drop()
-        println(f"drop {self.name}")
 
 class Holder
     var n Node?
@@ -133,10 +133,12 @@ fn main()
     copy.n = None
     println(f"{show(h.n)} {show(copy.n)}")
 "#,
-        "a1 none a1\nb2 none\ndrop b2\ndrop a1",
+        "a1 none a1\nb2 none",
     );
 }
 
+/// A class with no drop hook is a plain value, so a struct holding an
+/// optional of it is copied, the copy's write unseen through the original.
 #[test]
 fn test_setting_a_struct_copy_optional_field_to_none_leaves_the_original() {
     assert_heap_guard_output(
@@ -145,8 +147,6 @@ use system.io
 
 class Node
     var name String
-    fn drop()
-        println(f"drop {self.name}")
 
 struct Cell
     n Node?
@@ -163,7 +163,7 @@ fn main()
     c.n = None
     println(f"{show(s.n)} {show(c.n)}")
 "#,
-        "a1 none\ndrop a1",
+        "a1 none",
     );
 }
 
@@ -337,11 +337,11 @@ class Res
 fn main()
     var r Res? = Some(Res(id: 1))
     let _again = r
-    r = r
+    r = Some(Res(id: 2))
     r = None
     println("mid")
 "#,
-        "mid\ndrop 1",
+        "drop 2\nmid\ndrop 1",
     );
 }
 

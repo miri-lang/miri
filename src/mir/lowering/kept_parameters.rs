@@ -25,12 +25,15 @@
 //! Each direct call passes the argument at an owned position
 //! [`ArgMode::Owned`]. A binding the call consumes, and a temporary the call
 //! alone releases, are handed over by `move`, and their end after the call
-//! releases nothing ([`EndCause::Moved`]). Anything else — a field, a
-//! parameter the caller only borrows — is copied, and reference counting
-//! funds the callee's reference with a retain.
+//! releases nothing ([`EndCause::Moved`]). A payload bound out of a
+//! scrutinee the scope owns is handed over with it: the scrutinee ends at the
+//! call. Anything else — a plain field, a parameter the caller only borrows
+//! — is copied, and reference counting funds the callee's reference with a
+//! retain; a resource read out of any other place never reaches an owned
+//! position ([`check_funded_argument`]).
 
 use crate::ast::common::Parameter;
-use crate::ast::expression::Expression;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::RECEIVER_PARAM_NAME;
 use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
@@ -480,13 +483,60 @@ pub(crate) fn hand_over_kept_arguments(
     for &(argument, _) in &consumed {
         ctx.consumed_reads.insert(argument, ConsumedRead::Ended);
     }
-    let taken = |_, arg: &Operand| Ok(handed_over_local(ctx, call, &consumed, arg));
+    let operands = funded_operands(ctx, call);
+    let taken = |position, arg: &Operand| {
+        let local = handed_over_local(ctx, call, &consumed, arg);
+        if let (None, Some(operands)) = (local, &operands) {
+            check_funded_argument(ctx, call.span, operands.get(position).copied(), &consumed)?;
+        }
+        Ok(local)
+    };
     handed.moved = pass_owned(call.kept, (arg_ops, arg_modes), call.span, taken)?;
+    end_matched_scrutinees(ctx, call, &consumed, &handed.moved);
     handed.consumed = (consumed.into_iter())
         .map(|(_, local)| local)
         .filter(|local| !handed.moved.contains(local))
         .collect();
     Ok(handed)
+}
+
+/// Ends, before the call, the scrutinee each payload binding the call hands
+/// over by `move` was matched out of, when the type checker records the
+/// scrutinee as the scope's own ([`TypeChecker::ended_scrutinee`]): the
+/// keeper then holds the payload's only reference, and its hook runs where
+/// the keeper's new owner ends. A scrutinee two payloads handed to the one
+/// call were bound out of ends once. `consumed` pairs each consumed
+/// operand's expression id with the local it read; `moved` lists the locals
+/// handed over.
+fn end_matched_scrutinees(
+    ctx: &mut LoweringContext,
+    call: &KeptCall<'_>,
+    consumed: &[(usize, Local)],
+    moved: &[Local],
+) {
+    let mut ended: Vec<usize> = Vec::new();
+    let operands =
+        (call.receiver.into_iter()).chain(call.args.iter().map(variable::argument_value));
+    for operand in operands {
+        let Some(scrutinee) = ctx.type_checker.ended_scrutinee(operand) else {
+            continue;
+        };
+        let is_moved =
+            (consumed.iter()).any(|&(id, local)| id == operand.id && moved.contains(&local));
+        if !is_moved || ended.contains(&scrutinee) {
+            continue;
+        }
+        ended.push(scrutinee);
+        let holders = ctx.matched_scrutinees.get(&scrutinee).cloned();
+        for holder in holders.into_iter().flatten() {
+            if ctx.is_counted(&ctx.body.local_decls[holder.0].ty.kind) {
+                ctx.push_statement(MirStatement {
+                    kind: MirStatementKind::StorageDead(Place::new(holder), EndCause::Consumed),
+                    span: call.span,
+                });
+            }
+        }
+    }
 }
 
 /// The local a call hands over by `move` at an owned position whose argument
@@ -500,12 +550,6 @@ fn handed_over_local(
     consumed: &[(usize, Local)],
     arg: &Operand,
 ) -> Option<Local> {
-    // TODO: an argument the caller cannot give up — a field read, an element
-    // read, a lent or `out` parameter — is copied and funded with a retain
-    // at an owned position, so the value has two holders until the later of
-    // the callee's new owner and the caller's binding ends, and its hook runs
-    // there: reading a resource out of a place the caller does not own is
-    // not yet a borrow that cannot be stored.
     let local = whole_local_copied(arg)?;
     let is_own_binding = variable::is_own_binding(ctx, local);
     let is_consumed = consumed.iter().any(|&(_, read)| read == local);
@@ -514,6 +558,51 @@ fn handed_over_local(
     }
     (is_own_binding && is_lowering_an_instantiation(ctx))
         .then(|| funded_copy(ctx, local, call.span))
+}
+
+/// The argument expressions of `call` in operand order, the receiver first,
+/// which [`check_funded_argument`] checks; `None` when they are not checked:
+/// in a body compiled per copy, which funds what its shared body lends, and
+/// in a call whose operands do not line up with its arguments as written (a
+/// named argument).
+fn funded_operands<'c>(ctx: &LoweringContext, call: &KeptCall<'c>) -> Option<Vec<&'c Expression>> {
+    if is_lowering_an_instantiation(ctx) || ctx.lowers_trait_default {
+        return None;
+    }
+    let is_named = |arg: &Expression| matches!(arg.node, ExpressionKind::NamedArgument(..));
+    if call.args.iter().any(is_named) {
+        return None;
+    }
+    Some(call.receiver.into_iter().chain(call.args).collect())
+}
+
+/// Checks `argument`, which a call copies at an owned position and funds
+/// with a retain rather than taking over: the type checker consumed the
+/// binding it names, or recorded it as a resource a keeper is handed a
+/// funded copy of ([`TypeChecker::is_funded_copy`]). A value that is no
+/// resource is shared, not held twice, and is not checked. `consumed` pairs
+/// each consumed operand's expression id with its local.
+///
+/// Refused otherwise: a resource read out of a place reaching a position
+/// that keeps it, which the type checker refuses, would have two holders.
+fn check_funded_argument(
+    ctx: &LoweringContext,
+    span: Span,
+    argument: Option<&Expression>,
+    consumed: &[(usize, Local)],
+) -> Result<(), LoweringError> {
+    let Some(argument) = argument else {
+        return Ok(());
+    };
+    let is_accounted = consumed.iter().any(|&(id, _)| id == argument.id)
+        || ctx.type_checker.is_funded_copy(argument);
+    let is_resource = (ctx.recorded_type(argument.id))
+        .is_some_and(|ty| ctx.type_checker.resource_types().holds(&ty.kind));
+    if is_accounted || !is_resource {
+        return Ok(());
+    }
+    let message = "a resource read out of a place reaches a position that keeps it";
+    Err(internal_error(message, span))
 }
 
 /// Whether the body being lowered is an instantiation of a generic body,

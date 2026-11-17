@@ -1237,13 +1237,28 @@ fn a_local_shadowing_a_parameter_hides_it() {
     );
 }
 
+/// The loop walks optionals, so storing its binding is an assignment rather
+/// than a keeper taking an element out of the list.
 #[test]
 fn a_loop_binding_shadowing_a_parameter_hides_it() {
     assert_lends(
-        &format!("{SHELF}fn f(r Res, xs [Res])\n    var s = Shelf()\n    for r in xs\n        s.slot = Some(r)"),
-        "f(h, List([Res(x: 3)]))",
+        &format!("{SHELF}fn f(r Res, xs [Res?])\n    var s = Shelf()\n    for r in xs\n        s.slot = r"),
+        "f(h, List([Some(Res(x: 3))]))",
         "drop 3\n1\ndrop 2\ndrop 1"
     );
+}
+
+/// A loop over resources binds each element borrowed from the list, so
+/// storing the binding in a field, which keeps it, is refused, the
+/// parameter it shadows untouched.
+#[test]
+fn a_loop_binding_shadowing_a_parameter_stored_in_a_field_is_refused() {
+    let keeper =
+        format!("{SHELF}fn f(r Res, xs [Res])\n    var s = Shelf()\n    for r in xs\n        s.slot = Some(r)");
+    let source = format!(
+        "{RES}\n{keeper}\nfn main()\n    let h = Res(x: 1)\n    f(h, List([Res(x: 3)]))\n    println(f\"{{h.x}}\")\n"
+    );
+    assert_refused_at(&source, "MER_OWN_008", "s.slot = Some(r)");
 }
 
 #[test]
@@ -1938,12 +1953,11 @@ fn main()
     );
 }
 
-/// An element handed to a keeper is copied for the callee, which holds a
-/// reference of its own: the list still holds the element, so its hook runs
-/// when the list is released.
+/// An element is the list's, so handing one to a keeper is refused: the
+/// keeper and the list would both hold it.
 #[test]
-fn an_element_handed_to_a_keeper_is_released_with_the_list_holding_it() {
-    assert_heap_guard_output(
+fn an_element_handed_to_a_keeper_is_refused() {
+    assert_refused_at(
         &format!(
             r#"use system.collections.list
 {HANDLE}
@@ -1954,7 +1968,30 @@ fn main()
     println("back")
 "#
         ),
-        "closing\nc\nafter\nback\nclosed 1\nclosed 2",
+        "MER_OWN_008",
+        "cond(xs[0], true)",
+    );
+}
+
+/// An element removed from the list is the caller's own, handed over to the
+/// keeper: its hook runs where the keeper's new owner ends, and the list
+/// releases only what it still holds.
+#[test]
+fn an_element_removed_from_its_list_is_released_by_the_keeper() {
+    assert_heap_guard_output(
+        &format!(
+            r#"use system.collections.list
+{HANDLE}
+{COND}
+fn main()
+    let xs = List([Handle(1), Handle(2)])
+    match xs.remove_at(0)
+        Some(x): cond(x, true)
+        None: println("none")
+    println("back")
+"#
+        ),
+        "closing\nc\nclosed 1\nafter\nback\nclosed 2",
     );
 }
 

@@ -9,11 +9,12 @@
 
 use crate::ast::{
     Attribute, AttributeTarget, ALLOCATES_ATTRIBUTE, CLOSURE_ATTRIBUTE, COPIES_ATTRIBUTE,
-    DEPRECATED_ATTRIBUTE, DIVERGES_ATTRIBUTE, ELEMENT_ATTRIBUTE, IGNORE_ATTRIBUTE,
-    INDEX_BOUNDS_CHECK_ATTRIBUTE, INDEX_RANGE_CHECK_ATTRIBUTE, KEY_ATTRIBUTE, MATCHES_ATTRIBUTE,
-    MUST_USE_ATTRIBUTE, NON_EXHAUSTIVE_ATTRIBUTE, OPTIONAL_ATTRIBUTE, ORDERS_ATTRIBUTE,
-    PATTERN_LITERAL_ATTRIBUTE, PATTERN_MATCH_ATTRIBUTE, READS_ATTRIBUTE, RETURNS_ELEMENT_ATTRIBUTE,
-    STORES_ATTRIBUTE, TEST_ATTRIBUTE, VALUE_ATTRIBUTE, WRITES_ATTRIBUTE, XFAIL_ATTRIBUTE,
+    DEPRECATED_ATTRIBUTE, DIVERGES_ATTRIBUTE, ELEMENT_ATTRIBUTE, EMPTIES_ATTRIBUTE,
+    IGNORE_ATTRIBUTE, INDEX_BOUNDS_CHECK_ATTRIBUTE, INDEX_RANGE_CHECK_ATTRIBUTE, KEY_ATTRIBUTE,
+    MATCHES_ATTRIBUTE, MUST_USE_ATTRIBUTE, NON_EXHAUSTIVE_ATTRIBUTE, OPTIONAL_ATTRIBUTE,
+    ORDERS_ATTRIBUTE, PATTERN_LITERAL_ATTRIBUTE, PATTERN_MATCH_ATTRIBUTE, READS_ATTRIBUTE,
+    RETURNS_ELEMENT_ATTRIBUTE, STORES_ATTRIBUTE, TEST_ATTRIBUTE, VALUE_ATTRIBUTE, WRITES_ATTRIBUTE,
+    XFAIL_ATTRIBUTE,
 };
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
@@ -59,10 +60,21 @@ impl DeprecatedKind {
 pub(crate) struct AttributeSpec {
     pub name: &'static str,
     pub valid_on: &'static [AttributeTarget],
-    pub takes_argument: bool,
+    pub argument: ArgumentRule,
     /// If non-empty, this attribute requires all of these companion attributes
     /// to be present on the same declaration.
     pub requires: &'static [&'static str],
+}
+
+/// Whether an attribute carries its one string-literal argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArgumentRule {
+    /// The attribute is written bare.
+    Refused,
+    /// The attribute is written with its argument.
+    Required,
+    /// The attribute is written either way.
+    Optional,
 }
 
 /// An attribute stating what a runtime entry point does, valid on a `runtime`
@@ -71,7 +83,11 @@ const fn runtime_effect(name: &'static str, takes_argument: bool) -> AttributeSp
     AttributeSpec {
         name,
         valid_on: &[AttributeTarget::RuntimeFunction],
-        takes_argument,
+        argument: if takes_argument {
+            ArgumentRule::Required
+        } else {
+            ArgumentRule::Refused
+        },
         requires: &[],
     }
 }
@@ -82,19 +98,19 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
     AttributeSpec {
         name: NON_EXHAUSTIVE_ATTRIBUTE,
         valid_on: &[AttributeTarget::Enum],
-        takes_argument: false,
+        argument: ArgumentRule::Refused,
         requires: &[],
     },
     AttributeSpec {
         name: OPTIONAL_ATTRIBUTE,
         valid_on: &[AttributeTarget::Enum],
-        takes_argument: false,
+        argument: ArgumentRule::Refused,
         requires: &[],
     },
     AttributeSpec {
         name: MUST_USE_ATTRIBUTE,
         valid_on: &[AttributeTarget::Enum],
-        takes_argument: false,
+        argument: ArgumentRule::Refused,
         requires: &[],
     },
     AttributeSpec {
@@ -104,49 +120,55 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
             AttributeTarget::Class,
             AttributeTarget::Enum,
         ],
-        takes_argument: true,
+        argument: ArgumentRule::Required,
         requires: &[],
     },
     AttributeSpec {
         name: TEST_ATTRIBUTE,
         valid_on: &[AttributeTarget::Function],
-        takes_argument: false,
+        argument: ArgumentRule::Refused,
         requires: &[],
     },
     AttributeSpec {
         name: IGNORE_ATTRIBUTE,
         valid_on: &[AttributeTarget::Function],
-        takes_argument: true,
+        argument: ArgumentRule::Required,
         requires: &[TEST_ATTRIBUTE],
     },
     AttributeSpec {
         name: XFAIL_ATTRIBUTE,
         valid_on: &[AttributeTarget::Function],
-        takes_argument: true,
+        argument: ArgumentRule::Required,
         requires: &[TEST_ATTRIBUTE],
     },
     AttributeSpec {
         name: INDEX_BOUNDS_CHECK_ATTRIBUTE,
         valid_on: &[AttributeTarget::Function],
-        takes_argument: true,
+        argument: ArgumentRule::Required,
         requires: &[],
     },
     AttributeSpec {
         name: INDEX_RANGE_CHECK_ATTRIBUTE,
         valid_on: &[AttributeTarget::Function],
-        takes_argument: true,
+        argument: ArgumentRule::Required,
+        requires: &[],
+    },
+    AttributeSpec {
+        name: EMPTIES_ATTRIBUTE,
+        valid_on: &[AttributeTarget::Function],
+        argument: ArgumentRule::Optional,
         requires: &[],
     },
     AttributeSpec {
         name: PATTERN_LITERAL_ATTRIBUTE,
         valid_on: &[AttributeTarget::Function],
-        takes_argument: false,
+        argument: ArgumentRule::Refused,
         requires: &[],
     },
     AttributeSpec {
         name: PATTERN_MATCH_ATTRIBUTE,
         valid_on: &[AttributeTarget::Function],
-        takes_argument: false,
+        argument: ArgumentRule::Refused,
         requires: &[],
     },
     runtime_effect(READS_ATTRIBUTE, true),
@@ -164,7 +186,7 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
     AttributeSpec {
         name: DIVERGES_ATTRIBUTE,
         valid_on: &[AttributeTarget::Function, AttributeTarget::RuntimeFunction],
-        takes_argument: false,
+        argument: ArgumentRule::Refused,
         requires: &[],
     },
 ];
@@ -226,8 +248,8 @@ fn validate_attribute(
         ));
     }
 
-    match (spec.takes_argument, attribute.argument.is_some()) {
-        (true, false) => {
+    match (spec.argument, attribute.argument.is_some()) {
+        (ArgumentRule::Required, false) => {
             return Some(TypeError::new(
                 TypeErrorKind::AttributeArgumentMissing {
                     name: attribute.name.clone(),
@@ -235,7 +257,7 @@ fn validate_attribute(
                 attribute.span,
             ))
         }
-        (false, true) => {
+        (ArgumentRule::Refused, true) => {
             return Some(TypeError::new(
                 TypeErrorKind::AttributeArgumentExtra {
                     name: attribute.name.clone(),
@@ -243,7 +265,9 @@ fn validate_attribute(
                 attribute.span,
             ))
         }
-        (true, true) | (false, false) => {}
+        (ArgumentRule::Required, true)
+        | (ArgumentRule::Refused, false)
+        | (ArgumentRule::Optional, _) => {}
     }
 
     // Check companion requirements

@@ -1,0 +1,21 @@
+// expect: MER_OWN_008
+// summary: Triggers MER_OWN_008: an optional field is handed to a function that keeps it.
+class Conn
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"closed {self.id}")
+
+class Pool
+    public var spare Conn?
+    fn init()
+        self.spare = Some(Conn(1))
+
+fn keep(c Conn?) Conn?
+    return c
+
+fn main()
+    let pool = Pool()
+    let kept = keep(pool.spare)
+    println(f"{kept.is_some()}")

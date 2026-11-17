@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 121
+## Error fixtures (`fail/`) — 124
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -33,6 +33,9 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_OWN_005 | Triggers MER_OWN_005: Drop of a Borrowed Value. |
 | MER_OWN_006 | Triggers MER_OWN_006: an equals a container calls on its elements keeps its parameter. |
 | MER_OWN_007 | Triggers MER_OWN_007: a drop hook builds a value holding self. |
+| MER_OWN_008 | Triggers MER_OWN_008: a list element is handed to a function that keeps it. |
+| MER_OWN_008_optional_field | Triggers MER_OWN_008: an optional field is handed to a function that keeps it. |
+| MER_OWN_008_out_parameter | Triggers MER_OWN_008: a function keeps the value of its out parameter, which the caller gets back. |
 | MER_PAR_001 | Triggers MER_PAR_001: Unexpected Token. |
 | MER_PAR_001_colon_annotation | Colon-style type annotation (Rust-like syntax, not Miri). |
 | MER_PAR_001_arrow_return_type | Arrow-style return type (Rust-like syntax, not Miri). |
@@ -155,7 +158,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 130
+## Accepted fixtures (`pass/`) — 133
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -190,6 +193,9 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_OWN_005 | Accepted counterpart of MER_OWN_005: dropping a local the scope owns runs its hook once. |
 | MER_OWN_006 | Accepted counterpart of MER_OWN_006: equals only reads its parameter, and a method called by name keeps it. |
 | MER_OWN_007 | Accepted counterpart of MER_OWN_007: a drop hook copies the plain data out of self and lends self to a reader. |
+| MER_OWN_008 | Accepted counterpart of MER_OWN_008: the element is removed from the list and handed over owned. |
+| MER_OWN_008_optional_field | Accepted counterpart of MER_OWN_008: take() empties the optional field and hands its value to the keeper. |
+| MER_OWN_008_out_parameter | Accepted counterpart of MER_OWN_008: replace gives the caller a new value and hands the old one to the keeper. |
 | MER_PAR_001 | Correct type annotation syntax without colon |
 | MER_PAR_002 | Accepted counterpart of MER_PAR_002: Unexpected End of File does not fire. |
 | MER_PAR_003 | Accepted counterpart of MER_PAR_003: Invalid Type Declaration does not fire. |

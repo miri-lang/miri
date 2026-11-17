@@ -35,7 +35,7 @@ fn main()
         None: println("none")
     let y Node? = x
     println(show(y))
-    let z MaybeNode? = Some(x)
+    let z MaybeNode? = Some(y)
     match z
         Some(inner): println(show(inner))
         None: println("outer none")

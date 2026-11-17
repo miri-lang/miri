@@ -204,11 +204,33 @@ fn main()
     assert_compiler_error(&program, ":33:15");
 }
 
-/// A list element is the list's, so handing a `Wrap<Handle>` element to a
-/// keeping function hands over a funded copy: the list keeps its own, and the
-/// hook runs once, where the list ends.
+/// A list element is the list's, so a `Wrap<Handle>` element, a resource
+/// at that instantiation, cannot be handed to a keeping function, read by
+/// index or bound by a loop.
 #[test]
-fn a_resource_instantiation_element_handed_to_a_keeping_function_is_a_funded_copy() {
+fn a_resource_instantiation_element_handed_to_a_keeping_function_is_refused() {
+    for (handing, marker) in [
+        ("for w in l\n        keep(w)", "keep(w)"),
+        ("keep(l[0])", "keep(l[0])"),
+    ] {
+        assert_refused_at(
+            &format!(
+                "use system.collections.list\n{}",
+                with_keep_wrap(&format!(
+                    "fn main()\n    var l = List<Wrap<Handle>>()\n    l.push(Wrap<Handle>(Handle(4)))\n    {handing}\n"
+                ))
+            ),
+            "MER_OWN_008",
+            marker,
+        );
+    }
+}
+
+/// A `Wrap<Handle>` element removed from its list is the caller's own; the
+/// keeping function is lent it, as it is lent a plain class holding a
+/// resource, and the hook runs once, where its last holder ends.
+#[test]
+fn a_resource_instantiation_element_removed_for_a_keeping_function_runs_its_hook_once() {
     assert_heap_guard_output(
         &format!(
             "use system.collections.list\n{}",
@@ -217,14 +239,14 @@ fn a_resource_instantiation_element_handed_to_a_keeping_function_is_a_funded_cop
 fn main()
     var l = List<Wrap<Handle>>()
     l.push(Wrap<Handle>(Handle(4)))
-    for w in l
-        keep(w)
-    keep(l[0])
+    match l.remove_at(0)
+        Some(w): keep(w)
+        None: println("none")
     println("end")
 "#,
             )
         ),
-        "kept\nleaving keep\nkept\nleaving keep\nend\nclosed 4",
+        "kept\nleaving keep\nclosed 4\nend",
     );
 }
 
@@ -330,13 +352,11 @@ fn main()
     );
 }
 
-/// A `for` binding over trait-typed elements owns no reference of its own,
-/// so a keeping function is handed a funded copy of a resource
-/// instantiation: the list keeps its own, and the hook runs once, where the
-/// list ends.
+/// A `for` binding over trait-typed elements is the element it walks, so a
+/// keeping function cannot take a resource instantiation bound by it.
 #[test]
-fn a_for_binding_over_a_resource_instantiation_handed_to_a_keeper_is_a_funded_copy() {
-    assert_heap_guard_output(
+fn a_for_binding_over_a_resource_instantiation_handed_to_a_keeper_is_refused() {
+    assert_refused_at(
         &format!(
             "use system.collections.list\n{}",
             with_shelving(
@@ -350,7 +370,33 @@ fn main()
 "#,
             )
         ),
-        "kept\nleaving keep\nend\nclosed 9",
+        "MER_OWN_008",
+        "keep_shelving(s)",
+    );
+}
+
+/// Removing each trait-typed element instead hands it to the keeping
+/// function, which takes it over: the hook runs where the keeper's shelf
+/// ends.
+#[test]
+fn a_resource_instantiation_removed_in_a_loop_is_released_by_the_keeper() {
+    assert_heap_guard_output(
+        &format!(
+            "use system.collections.list\n{}",
+            with_shelving(
+                r#"
+fn main()
+    var l = List<Shelving>()
+    l.push(Box<Handle>(Handle(9)))
+    while true
+        match l.remove_at(0)
+            Some(s): keep_shelving(s)
+            None: break
+    println("end")
+"#,
+            )
+        ),
+        "kept\nclosed 9\nleaving keep\nend",
     );
 }
 

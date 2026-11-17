@@ -7,8 +7,9 @@
 //! that copy is compiled at: a resource it keeps is its own from the call
 //! on, and the hook runs where its new owner ends, inside the call. A call
 //! naming the copy and a call through the slot it fills hand it over alike;
-//! a value the caller only reads — a field, an element, a loop binding, a
-//! payload — is handed over as a funded copy, and its holder releases it.
+//! a plain field the caller only reads is handed over as a funded copy, and
+//! its holder releases it; an element or a loop binding is refused, and a
+//! payload of an optional the scope owns is handed over with it.
 //! Every test reads the exact order of the hooks' output under the heap
 //! guard.
 
@@ -122,10 +123,31 @@ fn main()
     );
 }
 
-/// An element, read by index or bound by a loop, handed to a keeping
-/// default is a funded copy: the list still holds it and releases it once.
+/// An element, read by index or bound by a loop, is the list's, so a
+/// keeping default cannot take it.
 #[test]
-fn an_element_and_a_loop_binding_handed_to_a_keeping_default_stay_the_lists() {
+fn an_element_and_a_loop_binding_handed_to_a_keeping_default_are_refused() {
+    for (handing, marker) in [
+        ("i.take(hs[0])", "i.take(hs[0])"),
+        ("for h in hs\n        i.take(h)", "        i.take(h)"),
+    ] {
+        assert_refused_at(
+            &format!(
+                "use system.collections.list\n{}",
+                with_default_takers(&format!(
+                    "fn main()\n    let i = Inheritor()\n    var hs List<Handle> = List<Handle>()\n    hs.push(Handle(1))\n    {handing}\n"
+                ))
+            ),
+            "MER_OWN_008",
+            marker,
+        );
+    }
+}
+
+/// An element removed from its list is handed to the keeping default, whose
+/// shelf releases it before the default returns.
+#[test]
+fn an_element_removed_for_a_keeping_default_is_released_by_it() {
     assert_heap_guard_output(
         &format!(
             "use system.collections.list\n{}",
@@ -135,23 +157,22 @@ fn main()
     let i = Inheritor()
     var hs List<Handle> = List<Handle>()
     hs.push(Handle(1))
-    i.take(hs[0])
-    println("after element")
-    for h in hs
-        i.take(h)
-    println("after loop")
-    println(f"{hs[0].id}")
+    match hs.remove_at(0)
+        Some(h): i.take(h)
+        None: println("none")
+    println(f"after {hs.length()}")
 "#,
             )
         ),
-        "inheritor\nkept by default\nleaving default take\nafter element\nkept by default\nleaving default take\nafter loop\n1\nclosed 1",
+        "inheritor\nkept by default\nclosed 1\nleaving default take\nafter 0",
     );
 }
 
-/// A payload binding handed to a keeping default is a funded copy: the
-/// optional releases the payload once, where it ends.
+/// A payload bound out of an optional the scope owns is handed to a keeping
+/// default: the optional ends at the call, so the hook runs where the
+/// default's shelf ends.
 #[test]
-fn a_payload_binding_handed_to_a_keeping_default_stays_the_optionals() {
+fn a_payload_binding_handed_to_a_keeping_default_is_handed_over() {
     assert_heap_guard_output(
         &with_default_takers(
             r#"
@@ -164,7 +185,7 @@ fn main()
     println("end")
 "#,
         ),
-        "inheritor\nkept by default\nleaving default take\n1\nend\nclosed 5",
+        "inheritor\nkept by default\nclosed 5\nleaving default take\n1\nend",
     );
 }
 

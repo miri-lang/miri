@@ -75,7 +75,9 @@
 use std::collections::HashMap;
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::factory::make_type;
 use crate::ast::statement::{FunctionDeclarationData, Statement, StatementKind};
+use crate::ast::type_arguments::type_arguments;
 use crate::ast::types::{FunctionTypeData, TypeKind};
 use crate::ast::Parameter;
 use crate::diagnostics::DiagnosticCode;
@@ -87,6 +89,8 @@ use super::diagnostics::shown_type_name;
 use super::escape_analysis::{EscapeSummary, FunctionId};
 use super::function_analysis::{DeclaredFunction, ModuleId};
 use super::hook_receivers::receiver_escape_refusal;
+use super::open_consumption::{OpenBody, OpenRefusal};
+use super::place_reads::{kept_place_refusal, CallerPlace, PlaceRepairs};
 use super::thunk_methods::ThunkBodies;
 use super::type_identities::DeclaredNames;
 use super::utils::{hands_on_a_reference, ResourceTypes};
@@ -187,6 +191,9 @@ pub(crate) struct KeepFacts<'a> {
     /// The identity each type declaration and written type resolved to,
     /// which a method is keyed by and a parameter's type is read at.
     pub names: DeclaredNames<'a>,
+    /// The spellings a refusal of a body keeping its caller's place names
+    /// its repair in.
+    pub repairs: &'a PlaceRepairs,
 }
 
 /// What deciding the owned parameters finds: the table, and a refusal for
@@ -195,6 +202,19 @@ pub(crate) struct KeepFacts<'a> {
 pub(crate) struct KeptDecision {
     pub kept: KeptParameters,
     pub refusals: Vec<(usize, TypeError)>,
+    /// The refusals of a generic owner's method keeping a place of its
+    /// caller's, each made at the copies reading the place as a resource,
+    /// beside the id of the statement declaring the method.
+    pub open_refusals: Vec<(usize, OpenRefusal)>,
+}
+
+impl KeptDecision {
+    /// Records the refusals of the declaration `statement`: one made for
+    /// the program, and those made at the copies of its body.
+    fn record(&mut self, statement: usize, (closed, open): (Option<TypeError>, Vec<OpenRefusal>)) {
+        self.refusals.extend(closed.map(|error| (statement, error)));
+        (self.open_refusals).extend(open.into_iter().map(|refusal| (statement, refusal)));
+    }
 }
 
 /// The owned resource parameters of every top-level function, and of every
@@ -206,6 +226,7 @@ pub(crate) fn decide_kept_parameters<'a>(
     let mut decision = KeptDecision {
         kept: KeptParameters::default(),
         refusals: Vec::new(),
+        open_refusals: Vec::new(),
     };
     for statement in statements {
         collect_kept_parameters(statement, facts, &mut decision);
@@ -232,7 +253,6 @@ fn collect_kept_parameters(
         return;
     }
     let (facts, _) = facts;
-    let kept = &mut decision.kept;
     let StatementKind::FunctionDeclaration(decl) = &statement.node else {
         return;
     };
@@ -243,7 +263,11 @@ fn collect_kept_parameters(
         module: module.clone(),
         name: decl.name.clone(),
     };
+    let summary_key = FunctionId::Declared(function.clone());
+    let refusals = kept_caller_place(decl, (&summary_key, None), facts, statement);
+    decision.record(statement.id, refusals);
     if let Some(owned) = owned_parameters(decl, &function, facts) {
+        let kept = &mut decision.kept;
         kept.by_declaration.insert(statement.id, owned);
         kept.declarations.insert(function, statement.id);
     }
@@ -296,11 +320,15 @@ fn collect_kept_method(
     };
     let declarations = decision.kept.methods.entry(owner.to_string()).or_default();
     (declarations.entry(decl.name.clone()).or_default()).push(statement.id);
-    if decl.is_drop_hook() {
+    let refusals = if decl.is_drop_hook() {
         let refusal = receiver_escape_refusal(owner, statement, facts.escape_summaries);
-        decision
-            .refusals
-            .extend(refusal.map(|error| (statement.id, error)));
+        (refusal, Vec::new())
+    } else {
+        let method = FunctionId::method(owner, &decl.name);
+        kept_caller_place(decl, (&method, Some(owner)), facts, statement)
+    };
+    decision.record(statement.id, refusals);
+    if decl.is_drop_hook() {
         return;
     }
     let Some(method) = slot_method(owner, &decl.name, facts.type_definitions) else {
@@ -320,6 +348,146 @@ fn collect_kept_method(
         .kept
         .kept_by_methods
         .insert(statement.id, positions);
+}
+
+/// The refusals of `decl`, summarised as `function`, keeping a place of its
+/// caller's it holds ([`kept_place_refusal`]): an `out` parameter holding a
+/// resource, or, for a method of `owner` replacing its receiver, a receiver
+/// holding one. The summary numbers a method's receiver 0 and each
+/// parameter a caller supplies from 1. A place that is a resource only at
+/// the copies of a generic owner's method binding one of the owner's type
+/// parameters to one is refused at those copies ([`OpenRefusal`]).
+///
+/// TODO: an `out` parameter of a generic free function's own type parameter,
+/// or of a method's, is never refused here: a body compiled per
+/// instantiation keeping it at a resource stays a funded copy (two holders);
+/// refusing it needs the per-instantiation refusal generic class methods get.
+fn kept_caller_place(
+    decl: &FunctionDeclarationData,
+    (function, owner): (&FunctionId, Option<&str>),
+    facts: &KeepFacts<'_>,
+    statement: &Statement,
+) -> (Option<TypeError>, Vec<OpenRefusal>) {
+    let open_body =
+        owner.and_then(|owner| OpenBody::of_generic_owner(owner, facts.type_definitions));
+    let mut closed = None;
+    let mut open = Vec::new();
+    for (place, resource) in caller_places(decl, owner, open_body.as_ref(), facts) {
+        let facts_read = (facts.escape_summaries, facts.repairs);
+        let Some(error) = kept_place_refusal(function, &place, facts_read, statement.span) else {
+            continue;
+        };
+        match (resource, &open_body) {
+            (PlaceResource::Always, _) => {
+                closed.get_or_insert(error);
+            }
+            (PlaceResource::AtCopies(parameters), Some(body)) => {
+                open.extend(parameters.into_iter().map(|parameter| OpenRefusal {
+                    error: error.clone(),
+                    body: body.clone(),
+                    parameter,
+                }));
+            }
+            (PlaceResource::AtCopies(_), None) => {}
+        }
+    }
+    (closed, open)
+}
+
+/// The places of its caller's `decl`, a method of `owner` when one is
+/// given, holds, each with when it is a resource: the receiver of a method
+/// replacing it, and each `out` parameter. The summary numbers a method's
+/// receiver 0 and each parameter a caller supplies from 1.
+fn caller_places<'d>(
+    decl: &'d FunctionDeclarationData,
+    owner: Option<&str>,
+    open_body: Option<&OpenBody>,
+    facts: &KeepFacts<'_>,
+) -> Vec<(CallerPlace<'d>, PlaceResource)> {
+    let receiver = owner
+        .filter(|owner| facts.restored.replaces_receiver(owner, &decl.name))
+        .and_then(|owner| restored_receiver_resource(owner, facts))
+        .map(|resource| (CallerPlace::RestoredReceiver, resource));
+    let (params, first_slot) = match owner {
+        Some(_) => (decl.explicit_params(), 1),
+        None => (decl.params.as_slice(), 0),
+    };
+    let out_params = (params.iter().enumerate())
+        .filter(|(_, param)| param.is_out)
+        .filter_map(|(index, param)| {
+            let resource = out_place_resource(param, open_body, facts)?;
+            let slot = index + first_slot;
+            Some((
+                CallerPlace::OutParameter {
+                    slot,
+                    name: &param.name,
+                },
+                resource,
+            ))
+        });
+    receiver.into_iter().chain(out_params).collect()
+}
+
+/// When a place a body holds for its caller is a resource: at every copy of
+/// the body, or at the copies binding one of the generic owner's type
+/// parameters, by name, to a resource.
+enum PlaceResource {
+    Always,
+    AtCopies(Vec<String>),
+}
+
+/// When the receiver of a method of `owner` that restores it is a resource
+/// ([`ResourceTypes::holds`]); `None` when it never is.
+fn restored_receiver_resource(owner: &str, facts: &KeepFacts<'_>) -> Option<PlaceResource> {
+    let definitions = facts.type_definitions;
+    if facts.resources.holds(&receiver_kind(owner, definitions)) {
+        return Some(PlaceResource::Always);
+    }
+    let generics = definitions.get(owner).and_then(TypeDefinition::generics)?;
+    let parameters: Vec<String> = (facts.resources.positions_making_a_resource(owner))
+        .filter_map(|at| generics.get(at).map(|generic| generic.name.clone()))
+        .collect();
+    (!parameters.is_empty()).then_some(PlaceResource::AtCopies(parameters))
+}
+
+/// When the place the `out` parameter `param` holds is a resource: always
+/// ([`ResourceTypes::holds`]), or, written as a type parameter of the generic
+/// owner `open_body` is a method of, or an optional of one, at the copies
+/// binding that parameter to a resource. `None` when it never is.
+fn out_place_resource(
+    param: &Parameter,
+    open_body: Option<&OpenBody>,
+    facts: &KeepFacts<'_>,
+) -> Option<PlaceResource> {
+    let ExpressionKind::Type(declared, _) = &param.typ.node else {
+        return None;
+    };
+    let kind = facts.names.written_kind(&param.typ, &declared.kind);
+    if facts.resources.holds(&kind) {
+        return Some(PlaceResource::Always);
+    }
+    let payload = if let TypeKind::Option(payload) = kind.as_ref() {
+        &payload.kind
+    } else {
+        kind.as_ref()
+    };
+    let parameter = open_body?.parameter_of(payload, facts.type_definitions)?;
+    Some(PlaceResource::AtCopies(vec![parameter]))
+}
+
+/// The type a method of `owner` reads its receiver at: the owner at its own
+/// type parameters, each with the bounds it declares.
+fn receiver_kind(owner: &str, type_definitions: &HashMap<String, TypeDefinition>) -> TypeKind {
+    let generics = (type_definitions.get(owner)).and_then(TypeDefinition::generics);
+    let arguments = generics.map(|generics| {
+        type_arguments(generics.iter().map(|generic| {
+            make_type(TypeKind::Generic(
+                generic.name.clone(),
+                generic.bounds.clone(),
+            ))
+        }))
+    });
+    TypeKind::Custom(owner.to_string(), arguments)
 }
 
 /// The refusal of the method `decl` of `owner`, which a runtime thunk calls,

@@ -1562,11 +1562,9 @@ fn main()
 }
 
 /// A match arm's binding of a name is the arm's own: consuming it leaves the
-/// outer binding of the same name alone.
-// TODO: assert "closing\nclosed 2\n1\nclosed 1". The type checker leaves the
-// outer `h` owned, but lowering does not release a payload binding the arm's
-// call consumed where `_c` goes out of scope: the option `o` still holds the
-// payload, so the hook runs when `o` is released at the end of `main`.
+/// outer binding of the same name alone. The keeper takes the payload of the
+/// optional the scope owns, which ends there, so the payload's hook runs
+/// where the keeper's result `_c` ends.
 #[test]
 fn a_match_arm_binding_that_shadows_a_resource_leaves_the_outer_one_alone() {
     assert_heap_guard_output(
@@ -1582,15 +1580,11 @@ fn main()
     println(f"{h.id}")
 "#,
         ),
-        "closing\n1\nclosed 2\nclosed 1",
+        "closing\nclosed 2\n1\nclosed 1",
     );
 }
 
 /// `if let` binds its name the same way a match arm does.
-// TODO: assert "closing\nclosed 2\n1\nclosed 1". The type checker leaves the
-// outer `h` owned, but lowering does not release a payload binding the arm's
-// call consumed where `_c` goes out of scope: the option `o` still holds the
-// payload, so the hook runs when `o` is released at the end of `main`.
 #[test]
 fn an_if_let_binding_that_shadows_a_resource_leaves_the_outer_one_alone() {
     assert_heap_guard_output(
@@ -1604,7 +1598,7 @@ fn main()
     println(f"{h.id}")
 "#,
         ),
-        "closing\n1\nclosed 2\nclosed 1",
+        "closing\nclosed 2\n1\nclosed 1",
     );
 }
 

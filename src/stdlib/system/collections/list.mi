@@ -132,6 +132,7 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Indexed<T>, C
     /// Reading the element out takes a reference of its own, so the list
     /// releases the one it held as the element leaves it.
     @index_bounds_check("index")
+    @empties("index")
     public fn remove_at(index int) T?
         if index < 0: return None
         if index >= self.length(): return None

@@ -102,12 +102,18 @@ impl TypeChecker {
     fn check_declaration_attributes(&mut self, statement: &Statement) -> bool {
         let mut accepted = self.validate_statement_attributes(statement);
 
-        // Class members are checked through the class, not as top-level
-        // statements, so their attributes would otherwise never be validated.
-        if let StatementKind::Class(class_data) = &statement.node {
-            for member in &class_data.body {
-                accepted &= self.validate_statement_attributes(member);
-            }
+        // Class members and enum methods are checked through their type, not
+        // as top-level statements, so their attributes would otherwise never
+        // be validated.
+        let members: &[Statement] = if let StatementKind::Class(class_data) = &statement.node {
+            &class_data.body
+        } else if let StatementKind::Enum(_, _, _, methods, _, _) = &statement.node {
+            methods
+        } else {
+            &[]
+        };
+        for member in members {
+            accepted &= self.validate_statement_attributes(member);
         }
 
         accepted

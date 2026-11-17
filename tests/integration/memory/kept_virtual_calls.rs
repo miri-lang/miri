@@ -453,11 +453,30 @@ fn main()
     );
 }
 
-/// An element handed to a slot that owns it is funded, through a binding of
-/// the caller's and through a lent parameter alike, so the list still holds
-/// it after each call.
+/// An element is the list's, so a slot owning the position cannot take it,
+/// directly or through a function keeping its parameter.
 #[test]
-fn an_element_and_a_lent_parameter_handed_to_an_owning_slot_are_funded() {
+fn an_element_handed_to_an_owning_slot_is_refused() {
+    assert_refused_at(
+        &with_list(
+            r#"
+fn main()
+    var hs List<Handle> = List<Handle>()
+    hs.push(Handle(1))
+    let t Taker = Reader()
+    t.take(hs[0])
+"#,
+        ),
+        "MER_OWN_008",
+        "t.take(hs[0])",
+    );
+}
+
+/// An element removed from its list is handed to a slot that owns it,
+/// directly and through a parameter a function hands on: each non-keeper's
+/// adapter releases what it was handed as its implementor returns.
+#[test]
+fn an_element_and_a_parameter_removed_for_an_owning_slot_are_handed_over() {
     assert_heap_guard_output(
         &with_list(
             r#"
@@ -468,16 +487,19 @@ fn use_it(t Taker, h Handle)
 fn main()
     var hs List<Handle> = List<Handle>()
     hs.push(Handle(1))
+    hs.push(Handle(2))
     let t Taker = Reader()
-    t.take(hs[0])
+    match hs.remove_at(0)
+        Some(h): t.take(h)
+        None: println("none")
     println("after elem")
-    println(f"{hs[0].id}")
-    use_it(Reader(), hs[0])
-    use_it(Reader(), hs[0])
-    println("end")
+    match hs.remove_at(0)
+        Some(h): use_it(Reader(), h)
+        None: println("none")
+    println(f"end {hs.length()}")
 "#,
         ),
-        "reader\nread 1\nafter elem\n1\nreader\nread 1\nused\nreader\nread 1\nused\nend\nclosed 1",
+        "reader\nread 1\nclosed 1\nafter elem\nreader\nread 2\nclosed 2\nused\nend 0",
     );
 }
 
@@ -1032,12 +1054,31 @@ fn an_implementor_from_another_module_follows_the_slots_convention() {
     );
 }
 
-/// A `for` binding is the element it iterates and owns no reference of its
-/// own, so a slot owning the receiver is handed a funded copy of it: the
-/// keeper's shelf releases its copy, the non-keeper's adapter releases its
-/// copy, and every hook runs once, where the list ends.
+/// A `for` binding is the element it iterates, so a slot owning the
+/// receiver cannot take it.
 #[test]
-fn a_for_binding_handed_to_a_slot_owning_the_receiver_is_a_funded_copy() {
+fn a_for_binding_handed_to_a_slot_owning_the_receiver_is_refused() {
+    assert_refused_at(
+        &format!(
+            "use system.collections.list\n{SHELVERS}\n{}",
+            r#"
+fn main()
+    var l = List<Shelving>()
+    l.push(Keeper(3))
+    for s in l
+        println(f"{s.shelve(1)}")
+"#
+        ),
+        "MER_OWN_008",
+        "s.shelve(1)",
+    );
+}
+
+/// Removing each element instead of walking the list hands it to the slot
+/// owning the receiver: the keeper's shelf releases one, the non-keeper's
+/// adapter the other, each as its call ends.
+#[test]
+fn elements_removed_in_a_loop_are_handed_to_a_slot_owning_the_receiver() {
     assert_heap_guard_output(
         &format!(
             "use system.collections.list\n{SHELVERS}\n{}",
@@ -1046,20 +1087,22 @@ fn main()
     var l = List<Shelving>()
     l.push(Keeper(3))
     l.push(Plain(4))
-    for s in l
-        println(f"{s.shelve(1)}")
+    while true
+        match l.remove_at(0)
+            Some(s): println(f"{s.shelve(1)}")
+            None: break
     println("end")
 "#
         ),
-        "shelved\nleaving shelve\n1\nplain 4\n1\nend\nclosed keeper 3\nclosed plain 4",
+        "shelved\nclosed keeper 3\nleaving shelve\n1\nplain 4\nclosed plain 4\n1\nend",
     );
 }
 
-/// A pattern's payload binding reads the payload and owns no reference of
-/// its own, so a slot owning the receiver is handed a funded copy of it, and
-/// the hook runs once, where the optional ends.
+/// A payload bound out of an optional the scope owns is handed over: the
+/// slot owning the receiver consumes the optional, which ends at the call,
+/// so the hook runs where the keeper's shelf ends.
 #[test]
-fn a_payload_binding_handed_to_a_slot_owning_the_receiver_is_a_funded_copy() {
+fn a_payload_binding_handed_to_a_slot_owning_the_receiver_is_handed_over() {
     assert_heap_guard_output(
         &format!(
             "{SHELVERS}\n{}",
@@ -1072,15 +1115,14 @@ fn main()
     println("end")
 "#
         ),
-        "shelved\nleaving shelve\n1\nend\nclosed keeper 5",
+        "shelved\nclosed keeper 5\nleaving shelve\n1\nend",
     );
 }
 
-/// A `for` binding reaching a hook-free implementor through the adapter of a
-/// slot owning the receiver is handed over as a funded copy: the adapter
-/// releases the copy, and the list still holds the element.
+/// An element removed from its list reaching a hook-free implementor through
+/// the adapter of a slot owning the receiver is released by the adapter.
 #[test]
-fn a_for_binding_handed_through_a_non_keepers_adapter_is_a_funded_copy() {
+fn an_element_handed_through_a_non_keepers_adapter_is_released_by_it() {
     assert_heap_guard_output(
         r#"
 use system.collections.list
@@ -1109,11 +1151,12 @@ class Lamp implements Lighting
 fn main()
     var l = List<Lighting>()
     l.push(Lamp(4))
-    for s in l
-        println(f"{s.light(1)}")
+    match l.remove_at(0)
+        Some(s): println(f"{s.light(1)}")
+        None: println("none")
     println(f"{l.length()}")
     println("end")
 "#,
-        "lamp 4\n1\n1\nend",
+        "lamp 4\n1\n0\nend",
     );
 }

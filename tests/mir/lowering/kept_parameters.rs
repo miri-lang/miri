@@ -241,11 +241,12 @@ fn the_local_a_kept_parameter_moves_into_is_never_a_borrow() {
     assert_eq!(releases, 1, "`h` is released where its scope ends:\n{body}");
 }
 
+/// An element of an array, which offers no way to take one out, is handed
+/// to a keeper as a copy the array keeps funding.
 #[test]
 fn an_element_argument_is_copied_for_the_callee_to_be_funded() {
-    let source = format!(
-        "use system.collections.list\n{HANDLE}\nfn main()\n    let xs = List([Handle(1)])\n    let n = cond(xs[0], true)\n"
-    );
+    let source =
+        format!("{HANDLE}\nfn main()\n    let xs = [Handle(1)]\n    let n = cond(xs[0], true)\n");
     let body = lowered_from(&source, "main");
     let (args, modes) = call_to(&body, ".cond");
     assert!(matches!(args[0], Operand::Copy(_)), "{body}");

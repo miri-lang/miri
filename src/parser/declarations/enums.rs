@@ -103,8 +103,26 @@ impl<'source> Parser<'source> {
         Ok(body)
     }
 
-    /// A method or a variant of a block-form enum body.
+    /// A method or a variant of a block-form enum body, after the
+    /// attributes a method may carry.
     fn enum_member(&mut self) -> Result<DeclarationMember, SyntaxError> {
+        let attributes = self.attributes()?;
+        match self.enum_member_declaration()? {
+            DeclarationMember::Method(method) => Ok(DeclarationMember::method(
+                self.attach_attributes(*method, attributes)?,
+            )),
+            DeclarationMember::Entry(variant) => match attributes.first() {
+                None => Ok(DeclarationMember::Entry(variant)),
+                Some(attribute) => Err(SyntaxError::new(
+                    SyntaxErrorKind::UnsupportedAttributeTarget,
+                    attribute.span,
+                )),
+            },
+        }
+    }
+
+    /// A method or a variant of a block-form enum body.
+    fn enum_member_declaration(&mut self) -> Result<DeclarationMember, SyntaxError> {
         // The contextual `static` keyword is left for `function_declaration`.
         if self.is_contextual_static_before_fn() {
             return Ok(DeclarationMember::method(

@@ -2131,10 +2131,20 @@ impl<'a> EscapeWalk<'a> {
     /// so a call through one that is a function value cannot be resolved to
     /// one body ([`FunctionValue::Opaque`]).
     fn scoped_with(&mut self, names: HashSet<String>, inner: impl FnOnce(&mut Self)) {
+        self.scoped_naming(names, &BTreeSet::new(), inner);
+    }
+
+    /// [`Self::scoped_with`], each of `names` naming the parameters `named`.
+    fn scoped_naming(
+        &mut self,
+        names: HashSet<String>,
+        named: &BTreeSet<ParamIndex>,
+        inner: impl FnOnce(&mut Self),
+    ) {
         self.scopes.enter();
         for name in &names {
             let value = Some(FunctionValue::Opaque);
-            self.scopes.declare(name, BTreeSet::new(), value);
+            self.scopes.declare(name, named.clone(), value);
         }
         inner(self);
         self.scopes.exit();
@@ -2216,7 +2226,9 @@ impl<'a> EscapeWalk<'a> {
         }
     }
 
-    /// Each arm is a scope binding what its patterns bind.
+    /// Each arm is a scope binding what its patterns bind. A payload bound
+    /// out of a binding is part of it, so it names what the binding names:
+    /// a body keeping the payload keeps the parameter it was matched out of.
     fn match_arms(
         &mut self,
         scrutinee: &Expression,
@@ -2224,12 +2236,16 @@ impl<'a> EscapeWalk<'a> {
         flow: &mut ReturnFlow,
     ) {
         self.expression(scrutinee, flow);
+        let named = match named_binding(scrutinee) {
+            Some(_) => self.named_by(scrutinee),
+            None => BTreeSet::new(),
+        };
         for branch in branches {
             let mut names = HashSet::new();
             for pattern in &branch.patterns {
                 collect_pattern_bindings(pattern, &mut names);
             }
-            self.scoped_with(names, |walk| {
+            self.scoped_naming(names, &named, |walk| {
                 walk.optional(branch.guard.as_deref(), flow);
                 walk.statement(&branch.body, flow);
             });

@@ -1,0 +1,23 @@
+// summary: Accepted counterpart of MER_OWN_008: replace gives the caller a new value and hands the old one to the keeper.
+// expect-stdout: true 2
+// expect-stdout: closed 1
+// expect-stdout: closed 2
+use system.memory
+
+class Conn
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"closed {self.id}")
+
+fn keep(c Conn) Conn?
+    return Some(c)
+
+fn swap(c out Conn) Conn?
+    return keep(replace(c, Conn(2)))
+
+fn main()
+    var c = Conn(1)
+    let kept = swap(c)
+    println(f"{kept.is_some()} {c.id}")

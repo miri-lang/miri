@@ -1145,7 +1145,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
-    // OWN — Ownership and resource management (7 codes: 001-007)
+    // OWN — Ownership and resource management (8 codes: 001-008)
     "OWN",
     "001",
     OwnResourceNotConsumedAtScopeExit,
@@ -1192,6 +1192,13 @@ diagnostics!(
     "007",
     OwnHookReceiverEscapes,
     "Drop Hook Keeps Its Receiver",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "OWN",
+    "008",
+    OwnResourceHandedOutOfAPlace,
+    "Resource Handed Out of a Place",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

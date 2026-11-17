@@ -47,6 +47,7 @@ pub mod out_captures;
 pub mod out_parameter;
 pub mod owned_parameters;
 pub mod parameter_writes;
+pub mod places_handed_to_keepers;
 pub mod rc_elision;
 pub mod rc_stats;
 pub mod reassignment;

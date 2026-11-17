@@ -52,6 +52,21 @@ pub enum OpenBody {
 }
 
 impl OpenBody {
+    /// The body a method of the type `owner` is, when the type declares
+    /// type parameters: compiled once per instantiation.
+    pub(crate) fn of_generic_owner(
+        owner: &str,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> Option<Self> {
+        let parameters: Vec<String> = (type_definitions.get(owner)?.generics()?.iter())
+            .map(|generic| generic.name.clone())
+            .collect();
+        (!parameters.is_empty()).then(|| OpenBody::GenericClassMethod {
+            class: owner.to_string(),
+            parameters,
+        })
+    }
+
     /// The open parameter a value of `kind` is in this body: `Self` in a
     /// default, a type parameter of the class in a generic class's method.
     /// `None` for any other type, and for a parameter every copy reads as a

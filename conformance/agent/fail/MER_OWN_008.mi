@@ -1,0 +1,18 @@
+// expect: MER_OWN_008
+// summary: Triggers MER_OWN_008: a list element is handed to a function that keeps it.
+use system.collections.list
+
+class Conn
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"closed {self.id}")
+
+fn keep(c Conn) Conn?
+    return Some(c)
+
+fn main()
+    let conns = List([Conn(1), Conn(2)])
+    let kept = keep(conns[0])
+    println(f"{kept.is_some()}")

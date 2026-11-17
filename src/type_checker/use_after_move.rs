@@ -45,6 +45,9 @@ use super::function_analysis::DeclaredFunction;
 use super::iteration_plan::{IterationPlan, IterationPlans};
 use super::kept_parameters::declared_type_name;
 use super::open_consumption::{OpenBody, OpenRefusal};
+use super::place_reads::{
+    handed_out_of_a_place, place_spelling, PlaceBindings, PlaceFacts, PlaceRepairs, ScrutineeOrigin,
+};
 use super::slot_conventions::SlotConventions;
 use super::type_identities::DeclaredNames;
 use super::utils::{hands_on_a_reference, runs_drop_hook, ResourceTypes};
@@ -112,6 +115,17 @@ pub struct ConsumedArguments {
     open_expressions_used_after: HashSet<usize>,
     /// The bindings each kept closure takes over, by the closure's expression.
     captures: HashMap<usize, Vec<TakenCapture>>,
+    /// Each payload binding a keeper takes, by the expression naming it,
+    /// with the scrutinee expression the scope owns that it was bound out
+    /// of: the hand-over ends the scrutinee, so the keeper holds the
+    /// payload's only reference.
+    payload_handovers: HashMap<usize, usize>,
+    /// Each resource handed to a keeper that the call copies and funds while
+    /// its holder keeps its own: a plain resource field, an element of a
+    /// collection offering no way to take one out, a binding whose
+    /// consumption hands on no reference of its own. MIR lowering funds no
+    /// other resource at a position that keeps it.
+    funded_copies: HashSet<usize>,
 }
 
 /// A binding a kept closure takes over from the scope creating it.
@@ -164,8 +178,22 @@ impl ConsumedArguments {
             .collect()
     }
 
+    /// The scrutinee expression the hand-over of the payload binding
+    /// `argument` names ends, when the scrutinee is the scope's own.
+    pub fn ended_scrutinee(&self, argument: &Expression) -> Option<usize> {
+        self.payload_handovers.get(&argument.id).copied()
+    }
+
+    /// Whether a keeper is handed a funded copy of the resource `argument`
+    /// while its holder keeps its own.
+    pub fn is_funded_copy(&self, argument: &Expression) -> bool {
+        self.funded_copies.contains(&argument.id)
+    }
+
     /// Add every argument `other` records.
     pub fn extend(&mut self, other: ConsumedArguments) {
+        self.payload_handovers.extend(other.payload_handovers);
+        self.funded_copies.extend(other.funded_copies);
         self.expressions.extend(other.expressions);
         self.open_expressions.extend(other.open_expressions);
         self.open_expressions_used_after
@@ -420,6 +448,11 @@ pub struct UseAfterMoveChecker<'a> {
     open_body: Option<OpenBody>,
     /// Each use after a value of an open type was consumed.
     open_refusals: Vec<OpenRefusal>,
+    /// The bindings of the scope analysed read out of a place.
+    places: PlaceBindings,
+    /// The spellings a refusal of handing a value out of a place names its
+    /// repair in.
+    repairs: Option<&'a PlaceRepairs>,
 }
 
 /// A resource a closure captures, or a value whose type is open in a body
@@ -479,6 +512,8 @@ impl<'a> UseAfterMoveChecker<'a> {
             tail_values: HashSet::new(),
             open_body: None,
             open_refusals: Vec::new(),
+            places: PlaceBindings::default(),
+            repairs: None,
         }
     }
 
@@ -496,6 +531,13 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// as the type checker registered the type.
     pub(crate) fn with_declared_names(mut self, names: DeclaredNames<'a>) -> Self {
         self.names = Some(names);
+        self
+    }
+
+    /// The checker spelling each refusal's repair as `repairs` found
+    /// declared.
+    pub(crate) fn with_place_repairs(mut self, repairs: &'a PlaceRepairs) -> Self {
+        self.repairs = Some(repairs);
         self
     }
 
@@ -554,11 +596,12 @@ impl<'a> UseAfterMoveChecker<'a> {
             StatementKind::For(decls, iter, body) => {
                 self.check_expr(iter, consumed);
                 self.consume_walked_iterable(stmt.id, iter, consumed);
-                self.check_for_stmt(decls, body, consumed);
+                let walked = self.place_facts().loop_element(walked_value(iter));
+                self.check_for_stmt(decls, body, consumed, walked);
             }
             StatementKind::GpuFrame(decls, iter, body) => {
                 self.check_expr(iter, consumed);
-                self.check_for_stmt(decls, body, consumed);
+                self.check_for_stmt(decls, body, consumed, None);
             }
             StatementKind::Forall {
                 vars: decls,
@@ -567,7 +610,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 ..
             } => {
                 self.check_expr(iter, consumed);
-                self.check_for_stmt(decls, body, consumed);
+                self.check_for_stmt(decls, body, consumed, None);
             }
             StatementKind::GpuFrameBlock(block) => {
                 self.check_stmt(block, consumed);
@@ -626,14 +669,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// The body a method of the class named by `name` is, when the class
     /// declares type parameters: compiled once per instantiation.
     fn generic_class_body(&self, name: &Expression) -> Option<OpenBody> {
-        let class = self.declared_name(name)?;
-        let parameters: Vec<String> = (self.type_definitions.get(class)?.generics()?.iter())
-            .map(|generic| generic.name.clone())
-            .collect();
-        (!parameters.is_empty()).then(|| OpenBody::GenericClassMethod {
-            class: class.to_string(),
-            parameters,
-        })
+        OpenBody::of_generic_owner(self.declared_name(name)?, self.type_definitions)
     }
 
     fn check_fn_decl(&mut self, decl: &crate::ast::statement::FunctionDeclarationData) {
@@ -641,6 +677,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         let prev_bindings = std::mem::take(&mut self.fn_bindings);
         let prev_gpu = std::mem::take(&mut self.gpu_bindings);
         let prev_owned = std::mem::take(&mut self.owned_locals);
+        let prev_places = std::mem::take(&mut self.places);
         let prev_closures = std::mem::take(&mut self.closures);
         let tails = returned_tails(decl.return_type.as_deref(), body);
         let prev_tails = std::mem::replace(
@@ -659,6 +696,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
         self.owned_locals = prev_owned;
+        self.places = prev_places;
     }
 
     /// A resource returned by name, after `return` or as a tail value the
@@ -754,6 +792,13 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
         self.fn_bindings.insert(decl.name.clone());
         self.owned_locals.insert(decl.name.clone());
+        let facts = self.place_facts();
+        let borrowed =
+            (decl.initializer.as_ref()).and_then(|init| facts.borrowed_place(init, &self.places));
+        match borrowed {
+            Some(place) => self.places.bind_borrowed(&decl.name, place),
+            None => self.places.forget(&decl.name),
+        }
     }
 
     fn check_if_stmt(
@@ -937,18 +982,26 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
+    /// Checks a loop's body, whose bindings are each an element of the
+    /// collection walked, borrowed from `walked` when it is a place.
     fn check_for_stmt(
         &mut self,
         decls: &[crate::ast::statement::VariableDeclaration],
         body: &Statement,
         consumed: &mut Consumed,
+        walked: Option<super::place_reads::BorrowedPlace>,
     ) {
         let prev_bindings = self.fn_bindings.clone();
         let prev_gpu = self.gpu_bindings.clone();
         let prev_owned = self.owned_locals.clone();
+        let places_mark = self.places.mark();
         for d in decls {
             self.fn_bindings.insert(d.name.clone());
             self.owned_locals.remove(d.name.as_str());
+            match &walked {
+                Some(place) => self.places.bind_borrowed(&d.name, place.clone()),
+                None => self.places.forget(&d.name),
+            }
         }
         let loop_variables: HashSet<String> = decls.iter().map(|d| d.name.clone()).collect();
         let mut shadowed = Shadowed::new();
@@ -965,6 +1018,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
         self.owned_locals = prev_owned;
+        self.places.restore(places_mark);
     }
 
     /// Processes a block's statement list with scope-exit warning for unconsumed resource vars.
@@ -977,6 +1031,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         // A local declared in this block stops naming an owned value when the
         // block ends, and a name it shadowed names the outer binding again.
         let prev_owned = self.owned_locals.clone();
+        let places_mark = self.places.mark();
         let mut scope_resources: Vec<(String, String, Span)> = Vec::new();
         let mut shadowed = Shadowed::new();
         for s in stmts {
@@ -992,6 +1047,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             }
         }
         self.owned_locals = prev_owned;
+        self.places.restore(places_mark);
         self.warn_unconsumed_resources(&scope_resources, consumed);
         restore_shadowed(consumed, shadowed);
     }
@@ -1175,6 +1231,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         if let LeftHandSideExpression::Identifier(name_expr) = lhs {
             if let ExpressionKind::Identifier(name, _) = &name_expr.node {
                 consumed.remove(name.as_str());
+                self.places.forget(name);
             }
         }
     }
@@ -1188,8 +1245,10 @@ impl<'a> UseAfterMoveChecker<'a> {
         });
         let prev_bindings = self.fn_bindings.clone();
         let prev_owned = std::mem::take(&mut self.owned_locals);
+        let places_mark = self.places.mark();
         for p in &lambda.params {
             self.fn_bindings.insert(p.name.clone());
+            self.places.forget(&p.name);
         }
         let prev_loops = std::mem::take(&mut self.loop_exits);
         let mut lambda_consumed = HashMap::new();
@@ -1197,6 +1256,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.loop_exits = prev_loops;
         self.fn_bindings = prev_bindings;
         self.owned_locals = prev_owned;
+        self.places.restore(places_mark);
         self.closures
             .pop()
             .map_or_else(Vec::new, |closure| closure.resources)
@@ -1363,9 +1423,11 @@ impl<'a> UseAfterMoveChecker<'a> {
         consumed: &mut Consumed,
     ) {
         self.check_expr(scrutinee, consumed);
+        let is_bound = |name: &str| self.fn_bindings.contains(name);
+        let origin = (self.place_facts()).scrutinee_origin(scrutinee, &self.places, is_bound);
         let arms: Vec<(Consumed, bool)> = branches
             .iter()
-            .map(|branch| self.check_match_arm(branch, consumed))
+            .map(|branch| self.check_match_arm(branch, &origin, consumed))
             .collect();
         *consumed = join_arms(consumed, arms);
     }
@@ -1375,11 +1437,13 @@ impl<'a> UseAfterMoveChecker<'a> {
     fn check_match_arm(
         &mut self,
         branch: &crate::ast::pattern::MatchBranch,
+        origin: &ScrutineeOrigin,
         before: &Consumed,
     ) -> (Consumed, bool) {
         let mut arm_consumed = before.clone();
         let prev_bindings = self.fn_bindings.clone();
         let prev_owned = self.owned_locals.clone();
+        let places_mark = self.places.mark();
         let mut arm_bindings = HashSet::new();
         for pat in &branch.patterns {
             collect_pattern_bindings(pat, &mut arm_bindings);
@@ -1390,6 +1454,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
         self.owned_locals
             .retain(|name| !arm_bindings.contains(name));
+        self.places.bind_arm(&arm_bindings, origin);
         self.fn_bindings.extend(arm_bindings);
         if let Some(guard) = &branch.guard {
             self.check_expr(guard, &mut arm_consumed);
@@ -1397,6 +1462,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.check_stmt(&branch.body, &mut arm_consumed);
         self.fn_bindings = prev_bindings;
         self.owned_locals = prev_owned;
+        self.places.restore(places_mark);
         restore_shadowed(&mut arm_consumed, shadowed);
         (arm_consumed, self.finishes(&branch.body))
     }
@@ -1755,6 +1821,26 @@ impl<'a> UseAfterMoveChecker<'a> {
             self.consume_captures(value.id, &captured, consumed);
             return;
         }
+        if self.refuses_a_borrowed_place(value, sink) {
+            return;
+        }
+        self.consume_named_resource(value, sink, callee_param_idx, consumed);
+        let is_moved = self.consumed_arguments.expressions.contains(&value.id);
+        if !is_moved && self.is_resource_expr(value) {
+            self.consumed_arguments.funded_copies.insert(value.id);
+        }
+    }
+
+    /// Marks the binding `value` names consumed by `sink` when it is a
+    /// resource, and records it for lowering to move when consuming it hands
+    /// its reference on.
+    fn consume_named_resource(
+        &mut self,
+        value: &Expression,
+        sink: &Sink,
+        callee_param_idx: usize,
+        consumed: &mut Consumed,
+    ) {
         let Some(name) = named_binding(value) else {
             return;
         };
@@ -1775,6 +1861,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
         if self.hands_on_its_reference(ident_expr) {
             self.consumed_arguments.expressions.insert(ident_expr.id);
+            self.end_owned_scrutinee(&name, ident_expr, sink, consumed);
         }
         let chain = self.build_chain(sink, callee_param_idx);
         consumed.insert(
@@ -1786,6 +1873,84 @@ impl<'a> UseAfterMoveChecker<'a> {
                 open: None,
             },
         );
+    }
+
+    /// What classifying a read reads of the checked program.
+    fn place_facts(&self) -> PlaceFacts<'a> {
+        PlaceFacts {
+            types: self.types,
+            type_definitions: self.type_definitions,
+            writes: self.vtable_calls.restored,
+        }
+    }
+
+    /// Refuses handing `value` to `sink`, a position keeping it, when it is
+    /// a resource borrowed from a place ([`super::place_reads`]); in a body
+    /// compiled per copy, a value of an open type is refused at each copy
+    /// reading it as a resource. Records a plain resource field, or an
+    /// element no repair can take out, as a copy the call funds. Whether the
+    /// hand-over was refused.
+    fn refuses_a_borrowed_place(&mut self, value: &Expression, sink: &Sink) -> bool {
+        // TODO: in a generic free function, a value of the function's own
+        // type parameter read out of a place stays a funded copy (two
+        // holders) at an instantiation reading it as a resource; refusing it
+        // needs the per-instantiation refusal generic class methods get.
+        let open = self.open_parameter(value);
+        if open.is_none() && !self.is_resource_expr(value) {
+            return false;
+        }
+        let Some(place) = self.place_facts().borrowed_place(value, &self.places) else {
+            // TODO: a plain resource field handed to a keeper is still a
+            // funded copy (two holders); refusing it needs `out` on a place
+            // path so the repair `replace(out h.f, new)` compiles. An element
+            // of a collection offering no way to take one out is funded the
+            // same way until that repair compiles for it.
+            return false;
+        };
+        let spelled = place_spelling(value).unwrap_or_default();
+        let repairs = self.repairs.unwrap_or(&NO_REPAIRS);
+        let error =
+            handed_out_of_a_place(&spelled, &place, (&keeper_name(sink), repairs), value.span);
+        let Some(parameter) = open else {
+            self.errors.push(error);
+            return true;
+        };
+        if let Some(body) = self.open_body.clone() {
+            self.open_refusals.push(OpenRefusal {
+                error,
+                body,
+                parameter,
+            });
+        }
+        true
+    }
+
+    /// When `name`, which `value` reads, is a payload the scope's own
+    /// scrutinee bound and `sink` keeps it, consumes the scrutinee too, and
+    /// records the hand-over for lowering, which ends the scrutinee there.
+    /// A scrutinee an earlier hand-over consumed on this path is ended
+    /// already.
+    fn end_owned_scrutinee(
+        &mut self,
+        name: &str,
+        value: &Expression,
+        sink: &Sink,
+        consumed: &mut Consumed,
+    ) {
+        let Some(owner) = self.places.payload_owner(name) else {
+            return;
+        };
+        if consumed.contains_key(&owner.key) {
+            return;
+        }
+        (self.consumed_arguments.payload_handovers).insert(value.id, owner.expression);
+        let info = ConsumedInfo {
+            by_fn: sink.to_string(),
+            at_span: value.span,
+            chain: Vec::new(),
+            open: None,
+        };
+        consumed.insert(owner.key.clone(), info);
     }
 
     /// The function a call names: the declaration a free-function callee
@@ -1950,6 +2115,21 @@ impl<'a> UseAfterMoveChecker<'a> {
             return None;
         };
         Some((type_name, method_name))
+    }
+}
+
+/// The repairs a checker given none names: none.
+static NO_REPAIRS: PlaceRepairs = PlaceRepairs {
+    optional: None,
+    emptying_optional: None,
+    replacing: None,
+};
+
+/// How a refusal names the keeper `sink`.
+fn keeper_name(sink: &Sink) -> String {
+    match sink {
+        Sink::Function(function) => format!("'{function}'"),
+        Sink::DynamicFn(_) => sink.to_string(),
     }
 }
 
