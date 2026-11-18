@@ -453,14 +453,13 @@ fn main()
     );
 }
 
-/// A binding of an unbounded type parameter is not a resource where it is
-/// written, so copying it consumes nothing, whatever type an instantiation
-/// gives it: both bindings stay usable, and the hook runs once.
+/// A generic body is decided at each type the program reaches it at: where
+/// its type parameter is a resource, copying a binding into another moves
+/// it, so a later use of the first is refused at that instantiation.
 #[test]
-fn a_generic_binding_copied_into_another_stays_usable_at_a_resource_type() {
-    assert_heap_guard_output(
-        &with_handle(
-            r#"
+fn a_generic_binding_used_after_moving_into_another_is_refused_at_a_resource_type() {
+    let source = with_handle(
+        r#"
 fn keep_both<T>(x T) T
     let a = x
     let b = a
@@ -471,8 +470,55 @@ fn main()
     let h = keep_both(Handle(1))
     println(f"kept {h.id}")
 "#,
+    );
+    let diagnostic = assert_refused_at(&source, "MER_OWN_003", "    return a");
+    assert!(
+        diagnostic.message.contains("compiled at `Handle`"),
+        "the refusal names the instantiation: {diagnostic:#?}"
+    );
+}
+
+/// The same body at a type that is no resource copies the value, and both
+/// bindings stay usable.
+#[test]
+fn a_generic_binding_copied_into_another_stays_usable_at_a_plain_type() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+fn keep_both<T>(x T) T
+    let a = x
+    let b = a
+    println("copied")
+    return a
+
+fn main()
+    let n = keep_both(7)
+    println(f"kept {n}")
+"#,
+        "copied\nkept 7",
+    );
+}
+
+/// Returning the binding the value moved to runs at a resource type, the
+/// hook once, where the caller's binding ends.
+#[test]
+fn a_generic_binding_returned_from_where_it_moved_runs_at_a_resource_type() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+fn keep_moved<T>(x T) T
+    let a = x
+    let b = a
+    println("moved")
+    return b
+
+fn main()
+    let h = keep_moved(Handle(1))
+    println(f"kept {h.id}")
+"#,
         ),
-        "copied\nkept 1\nclosed 1",
+        "moved\nkept 1\nclosed 1",
     );
 }
 

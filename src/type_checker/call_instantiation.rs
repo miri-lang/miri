@@ -46,6 +46,10 @@ pub(crate) struct GenericCall {
     /// generic method's for its own type parameters, whose owner's are
     /// answered through the receiver.
     pub(crate) body: Option<GenericBodyId>,
+    /// What a method call's receiver binds the parameters of the type
+    /// declaring `body` to; empty for a free function. The site pinning the
+    /// body reads them beside `bound`, so it names the whole copy reached.
+    pub(crate) receiver_bound: HashMap<String, Type>,
     /// The callee's type parameters, in declaration order.
     pub(crate) parameters: Vec<String>,
     /// The bounds the callee declares on its parameters.
@@ -288,7 +292,13 @@ impl TypeChecker {
         }
         self.record_call_mapping(call_id, &call.parameters, &call.bound);
         if let Some(body) = &call.body {
-            self.record_pinning_site(body.clone(), &call.bound, call.span, context);
+            let mut pins = call.receiver_bound.clone();
+            pins.extend(
+                call.bound
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), ty.clone())),
+            );
+            self.record_pinning_site(body.clone(), &pins, call.span, context);
         }
         let return_type = self.substitute_type(&call.declared_return, &call.bound);
         self.type_table.types.insert(call_id, return_type.clone());

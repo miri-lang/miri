@@ -21,18 +21,25 @@
 //!   when some copy the type checker knows reads the value at a type handing
 //!   its reference on ([`refusals_at_copies`]), and accepted otherwise.
 //!
-//! The copies the type checker knows are the classes inheriting a default
-//! and the instantiations of a generic class the program builds, a generic
+//! The copies the type checker knows are the classes inheriting a default,
+//! the instantiations of a generic class the program builds, a generic
 //! body's own included at each type the program reaches it at
-//! ([`super::reached_instantiations`]). A site some path reaches a use from
-//! still never moves at a copy the type checker does not know: such a copy
-//! keeps a funded copy rather than reading a value it moved.
+//! ([`super::reached_instantiations`]), and each set of types the program
+//! reaches a function or a method declaring type parameters of its own at
+//! ([`super::reached_instantiations::ReachedCopy`]). A site some path
+//! reaches a use from still never moves at a copy the type checker does not
+//! know: such a copy keeps a funded copy rather than reading a value it
+//! moved.
 
 use std::collections::{HashMap, HashSet};
 
 use super::context::{resolve_method_source, MethodSource, TypeDefinition};
+use super::escape_analysis::FunctionId;
 use super::generics::generic_parameter_name;
+use super::instantiation_requirements::{free_function_owner, GenericBodyId};
+use super::reached_instantiations::{declared_parameter_name, ReachedCopy};
 use super::utils::{hands_on_a_reference, runs_drop_hook, Instantiations, ResourceTypes};
+use crate::ast::statement::FunctionDeclarationData;
 use crate::ast::types::{Type, TypeKind, SELF_TYPE_NAME};
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
@@ -48,6 +55,15 @@ pub enum OpenBody {
     GenericClassMethod {
         class: String,
         parameters: Vec<String>,
+    },
+    /// A function or a method declaring type parameters of its own,
+    /// `parameters` in declaration order, compiled once per set of types
+    /// the program reaches `body` at. A method's `owner` is the body its
+    /// type's parameters, or a default's `Self`, are open in.
+    OwnParameters {
+        body: GenericBodyId,
+        parameters: Vec<String>,
+        owner: Option<Box<OpenBody>>,
     },
 }
 
@@ -67,23 +83,64 @@ impl OpenBody {
         })
     }
 
+    /// The body `decl`, declared as `function`, is: one declaring type
+    /// parameters of its own is compiled once per set of types the program
+    /// reaches it at, its owner's parameters open as `owner` says; any other
+    /// is `owner`.
+    pub(crate) fn of_declaration(
+        function: &FunctionId,
+        decl: &FunctionDeclarationData,
+        owner: Option<Self>,
+    ) -> Option<Self> {
+        let parameters: Vec<String> = (decl.generics.iter().flatten())
+            .filter_map(declared_parameter_name)
+            .map(str::to_string)
+            .collect();
+        if parameters.is_empty() {
+            return owner;
+        }
+        let body = match function {
+            FunctionId::Declared(declared) => {
+                (free_function_owner(&declared.module), declared.name.clone())
+            }
+            FunctionId::Method { owner, method } => (owner.clone(), method.clone()),
+            FunctionId::Free(_) => return owner,
+        };
+        Some(OpenBody::OwnParameters {
+            body,
+            parameters,
+            owner: owner.map(Box::new),
+        })
+    }
+
     /// The open parameter a value of `kind` is in this body: `Self` in a
-    /// default, a type parameter of the class in a generic class's method.
-    /// `None` for any other type, and for a parameter every copy reads as a
-    /// resource, a bound running a hook, which is consumed as any resource.
+    /// default, a type parameter of the class in a generic class's method,
+    /// one of the body's own. `None` for any other type, and for a
+    /// parameter every copy reads as a resource, a bound running a hook,
+    /// which is consumed as any resource.
     pub(crate) fn parameter_of(
         &self,
         kind: &TypeKind,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Option<String> {
         let name = generic_parameter_name(kind)?;
-        let is_open = match self {
+        (self.opens(name) && !runs_drop_hook(kind, type_definitions)).then(|| name.to_string())
+    }
+
+    /// Whether the type named `name` is open in this body.
+    fn opens(&self, name: &str) -> bool {
+        match self {
             OpenBody::Default { .. } => name == SELF_TYPE_NAME,
             OpenBody::GenericClassMethod { parameters, .. } => {
                 parameters.iter().any(|parameter| parameter == name)
             }
-        };
-        (is_open && !runs_drop_hook(kind, type_definitions)).then(|| name.to_string())
+            OpenBody::OwnParameters {
+                parameters, owner, ..
+            } => {
+                parameters.iter().any(|parameter| parameter == name)
+                    || owner.as_deref().is_some_and(|owner| owner.opens(name))
+            }
+        }
     }
 }
 
@@ -118,6 +175,9 @@ pub(crate) struct Copies<'a> {
     pub type_definitions: &'a HashMap<String, TypeDefinition>,
     pub resources: &'a ResourceTypes,
     pub instantiations: &'a Instantiations,
+    /// Every body the program reaches, at each set of types it is reached
+    /// at.
+    pub reached: &'a [ReachedCopy],
 }
 
 /// Each refusal of `refusals` some known copy reads the consumed value at a
@@ -130,7 +190,7 @@ pub(crate) fn refusals_at_copies(
     refusals
         .into_iter()
         .filter_map(|refusal| {
-            let copy = (copy_types(&refusal, copies).into_iter())
+            let copy = (copy_types(&refusal.body, &refusal.parameter, copies).into_iter())
                 .find(|ty| hands_on_at_copy(&ty.kind, copies.type_definitions, copies.resources))?;
             reported
                 .insert(refusal.error.span)
@@ -139,12 +199,13 @@ pub(crate) fn refusals_at_copies(
         .collect()
 }
 
-/// The types the copies the type checker knows read the open parameter of
-/// `refusal` at: each class inheriting the default, or the argument each
-/// instantiation of the generic class binds the parameter to.
-fn copy_types(refusal: &OpenRefusal, copies: &Copies<'_>) -> Vec<Type> {
+/// The types the copies of `body` the type checker knows read its open
+/// parameter `parameter` at: each class inheriting the default, the
+/// argument each instantiation of the generic class binds the parameter to,
+/// or the type each reached copy of a body declaring it binds it to.
+fn copy_types(body: &OpenBody, parameter: &str, copies: &Copies<'_>) -> Vec<Type> {
     let definitions = copies.type_definitions;
-    match &refusal.body {
+    match body {
         OpenBody::Default { trait_name, method } => (definitions.iter())
             .filter(|(_, definition)| matches!(definition, TypeDefinition::Class(_)))
             .filter(|(class, _)| {
@@ -154,13 +215,26 @@ fn copy_types(refusal: &OpenRefusal, copies: &Copies<'_>) -> Vec<Type> {
             .map(|(class, _)| crate::ast::factory::make_type(TypeKind::Custom(class.clone(), None)))
             .collect(),
         OpenBody::GenericClassMethod { class, parameters } => {
-            let Some(index) = parameters.iter().position(|p| *p == refusal.parameter) else {
+            let Some(index) = parameters.iter().position(|p| p == parameter) else {
                 return Vec::new();
             };
             (copies.instantiations.get(class).into_iter().flatten())
                 .filter_map(|arguments| arguments.get(index).cloned())
                 .collect()
         }
+        OpenBody::OwnParameters {
+            body,
+            parameters,
+            owner,
+        } => match owner {
+            Some(owner) if !parameters.iter().any(|p| p == parameter) => {
+                copy_types(owner, parameter, copies)
+            }
+            Some(_) | None => (copies.reached.iter())
+                .filter(|copy| copy.body() == body)
+                .filter_map(|copy| copy.bound(parameter).cloned())
+                .collect(),
+        },
     }
 }
 

@@ -337,7 +337,7 @@ fn same_arguments(left: &[Type], right: &[Type]) -> bool {
 }
 
 /// The name a type parameter's declaration gives it.
-pub(super) fn declared_parameter_name(generic: &Expression) -> Option<&str> {
+pub(crate) fn declared_parameter_name(generic: &Expression) -> Option<&str> {
     let ExpressionKind::GenericType(name, _, _) = &generic.node else {
         return None;
     };

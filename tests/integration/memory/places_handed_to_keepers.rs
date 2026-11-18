@@ -16,7 +16,7 @@
 
 use super::super::utils::*;
 
-const CODE: &str = "MER_OWN_008";
+pub(super) const CODE: &str = "MER_OWN_008";
 
 const PRELUDE: &str = r#"use system.io
 use system.memory
@@ -72,14 +72,14 @@ fn keep_opt(r Res?) int
 "#;
 
 /// The program `PRELUDE` opens, followed by `rest`.
-fn program(rest: &str) -> String {
+pub(super) fn program(rest: &str) -> String {
     format!("{PRELUDE}{rest}")
 }
 
 /// Asserts `rest` is refused with MER_OWN_008 at the line containing
 /// `handing`, the message naming `place` and the help carrying `repair`, the
 /// whole spelling it suggests.
-fn assert_refused(rest: &str, handing: &str, place: &str, repair: &str) {
+pub(super) fn assert_refused(rest: &str, handing: &str, place: &str, repair: &str) {
     let diagnostic = assert_refused_at(&program(rest), CODE, handing);
     assert!(
         diagnostic.message.contains(place),

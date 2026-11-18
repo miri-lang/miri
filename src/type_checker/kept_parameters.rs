@@ -356,20 +356,17 @@ fn collect_kept_method(
 /// holding one. The summary numbers a method's receiver 0 and each
 /// parameter a caller supplies from 1. A place that is a resource only at
 /// the copies of a generic owner's method binding one of the owner's type
-/// parameters to one is refused at those copies ([`OpenRefusal`]).
-///
-/// TODO: an `out` parameter of a generic free function's own type parameter,
-/// or of a method's, is never refused here: a body compiled per
-/// instantiation keeping it at a resource stays a funded copy (two holders);
-/// refusing it needs the per-instantiation refusal generic class methods get.
+/// parameters to one, or a function or method binding one of its own to
+/// one, is refused at those copies ([`OpenRefusal`]).
 fn kept_caller_place(
     decl: &FunctionDeclarationData,
     (function, owner): (&FunctionId, Option<&str>),
     facts: &KeepFacts<'_>,
     statement: &Statement,
 ) -> (Option<TypeError>, Vec<OpenRefusal>) {
-    let open_body =
+    let generic_owner =
         owner.and_then(|owner| OpenBody::of_generic_owner(owner, facts.type_definitions));
+    let open_body = OpenBody::of_declaration(function, decl, generic_owner);
     let mut closed = None;
     let mut open = Vec::new();
     for (place, resource) in caller_places(decl, owner, open_body.as_ref(), facts) {
@@ -429,8 +426,8 @@ fn caller_places<'d>(
 }
 
 /// When a place a body holds for its caller is a resource: at every copy of
-/// the body, or at the copies binding one of the generic owner's type
-/// parameters, by name, to a resource.
+/// the body, or at the copies binding one of the type parameters open in it,
+/// by name, to a resource.
 enum PlaceResource {
     Always,
     AtCopies(Vec<String>),
@@ -451,9 +448,9 @@ fn restored_receiver_resource(owner: &str, facts: &KeepFacts<'_>) -> Option<Plac
 }
 
 /// When the place the `out` parameter `param` holds is a resource: always
-/// ([`ResourceTypes::holds`]), or, written as a type parameter of the generic
-/// owner `open_body` is a method of, or an optional of one, at the copies
-/// binding that parameter to a resource. `None` when it never is.
+/// ([`ResourceTypes::holds`]), or, written as a type parameter open in
+/// `open_body`, or an optional of one, at the copies binding that parameter
+/// to a resource. `None` when it never is.
 fn out_place_resource(
     param: &Parameter,
     open_body: Option<&OpenBody>,

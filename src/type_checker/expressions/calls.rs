@@ -54,6 +54,7 @@ use crate::error::syntax::Span;
 use crate::type_checker::call_instantiation::{type_arguments_noun, GenericCall, ParameterBound};
 use crate::type_checker::context::{resolve_method_source, Context, MethodSource, TypeDefinition};
 use crate::type_checker::diagnostics::spelled;
+use crate::type_checker::instantiation_limits::instantiation_argument;
 use crate::type_checker::instantiation_requirements::{free_function_owner, GenericBodyId};
 use crate::type_checker::type_mismatch::TypeSides;
 use crate::type_checker::utils::{is_gpu_compatible, is_zero_fillable_element};
@@ -332,6 +333,37 @@ impl TypeChecker {
         Some((declaring.to_string(), method.clone()))
     }
 
+    /// What the receiver of the method call `func` binds the parameters of
+    /// `body`'s declaring type to, as the receiver's own call to the method
+    /// pins them ([`Self::bodies_run_for`]): so the site the call's own type
+    /// parameters are pinned at names the whole copy the call reaches, the
+    /// owner's arguments included. Empty for a call with no receiver.
+    fn receiver_bound(&self, func: &Expression, body: &GenericBodyId) -> HashMap<String, Type> {
+        let ExpressionKind::Member(receiver, _) = &func.node else {
+            return HashMap::new();
+        };
+        let Some(receiver_type) = self.get_type(receiver.id) else {
+            return HashMap::new();
+        };
+        let TypeKind::Custom(type_name, arguments) = &receiver_type.kind else {
+            return HashMap::new();
+        };
+        let definitions = &self.type_table.global_type_definitions;
+        let parameters = (definitions.get(type_name))
+            .and_then(TypeDefinition::generics)
+            .unwrap_or_default();
+        let substitution: HashMap<String, Type> = (parameters.iter())
+            .zip(arguments.iter().flatten())
+            .filter_map(|(parameter, argument)| {
+                Some((parameter.name.clone(), instantiation_argument(argument)?))
+            })
+            .collect();
+        (self.bodies_run_for(type_name, &body.1, &substitution, receiver_type))
+            .into_iter()
+            .find_map(|(run, pins)| (run == *body).then_some(pins))
+            .unwrap_or_default()
+    }
+
     fn call_func_name(func: &Expression) -> Option<&str> {
         match &func.node {
             ExpressionKind::Identifier(name, _) => Some(name.as_str()),
@@ -565,11 +597,14 @@ impl TypeChecker {
                     &generic_map,
                 ),
             Some(parameters) => {
+                let body = (self.free_function_body(func)).or_else(|| self.method_body(func));
+                let receiver_bound = (body.as_ref())
+                    .map(|body| self.receiver_bound(func, body))
+                    .unwrap_or_default();
                 let call = GenericCall {
                     callee: Self::call_func_name(func).map(str::to_string),
-                    body: self
-                        .free_function_body(func)
-                        .or_else(|| self.method_body(func)),
+                    body,
+                    receiver_bound,
                     parameters,
                     bounds,
                     declared_return,

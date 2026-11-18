@@ -85,6 +85,7 @@ mod limits;
 mod program;
 mod roots;
 
+pub(crate) use limits::declared_parameter_name;
 pub(crate) use program::ReachedBodies;
 pub use program::{CopyOwner, ReachedCopy, ReachedProgram};
 

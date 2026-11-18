@@ -52,6 +52,7 @@ use super::slot_conventions::SlotConventions;
 use super::type_identities::DeclaredNames;
 use super::utils::{hands_on_a_reference, runs_drop_hook, ResourceTypes};
 use super::vtable_selectors::DispatchTable;
+use super::ModuleId;
 use crate::ast::captures::collect_lambda_captures;
 
 /// Why `value.drop()` is refused on a receiver the scope does not own.
@@ -453,7 +454,17 @@ pub struct UseAfterMoveChecker<'a> {
     /// The spellings a refusal of handing a value out of a place names its
     /// repair in.
     repairs: Option<&'a PlaceRepairs>,
+    /// The module declaring each top-level function, by statement id.
+    modules: &'a HashMap<usize, ModuleId>,
 }
+
+/// What the checker reads of the program's declared functions: the function
+/// each free-function callee resolved to, by callee id, and the module
+/// declaring each top-level function, by statement id.
+pub(crate) type DeclaredFunctions<'a> = (
+    &'a HashMap<usize, DeclaredFunction>,
+    &'a HashMap<usize, ModuleId>,
+);
 
 /// A resource a closure captures, or a value whose type is open in a body
 /// compiled per copy.
@@ -485,7 +496,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         types: &'a HashMap<usize, Type>,
         type_definitions: &'a HashMap<String, TypeDefinition>,
         escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
-        callees: &'a HashMap<usize, DeclaredFunction>,
+        (callees, modules): DeclaredFunctions<'a>,
         vtable_calls: VtableCalls<'a>,
         resources: &'a ResourceTypes,
     ) -> Self {
@@ -514,6 +525,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             open_refusals: Vec::new(),
             places: PlaceBindings::default(),
             repairs: None,
+            modules,
         }
     }
 
@@ -572,7 +584,7 @@ impl<'a> UseAfterMoveChecker<'a> {
 
     fn check_stmt(&mut self, stmt: &Statement, consumed: &mut HashMap<String, ConsumedInfo>) {
         match &stmt.node {
-            StatementKind::FunctionDeclaration(decl) => self.check_fn_decl(decl),
+            StatementKind::FunctionDeclaration(decl) => self.check_function(stmt.id, decl),
             StatementKind::Block(stmts) => self.check_block(stmts, consumed),
             StatementKind::Expression(expr) => {
                 self.check_expr(expr, consumed);
@@ -617,18 +629,14 @@ impl<'a> UseAfterMoveChecker<'a> {
             }
             StatementKind::Class(class_data) => {
                 let open = self.generic_class_body(&class_data.name);
-                self.check_open_method_bodies(&class_data.body, |_| open.clone());
+                let owner = self.declared_name(&class_data.name);
+                self.check_open_method_bodies((owner, &class_data.body), |_| open.clone());
             }
-            StatementKind::Trait(name, _, _, methods, _) => {
-                let trait_name = self.declared_name(name).map(str::to_string);
-                self.check_open_method_bodies(methods, |method| {
-                    let trait_name = trait_name.clone()?;
-                    let method = method.to_string();
-                    Some(OpenBody::Default { trait_name, method })
-                });
+            StatementKind::Trait(name, _, _, methods, _) => self.check_trait_methods(name, methods),
+            StatementKind::Struct(name, _, _, methods, _, _)
+            | StatementKind::Enum(name, _, _, methods, _, _) => {
+                self.check_open_method_bodies((self.declared_name(name), methods), |_| None);
             }
-            StatementKind::Struct(_, _, _, methods, _, _)
-            | StatementKind::Enum(_, _, _, methods, _, _) => self.check_method_bodies(methods),
             StatementKind::Break => self.note_loop_exit(consumed, |exits| &mut exits.breaks),
             StatementKind::Continue => self.note_loop_exit(consumed, |exits| &mut exits.continues),
             StatementKind::Empty
@@ -639,27 +647,64 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
-    /// Analyses each method of a type declaration as a function body. A method's
-    /// receiver is a parameter like any other, so `self` is never owned there.
-    fn check_method_bodies(&mut self, members: &[Statement]) {
-        for member in members {
-            if let StatementKind::FunctionDeclaration(decl) = &member.node {
-                self.check_fn_decl(decl);
-            }
-        }
+    /// Analyses the methods of the trait named by `name`, each default
+    /// compiled once per class inheriting it.
+    fn check_trait_methods(&mut self, name: &Expression, methods: &[Statement]) {
+        let trait_name = self.declared_name(name);
+        self.check_open_method_bodies((trait_name, methods), |method| {
+            let trait_name = trait_name?.to_string();
+            let method = method.to_string();
+            Some(OpenBody::Default { trait_name, method })
+        });
     }
 
-    /// [`Self::check_method_bodies`] for the methods of a class or a trait,
-    /// each analysed as the body `open` names for it, when it is compiled
-    /// once per copy.
+    /// Analyses the function `decl`, declared by the statement `statement`:
+    /// a top-level one declaring type parameters of its own as a body
+    /// compiled once per set of types the program reaches it at.
+    ///
+    /// Every top-level function's module is recorded before any body is
+    /// checked, so a statement missing from `modules` is a function declared
+    /// inside another body. Such a function is never generic, as one is
+    /// refused where it is declared, so it is analysed as part of the
+    /// enclosing body, reading that body's open parameters.
+    fn check_function(
+        &mut self,
+        statement: usize,
+        decl: &crate::ast::statement::FunctionDeclarationData,
+    ) {
+        let Some(module) = self.modules.get(&statement) else {
+            self.check_fn_decl(decl);
+            return;
+        };
+        let function = FunctionId::Declared(DeclaredFunction {
+            module: module.clone(),
+            name: decl.name.clone(),
+        });
+        let open = OpenBody::of_declaration(&function, decl, None);
+        let outer = std::mem::replace(&mut self.open_body, open);
+        self.check_fn_decl(decl);
+        self.open_body = outer;
+    }
+
+    /// Analyses each method of a type declaration, declared as `owner`, as a
+    /// function body, each as the body `open` names for it when it is
+    /// compiled once per copy, and one declaring type parameters of its own
+    /// as compiled once per set of types the program reaches it at. A
+    /// method's receiver is a parameter like any other, so `self` is never
+    /// owned there.
     fn check_open_method_bodies(
         &mut self,
-        members: &[Statement],
+        (owner, members): (Option<&str>, &[Statement]),
         open: impl Fn(&str) -> Option<OpenBody>,
     ) {
         for member in members {
             if let StatementKind::FunctionDeclaration(decl) = &member.node {
-                let outer = std::mem::replace(&mut self.open_body, open(&decl.name));
+                let mut body = open(&decl.name);
+                if let Some(owner) = owner {
+                    let method = FunctionId::method(owner, &decl.name);
+                    body = OpenBody::of_declaration(&method, decl, body);
+                }
+                let outer = std::mem::replace(&mut self.open_body, body);
                 self.check_fn_decl(decl);
                 self.open_body = outer;
             }
@@ -1891,10 +1936,6 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// element no repair can take out, as a copy the call funds. Whether the
     /// hand-over was refused.
     fn refuses_a_borrowed_place(&mut self, value: &Expression, sink: &Sink) -> bool {
-        // TODO: in a generic free function, a value of the function's own
-        // type parameter read out of a place stays a funded copy (two
-        // holders) at an instantiation reading it as a resource; refusing it
-        // needs the per-instantiation refusal generic class methods get.
         let open = self.open_parameter(value);
         if open.is_none() && !self.is_resource_expr(value) {
             return false;

@@ -36,27 +36,73 @@ fn main()
     );
 }
 
+const NODE: &str = r#"
+class Node
+    var name String
+    fn drop()
+        println(f"drop {self.name}")
+"#;
+
+/// A generic function taking each element out of the list it is handed: the
+/// repair for keeping a loop binding at a resource type.
+const PICK_OUT: &str = r#"
+use system.io
+use system.collections.list
+
+fn pick_out<T>(xs out List<T>) T?
+    var best T? = None
+    while true
+        match xs.remove_at(0)
+            Some(x): best = Some(x)
+            None: break
+    best
+"#;
+
+/// A loop binding is borrowed from the list the loop walks, so keeping it
+/// in a body compiled at a resource type is refused there.
+#[test]
+fn a_generic_loop_keeping_a_class_element_is_refused() {
+    let diagnostic = assert_refused_at(
+        &format!(
+            "{PICK}{NODE}
+fn main()
+    var xs = List<Node>()
+    xs.push(Node(name: \"a\" + \"1\"))
+    match pick(xs)
+        Some(n): println(f\"got {{n.name}}\")
+        None: println(\"none\")
+"
+        ),
+        "MER_OWN_008",
+        "        best = Some(x)",
+    );
+    assert!(
+        diagnostic.message.contains("compiled at `Node`"),
+        "the refusal names the instantiation: {diagnostic:#?}"
+    );
+    let help = diagnostic.help.as_deref().unwrap_or_default();
+    assert!(
+        help.contains("`match xs.remove_at(0)`"),
+        "the refusal carries the repair: {diagnostic:#?}"
+    );
+}
+
 #[test]
 fn a_generic_loop_releases_each_class_element_it_wraps() {
     assert_heap_guard_output(
         &format!(
-            "{PICK}
-class Node
-    var name String
-    fn drop()
-        println(f\"drop {{self.name}}\")
-
+            "{PICK_OUT}{NODE}
 fn main()
     var xs = List<Node>()
     xs.push(Node(name: \"a\" + \"1\"))
     xs.push(Node(name: \"b\" + \"2\"))
-    match pick(xs)
+    match pick_out(xs)
         Some(n): println(f\"got {{n.name}}\")
         None: println(\"none\")
-    println(\"end\")
+    println(f\"left {{xs.length()}}\")
 "
         ),
-        "got b2\nend\ndrop a1\ndrop b2",
+        "drop a1\ngot b2\ndrop b2\nleft 0",
     );
 }
 

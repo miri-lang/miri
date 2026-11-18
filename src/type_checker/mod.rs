@@ -1187,7 +1187,10 @@ impl TypeChecker {
             &self.type_table.types,
             &self.type_table.global_type_definitions,
             &context.escape_summaries,
-            &self.fn_analysis.declared_callees,
+            (
+                &self.fn_analysis.declared_callees,
+                &self.fn_analysis.declaring_modules,
+            ),
             use_after_move::VtableCalls {
                 dispatch: &self.dispatch_table,
                 conventions: &self.slot_conventions,
@@ -1225,6 +1228,7 @@ impl TypeChecker {
             type_definitions: &self.type_table.global_type_definitions,
             resources: self.resource_types(),
             instantiations: self.ownership_instantiations(),
+            reached: self.reached_program().copies(),
         };
         let refusals = open_consumption::refusals_at_copies(open_refusals, &copies);
         self.diagnostics.extend_errors(refusals);
@@ -1282,6 +1286,7 @@ impl TypeChecker {
             type_definitions,
             resources: self.resource_types(),
             instantiations: self.ownership_instantiations(),
+            reached: self.reached_program().copies(),
         };
         let refusals = open_consumption::refusals_at_copies(open_refusals, &copies);
         self.diagnostics.extend_errors(refusals);

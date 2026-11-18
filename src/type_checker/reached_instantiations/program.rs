@@ -65,6 +65,16 @@ pub struct ReachedCopy {
 }
 
 impl ReachedCopy {
+    /// The declaration this copy is compiled from.
+    pub(crate) fn body(&self) -> &GenericBodyId {
+        &self.step.body
+    }
+
+    /// The type this copy binds the parameter `parameter` to.
+    pub(crate) fn bound(&self, parameter: &str) -> Option<&Type> {
+        self.step.bound.get(parameter)
+    }
+
     /// The bodies whose sites led to this one, nearest first, each named by
     /// the owner it is declared in and its name; empty for a body a site
     /// outside every generic body reaches.
