@@ -1,0 +1,47 @@
+{
+ "run_id": "20261118T133704Z",
+ "suspect": [
+  {
+   "cell": "matmul/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.1097842484274658,
+   "baseline": 1.5562337830324888,
+   "tonight": 1.7270837392801426
+  },
+  {
+   "cell": "nbody/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.1831395533430362,
+   "baseline": 1.4015503982668134,
+   "tonight": 1.658229712193152
+  },
+  {
+   "cell": "nbody/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.1943402111388015,
+   "baseline": 1.3998347406764586,
+   "tonight": 1.6718789197389512
+  },
+  {
+   "cell": "sieve/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.3981924020524454,
+   "baseline": 1.8520888105610323,
+   "tonight": 2.589576502852786
+  },
+  {
+   "cell": "sieve/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.4246385337543723,
+   "baseline": 2.1128751058828565,
+   "tonight": 3.010083292851067
+  }
+ ],
+ "regressed": [],
+ "recovered": [
+  {
+   "cell": "binary-trees/miri/s/hot",
+   "measure": "time_vs_c"
+  }
+ ]
+}
