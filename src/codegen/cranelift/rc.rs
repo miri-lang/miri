@@ -249,7 +249,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Address of the runtime clone helper for an element of `elem_kind`.
     ///
-    /// User classes that implement `Cloneable` produce a clone helper, and an
+    /// User classes that implement the copy trait produce a clone helper, and an
     /// inner list whose elements are cloned is copied by the runtime's list
     /// copy ([`TypeFacts::copies_inner_list`]); other built-in collections
     /// and strings use the runtime's default IncRef path.
@@ -2109,15 +2109,16 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Generates `miri.{type_name}.$clone(ptr) -> ptr` for each concrete class that
-    /// implements `Cloneable`.
+    /// implements the copy trait.
     ///
     /// This function is used as `elem_clone_fn` in Array/List/Set so that
     /// `miri_rt_XXX_clone` produces independent element copies instead of just
     /// IncRef-ing shared pointers.  It delegates to the user's compiled `clone()`
     /// method (`{TypeName}_clone`), which already encodes any deep-copy logic.
     ///
-    /// Only generated for concrete (non-generic, non-abstract) classes whose
-    /// `traits` list includes `"Cloneable"` (checked with inheritance walk).
+    /// Only generated for a concrete (non-abstract) class implementing the
+    /// copy trait, the trait declared `@copy_trait`
+    /// ([`TypeFacts::has_clone_thunk`]).
     pub(crate) fn generate_clone_function(
         module: &mut ObjectModule,
         ctx: &mut cranelift_codegen::Context,

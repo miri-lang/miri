@@ -1,0 +1,10 @@
+// expect: MER_TYP_093
+// summary: Triggers MER_TYP_093: a program marks its own trait `@copy_trait`, which the standard library's Cloneable already is.
+use system.io
+
+@copy_trait
+trait Duplicable
+    fn clone() Self
+
+fn main()
+    println("one copy trait")

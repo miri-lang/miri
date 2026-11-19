@@ -73,7 +73,7 @@ fn normalize_stmt(stmt: &mut Statement) {
             normalize_expr_list(traits);
         }
         StatementKind::Class(class_data) => normalize_class_stmt(class_data),
-        StatementKind::Trait(name, generics, parent_traits, body, _) => {
+        StatementKind::Trait(name, generics, parent_traits, body, _, _) => {
             normalize_nominal_type_decl(name, generics, parent_traits, body)
         }
     }

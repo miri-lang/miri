@@ -241,7 +241,7 @@ impl<'s> Declarations<'s> {
                 self.bodies.insert(name.clone(), bodies(&class.body));
                 self.classes.push(name);
             }
-            StatementKind::Trait(name, _, parents, body, _) => {
+            StatementKind::Trait(name, _, parents, body, _, _) => {
                 let Some(name) = identity(name) else {
                     return;
                 };

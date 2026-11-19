@@ -83,6 +83,7 @@ fn trait_def(name: &str, parents: &[&str], methods: &[(&str, MethodInfo)]) -> Tr
         parent_trait_args: BTreeMap::new(),
         methods: method_map,
         module: String::new(),
+        is_copy_trait: false,
     }
 }
 
@@ -623,18 +624,20 @@ fn element_equals() -> MethodInfo {
     }
 }
 
-/// `item` beside the two traits a container asks `compare` and `clone` of.
+/// `item` beside the two traits a container asks `compare` and `clone` of,
+/// the second marked the copy trait.
 fn defs_with_item(item: ClassDefinition) -> HashMap<String, TypeDefinition> {
+    let copy_trait = TraitDefinition {
+        is_copy_trait: true,
+        ..trait_def("Cloneable", &[], &[])
+    };
     make_defs([
         ("Item".to_string(), TypeDefinition::Class(item)),
         (
             "Comparable".to_string(),
             TypeDefinition::Trait(trait_def("Comparable", &[], &[])),
         ),
-        (
-            "Cloneable".to_string(),
-            TypeDefinition::Trait(trait_def("Cloneable", &[], &[])),
-        ),
+        ("Cloneable".to_string(), TypeDefinition::Trait(copy_trait)),
     ])
 }
 

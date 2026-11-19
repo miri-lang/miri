@@ -95,7 +95,7 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
             lower_class_decl(ctx, &class_data.name);
             Ok(())
         }
-        StatementKind::Trait(name_expr, _, _, _, _) => {
+        StatementKind::Trait(name_expr, _, _, _, _, _) => {
             lower_trait_decl(ctx, name_expr);
             Ok(())
         }

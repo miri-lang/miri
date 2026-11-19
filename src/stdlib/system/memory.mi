@@ -32,6 +32,11 @@ runtime "core" fn miri_rt_replace<T>(place out T, new T) T
 ///     use system.memory
 ///     let a = "hello"
 ///     let b = a.clone()   // b is a separate copy
+///
+/// `@copy_trait` makes this the trait a copy calls `clone` through; the
+/// compiler finds it by the marker, never by its name, and a program never
+/// needs to write it.
+@copy_trait
 public trait Cloneable
     public fn clone() Self
 

@@ -83,6 +83,9 @@ impl TypeChecker {
             StatementKind::Enum(_, _, _, _, _, attributes) => {
                 Some((attributes, AttributeTarget::Enum))
             }
+            StatementKind::Trait(_, _, _, _, _, attributes) => {
+                Some((attributes, AttributeTarget::Trait))
+            }
             StatementKind::FunctionDeclaration(decl) => {
                 Some((&decl.attributes, AttributeTarget::Function))
             }
@@ -439,18 +442,20 @@ impl TypeChecker {
             StatementKind::Class(class_data) => {
                 self.check_class_statement(class_data, statement.span, context)
             }
-            StatementKind::Trait(name, generics, parent_traits, body, visibility) => self
-                .check_trait(
+            StatementKind::Trait(name, generics, parent_traits, body, visibility, attributes) => {
+                self.check_trait(
                     TraitDeclaration {
                         name,
                         generics,
                         parent_traits,
                         body,
                         visibility,
+                        attributes,
                         span: statement.span,
                     },
                     context,
-                ),
+                )
+            }
             StatementKind::Type(exprs, visibility) => {
                 self.check_type_statement(exprs, visibility, context)
             }

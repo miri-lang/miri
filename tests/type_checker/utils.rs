@@ -376,6 +376,7 @@ fn trait_def() -> TypeDefinition {
         parent_trait_args: BTreeMap::new(),
         methods: BTreeMap::<String, MethodInfo>::new(),
         module: "test".to_string(),
+        is_copy_trait: false,
     })
 }
 

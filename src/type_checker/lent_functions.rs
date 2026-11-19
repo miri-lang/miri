@@ -242,7 +242,9 @@ impl LendingMethods {
             StatementKind::Class(class) => (class.name.as_ref(), class.body.as_slice()),
             StatementKind::Struct(name, _, _, methods, _, _)
             | StatementKind::Enum(name, _, _, methods, _, _)
-            | StatementKind::Trait(name, _, _, methods, _) => (name.as_ref(), methods.as_slice()),
+            | StatementKind::Trait(name, _, _, methods, _, _) => {
+                (name.as_ref(), methods.as_slice())
+            }
             StatementKind::Block(inner) => {
                 for statement in inner {
                     self.collect_declared(statement, facts, next);

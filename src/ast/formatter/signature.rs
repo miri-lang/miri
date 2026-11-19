@@ -53,10 +53,14 @@ pub fn signature(node: &Statement) -> Option<Signature> {
             });
             Some(built("struct", rendered_name(name), sink))
         }
-        StatementKind::Trait(name, generics, parents, _, level) => {
+        StatementKind::Trait(name, generics, parents, _, level, attrs) => {
             let mut sink = Sink::new();
             sink.with_written_modifiers(modifiers, |sink| {
-                full::trait_header(sink, name, generics.as_deref(), parents, level, 0)
+                let heading = full::TraitHeading {
+                    level,
+                    attributes: attrs,
+                };
+                full::trait_header(sink, name, generics.as_deref(), parents, heading, 0)
             });
             Some(built("trait", rendered_name(name), sink))
         }

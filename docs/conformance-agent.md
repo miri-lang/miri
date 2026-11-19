@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 124
+## Error fixtures (`fail/`) — 127
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -139,6 +139,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TYP_090 | Triggers MER_TYP_090: a closure writes to a binding it captured. |
 | MER_TYP_091 | Triggers MER_TYP_091: a class method assigns its whole receiver. |
 | MER_TYP_092 | Triggers MER_TYP_092: a program marks its own enum `@optional`, which the standard library's Option already is. |
+| MER_TYP_093 | Triggers MER_TYP_093: a program marks its own trait `@copy_trait`, which the standard library's Cloneable already is. |
 
 ## Warning fixtures (`warn/`) — 13
 
@@ -160,7 +161,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 133
+## Accepted fixtures (`pass/`) — 136
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -295,6 +296,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_TYP_090 | Accepted counterpart of MER_TYP_090: the state lives in a class instance the closure captures. |
 | MER_TYP_091 | Accepted counterpart of MER_TYP_091: the class method assigns the fields, and an enum method replaces its receiver. |
 | MER_TYP_092 | Accepted counterpart of MER_TYP_092: the enum of the optional's shape is declared without the marker, beside `T?`. |
+| MER_TYP_093 | Accepted counterpart of MER_TYP_093: the trait of the copy trait's shape is declared without the marker. |
 | e2e_enum | End-to-end enum match expression |
 | e2e_generic_identity | End-to-end identity function without generic |
 | e2e_hello | End-to-end hello world program |

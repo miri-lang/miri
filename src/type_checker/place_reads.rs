@@ -168,15 +168,31 @@ impl BorrowedPlace {
                 receiver,
                 taking,
                 ..
-            } => Some(copying_or_taking_out(call, receiver, taking.as_deref())),
+            } => Some(copying_or_taking_out(
+                call,
+                receiver,
+                taking.as_deref(),
+                repairs.copy_trait.as_deref(),
+            )),
         }
     }
 }
 
 /// The repair for a value a call hands back out of `receiver`: keep a copy
-/// of it, or take it out with the receiver's emptying method `taking`.
-fn copying_or_taking_out(call: &str, receiver: &str, taking: Option<&str>) -> String {
-    let copying = format!("keep a copy, `{call}.clone()`, when its type implements `Cloneable`");
+/// of it, through the copy trait `copy_trait` where one is declared, or take
+/// it out with the receiver's emptying method `taking`.
+fn copying_or_taking_out(
+    call: &str,
+    receiver: &str,
+    taking: Option<&str>,
+    copy_trait: Option<&str>,
+) -> String {
+    let copying = match copy_trait {
+        Some(copy_trait) => {
+            format!("keep a copy, `{call}.clone()`, when its type implements `{copy_trait}`")
+        }
+        None => format!("keep a copy, `{call}.clone()`, when its type declares one"),
+    };
     match taking {
         Some(method) => format!(
             "take it out instead, with `{receiver}.{method}`, which hands it over owned, \
@@ -198,6 +214,8 @@ pub(crate) struct PlaceRepairs {
     /// The function that puts a new value in a place and hands back the one
     /// it held.
     pub replacing: Option<ReplacingFunction>,
+    /// The copy trait, whose `clone` keeps a copy of a value.
+    pub copy_trait: Option<String>,
 }
 
 /// A function putting a new value in the place its `out` parameter names
@@ -275,9 +293,9 @@ impl PlaceRepairs {
     }
 
     /// The repairs the declarations of `modules`, each a module's
-    /// top-level statements, provide: `optional` and its methods among
-    /// `type_definitions`, a runtime entry point's effects among `effects`,
-    /// and each function's module among `declaring`.
+    /// top-level statements, provide: `optional` and its methods, and the
+    /// copy trait, among `type_definitions`, a runtime entry point's effects
+    /// among `effects`, and each function's module among `declaring`.
     pub(crate) fn declared<'s>(
         modules: impl IntoIterator<Item = &'s [Statement]>,
         (optional, type_definitions, emptying): (
@@ -296,6 +314,7 @@ impl PlaceRepairs {
             emptying_optional,
             replacing: (modules.into_iter())
                 .find_map(|module| replacing_function(module, effects, declaring)),
+            copy_trait: super::context::copy_trait(type_definitions).map(str::to_string),
         }
     }
 }
@@ -878,5 +897,34 @@ fn keeper_of(hop: &EscapeNextHop) -> String {
         EscapeNextHop::Built => "the value built of it".to_string(),
         EscapeNextHop::ClosureCapture { .. } => "the closure capturing it".to_string(),
         EscapeNextHop::DynamicFn { fn_name } => format!("dynamic fn '{fn_name}'"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_returned_repair_without_a_copy_trait_or_a_taking_method() {
+        let definitions = HashMap::new();
+        let copy_trait = crate::type_checker::context::copy_trait(&definitions);
+        let repair = copying_or_taking_out("box.get()", "box", None, copy_trait);
+        assert_eq!(
+            repair,
+            "keep a copy, `box.get().clone()`, when its type declares one: 'box' keeps \
+             holding the value the call hands back"
+        );
+    }
+
+    #[test]
+    fn test_returned_repair_without_a_copy_trait_with_a_taking_method() {
+        let definitions = HashMap::new();
+        let copy_trait = crate::type_checker::context::copy_trait(&definitions);
+        let repair = copying_or_taking_out("box.get()", "box", Some("take()"), copy_trait);
+        assert_eq!(
+            repair,
+            "take it out instead, with `box.take()`, which hands it over owned, or keep a \
+             copy, `box.get().clone()`, when its type declares one"
+        );
     }
 }

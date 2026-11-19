@@ -17,7 +17,9 @@ use crate::ast::types::TypeKind;
 use crate::error::syntax::Span;
 use crate::runtime_effects::{ElementRole, ParamUse, ResultUse};
 
-use super::super::copy_judgement::{copied_element_kinds, copy_refusal, refuses_copy_of, OpenCopy};
+use super::super::copy_judgement::{
+    copied_element_kinds, copy_refusal, refuses_copy_of, OpenCopy, RefusedCopy,
+};
 use super::{argument_value, UseAfterMoveChecker};
 
 impl UseAfterMoveChecker<'_> {
@@ -73,7 +75,12 @@ impl UseAfterMoveChecker<'_> {
             }
         }
         if refuses_copy_of(kind, role, self.type_definitions, self.resources) {
-            self.errors.push(copy_refusal(kind, None, span, Vec::new()));
+            let refused = RefusedCopy {
+                element: kind,
+                copy_trait: crate::type_checker::context::copy_trait(self.type_definitions),
+            };
+            self.errors
+                .push(copy_refusal(refused, None, span, Vec::new()));
         }
     }
 }

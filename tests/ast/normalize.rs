@@ -312,7 +312,7 @@ fn test_normalize_walks_trait_member_types() {
     );
     let mut prog = Program { body: vec![stmt] };
     normalize(&mut prog);
-    let StatementKind::Trait(_, _, _, body, _) = &prog.body[0].node else {
+    let StatementKind::Trait(_, _, _, body, _, _) = &prog.body[0].node else {
         panic!("expected Trait");
     };
     let StatementKind::Expression(field_expr) = &body[0].node else {

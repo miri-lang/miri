@@ -16,10 +16,11 @@
 //! `mir::dispatch::element_equality`, the pipeline's demand for element
 //! bodies, codegen's clone thunk), and the ownership verdict refuses a
 //! keeping body among [`ThunkBodies`], the set of every body [`thunk_body`]
-//! names for some class. A container asks `clone` of a concrete class
-//! implementing `Cloneable`, `compare` of one implementing `Comparable`,
-//! `equals` of any class whose `equals` matches an element against another
-//! ([`is_element_equality`]), and `hash` of one declaring `equals`. The thunk
+//! names for some class. A container asks `clone` of a concrete class that
+//! implements the copy trait, the trait declared `@copy_trait`. It asks
+//! `compare` of one implementing `Comparable`, `equals` of any class whose
+//! `equals` matches an element against another ([`is_element_equality`]),
+//! and `hash` of one declaring `equals`. The thunk
 //! calls the body the element's own class resolves, by name, never through a
 //! vtable. A method of one of those names that no class reaches so is an
 //! ordinary method.
@@ -27,13 +28,13 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::types::{
-    is_trait_self, TypeKind, CLONEABLE_TRAIT_NAME, CLONE_METHOD_NAME, EQUALS_METHOD_NAME,
-    HASH_METHOD_NAME, ORDERING_METHOD_NAME, ORDERING_TRAIT_NAME,
+    is_trait_self, TypeKind, CLONE_METHOD_NAME, EQUALS_METHOD_NAME, HASH_METHOD_NAME,
+    ORDERING_METHOD_NAME, ORDERING_TRAIT_NAME,
 };
 
 use super::context::{
-    class_implements_trait, class_method_declaration, resolve_method_source, MethodInfo,
-    MethodSource, TypeDefinition,
+    class_implements_trait, class_method_declaration, implements_copy_trait, resolve_method_source,
+    MethodInfo, MethodSource, TypeDefinition,
 };
 
 /// A question a container's runtime thunk asks of a class element, answered
@@ -162,7 +163,7 @@ pub fn thunk_body<'d>(
 }
 
 /// Whether a container asks a `class` element `question`, so a thunk for it
-/// exists: a copy of a concrete class implementing `Cloneable` (an abstract
+/// exists: a copy of a concrete class implementing the copy trait (an abstract
 /// one has no instance of its own to copy), the order of a class
 /// implementing `Comparable`, the match of any class, and the hash of a
 /// class declaring `equals`. A hash thunk exists for such a class whether or
@@ -175,7 +176,7 @@ pub fn is_asked_of(
     type_definitions: &HashMap<String, TypeDefinition>,
 ) -> bool {
     // TODO: only a class gets a thunk. An enum with a drop hook that
-    // implements `Cloneable` has no clone thunk, because codegen emits thunks
+    // implements the copy trait has no clone thunk, because codegen emits thunks
     // for class instances alone and an enum element may be stored as a bare
     // discriminant; so a collection of one is refused wherever it is copied
     // (`copy_judgement::refuses_copy_of`) instead of copying each element
@@ -186,8 +187,7 @@ pub fn is_asked_of(
     };
     match question {
         ThunkQuestion::Clone => {
-            !definition.is_abstract
-                && class_implements_trait(class, CLONEABLE_TRAIT_NAME, type_definitions)
+            !definition.is_abstract && implements_copy_trait(class, type_definitions)
         }
         ThunkQuestion::Compare => {
             class_implements_trait(class, ORDERING_TRAIT_NAME, type_definitions)

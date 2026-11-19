@@ -850,6 +850,7 @@ fn test_trait_is_pointer_sized() {
             parent_trait_args: BTreeMap::new(),
             methods: BTreeMap::new(),
             module: String::new(),
+            is_copy_trait: false,
         }),
     );
 

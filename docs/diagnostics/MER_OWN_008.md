@@ -27,8 +27,8 @@ A `match` on a value the scope owns â€” a local, a parameter, a call's result â€
 - `` remove the elements instead of walking them: in a `while` loop, `match {list}.{method}(0)`, hand on the element of `{present}`, and `break` on `{absent}` ``
 - `` give the caller a new value and hand on the old one: `{replace}({name}, <new value>)`{use} ``
 - `` hand back the old value and leave a new one in self: `return {replace}(self, <new value>)`{use} ``
-- `` take it out instead, with `{receiver}.{method}`, which hands it over owned, or keep a copy, `{call}.clone()`, when its type implements `Cloneable` ``
-- `` keep a copy, `{call}.clone()`, when its type implements `Cloneable`: '{receiver}' keeps holding the value the call hands back ``
+- `` take it out instead, with `{receiver}.{method}`, which hands it over owned, or keep a copy, `{call}.clone()`, when its type implements `{copy_trait}` ``
+- `` keep a copy, `{call}.clone()`, when its type implements `{copy_trait}`: '{receiver}' keeps holding the value the call hands back ``
 
 ## Before
 

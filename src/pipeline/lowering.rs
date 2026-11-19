@@ -299,7 +299,7 @@ impl TraitDefaultBody {
     /// The declaring trait statement and the method statement within it.
     fn statements<'r>(&self, result: &'r PipelineResult) -> Option<(&'r Statement, &'r Statement)> {
         let trait_stmt = self.trait_site.statement(result)?;
-        let StatementKind::Trait(_, _, _, methods, _) = &trait_stmt.node else {
+        let StatementKind::Trait(_, _, _, methods, _, _) = &trait_stmt.node else {
             return None;
         };
         Some((trait_stmt, methods.get(self.member)?))
@@ -321,7 +321,7 @@ impl TraitDefaultBodies {
             by_trait: std::collections::HashMap::new(),
         };
         for (trait_site, stmt) in statements_with_sites(result) {
-            let StatementKind::Trait(name_expr, _, _, methods, _) = &stmt.node else {
+            let StatementKind::Trait(name_expr, _, _, methods, _, _) = &stmt.node else {
                 continue;
             };
             let Some(trait_name) = result.type_checker.type_identity_named_by(name_expr) else {

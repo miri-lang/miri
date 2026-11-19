@@ -11,6 +11,10 @@ pub const NON_EXHAUSTIVE_ATTRIBUTE: &str = "non_exhaustive";
 /// variant without a payload and a variant carrying that parameter.
 pub const OPTIONAL_ATTRIBUTE: &str = "optional";
 
+/// Marks the copy trait: the one trait whose `clone() Self` a collection
+/// copies an element through, and a copy of a resource calls.
+pub const COPY_TRAIT_ATTRIBUTE: &str = "copy_trait";
+
 /// Marks a type whose values may not be silently discarded.
 pub const MUST_USE_ATTRIBUTE: &str = "must_use";
 
@@ -112,6 +116,7 @@ pub const DIVERGES_ATTRIBUTE: &str = "diverges";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AttributeTarget {
     Enum,
+    Trait,
     Function,
     Class,
     RuntimeFunction,
@@ -121,6 +126,7 @@ impl std::fmt::Display for AttributeTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
             AttributeTarget::Enum => "an enum declaration",
+            AttributeTarget::Trait => "a trait declaration",
             AttributeTarget::Function => "a function declaration",
             AttributeTarget::Class => "a class declaration",
             AttributeTarget::RuntimeFunction => "a runtime function declaration",

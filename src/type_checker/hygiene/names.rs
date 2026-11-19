@@ -159,7 +159,7 @@ impl References {
                 self.expressions(traits);
             }
             StatementKind::Class(class) => self.class(class),
-            StatementKind::Trait(_, generics, parents, body, _) => {
+            StatementKind::Trait(_, generics, parents, body, _, _) => {
                 self.expression_list(generics.as_deref());
                 self.expressions(parents);
                 self.statements(body);

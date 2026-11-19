@@ -67,7 +67,7 @@ impl<'source> Parser<'source> {
 
     /// Records attributes on the declaration they precede.
     ///
-    /// Only enums, functions and classes carry attributes today. Any other
+    /// Only enums, traits, functions and classes carry attributes. Any other
     /// statement is rejected here rather than silently dropping them, so an
     /// attribute never becomes a no-op.
     pub(crate) fn attach_attributes(
@@ -80,7 +80,8 @@ impl<'source> Parser<'source> {
         }
         let span = attributes[0].span;
         match &mut statement.node {
-            StatementKind::Enum(_, _, _, _, _, existing) => existing.extend(attributes),
+            StatementKind::Enum(_, _, _, _, _, existing)
+            | StatementKind::Trait(_, _, _, _, _, existing) => existing.extend(attributes),
             StatementKind::FunctionDeclaration(declaration) => {
                 declaration.attributes.extend(attributes)
             }

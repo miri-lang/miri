@@ -617,7 +617,7 @@ fn detect_frame_usage(stmt: &Statement) -> bool {
         | StatementKind::Enum(_, _, _, _, _, _)
         | StatementKind::Struct(_, _, _, _, _, _)
         | StatementKind::Class(_)
-        | StatementKind::Trait(_, _, _, _, _)
+        | StatementKind::Trait(..)
         | StatementKind::FunctionDeclaration(_)
         | StatementKind::RuntimeFunctionDeclaration(..)
         | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,

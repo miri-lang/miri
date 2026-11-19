@@ -191,7 +191,9 @@ impl SyntaxErrorKind {
             K::MissingEnumMembers => p(DiagnosticCode::ParMissingEnumMembers)
                 .with_help("All enum variants must be handled."),
             K::UnsupportedAttributeTarget => p(DiagnosticCode::ParUnsupportedAttributeTarget)
-                .with_help("Attributes may only precede an enum, function, or class declaration."),
+                .with_help(
+                    "Attributes may only precede an enum, trait, function, or class declaration.",
+                ),
             K::MissingTypeExpression => p(DiagnosticCode::ParMissingTypeExpression)
                 .with_help("A type expression is expected here."),
             K::InvalidModifierCombination { .. } => {

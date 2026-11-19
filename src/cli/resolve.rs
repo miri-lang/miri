@@ -155,7 +155,7 @@ pub fn children(node: &Statement) -> Vec<&Statement> {
         StatementKind::Class(data) => data.body.iter().collect(),
         StatementKind::Enum(_, _, _, methods, _, _) => methods.iter().collect(),
         StatementKind::Struct(_, _, _, methods, _, _) => methods.iter().collect(),
-        StatementKind::Trait(_, _, _, members, _) => members.iter().collect(),
+        StatementKind::Trait(_, _, _, members, _, _) => members.iter().collect(),
         StatementKind::Empty
         | StatementKind::Break
         | StatementKind::Continue

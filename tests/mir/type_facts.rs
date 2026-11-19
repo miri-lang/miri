@@ -301,6 +301,7 @@ mod drop_hook_reach {
             parent_trait_args: BTreeMap::new(),
             methods: BTreeMap::new(),
             module: String::new(),
+            is_copy_trait: false,
         };
         let pair = StructDefinition {
             fields: vec![("res".to_string(), named("Res"), MemberVisibility::Public)],

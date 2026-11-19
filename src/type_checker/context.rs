@@ -290,6 +290,10 @@ pub struct TraitDefinition {
     pub parent_trait_args: BTreeMap<String, Vec<Type>>,
     pub methods: BTreeMap<String, MethodInfo>, // Deterministic method order
     pub module: String,
+    /// Whether this is the copy trait: the one trait a module declares
+    /// `@copy_trait`, whose `clone() Self` a copy of an implementing class
+    /// calls. Set by the type checker once the marker's rules hold.
+    pub is_copy_trait: bool,
 }
 
 /// Enum wrapper for different type definitions.
@@ -423,24 +427,70 @@ pub fn class_implements_trait(
 }
 
 /// Returns `true` if `trait_name` is `ancestor` or extends it, directly or
-/// through other traits. Each trait is visited once, so a circular `extends`
-/// cannot hang the walk.
+/// through other traits.
 pub fn trait_is_or_extends(
     trait_name: &str,
     ancestor: &str,
     type_defs: &HashMap<String, TypeDefinition>,
 ) -> bool {
+    trait_lineage_any(trait_name, type_defs, |name, _| name == ancestor)
+}
+
+/// Whether the class `class_name`, or a class it extends, implements the
+/// copy trait, directly or through a trait that extends it.
+pub fn implements_copy_trait(
+    class_name: &str,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> bool {
+    class_ancestry(class_name, type_defs).any(|(_, def)| {
+        def.traits.iter().any(|t| {
+            trait_lineage_any(t, type_defs, |_, definition| {
+                definition.is_some_and(|definition| definition.is_copy_trait)
+            })
+        })
+    })
+}
+
+/// The name of the copy trait among `type_defs`: the trait the type checker
+/// accepted the `@copy_trait` marker on, once a module has declared it.
+pub fn copy_trait(type_defs: &HashMap<String, TypeDefinition>) -> Option<&str> {
+    type_defs.values().find_map(|definition| match definition {
+        TypeDefinition::Trait(definition) if definition.is_copy_trait => {
+            Some(definition.name.as_str())
+        }
+        TypeDefinition::Trait(_)
+        | TypeDefinition::Struct(_)
+        | TypeDefinition::Enum(_)
+        | TypeDefinition::Generic(_)
+        | TypeDefinition::Class(_)
+        | TypeDefinition::Alias(_) => None,
+    })
+}
+
+/// Whether `matches` holds of `trait_name` or of a trait it extends, directly
+/// or through other traits, given each name and its trait definition, if
+/// any. Each trait is visited once, so a circular `extends` cannot hang the
+/// walk.
+fn trait_lineage_any(
+    trait_name: &str,
+    type_defs: &HashMap<String, TypeDefinition>,
+    matches: impl Fn(&str, Option<&TraitDefinition>) -> bool,
+) -> bool {
     let mut pending = vec![trait_name];
     let mut visited = std::collections::HashSet::new();
     while let Some(name) = pending.pop() {
-        if name == ancestor {
+        let definition = match type_defs.get(name) {
+            Some(TypeDefinition::Trait(definition)) => Some(definition),
+            Some(_) | None => None,
+        };
+        if matches(name, definition) {
             return true;
         }
         if !visited.insert(name) {
             continue;
         }
-        if let Some(TypeDefinition::Trait(td)) = type_defs.get(name) {
-            pending.extend(td.parent_traits.iter().map(String::as_str));
+        if let Some(definition) = definition {
+            pending.extend(definition.parent_traits.iter().map(String::as_str));
         }
     }
     false

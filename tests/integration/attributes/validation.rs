@@ -101,15 +101,17 @@ struct Point
     );
 }
 
+/// A trait carries attributes, so one it does not accept is refused by the
+/// registry, naming the attributes it does.
 #[test]
-fn test_attribute_before_trait_is_rejected() {
+fn test_attribute_on_a_trait_reports_wrong_target() {
     assert_compiler_error(
         r#"
 @must_use
 trait Drawable
     fn draw(self)
 "#,
-        "Unsupported Attribute Target",
+        "Attribute @must_use is not valid on a trait declaration",
     );
 }
 

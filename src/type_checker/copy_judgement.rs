@@ -12,7 +12,8 @@
 //! holders. So a copy is refused at an element type that is a resource with
 //! no `clone` thunk ([`refuses_copy_of`], reading
 //! [`thunk_methods::is_asked_of`], the one answer to whether a container
-//! clones a class's elements): a class that does not implement `Cloneable`,
+//! clones a class's elements): a class that does not implement the copy
+//! trait (the trait declared `@copy_trait`),
 //! an abstract one, and any resource that is not a class (a struct or an
 //! enum with a hook, a collection of resources). A key of a map is never
 //! cloned, so a resource key is refused too.
@@ -28,14 +29,14 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::type_arguments::argument_type_marked;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::TypeKind;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::RelatedNote;
 use crate::error::syntax::{find_line_info, Span};
 use crate::error::type_error::{TypeError, TypeErrorKind};
 use crate::runtime_effects::ElementRole;
 
-use super::context::TypeDefinition;
+use super::context::{self, TypeDefinition};
 use super::open_consumption::{copy_types, Copies, OpenBody};
 use super::thunk_methods::{is_asked_of, ThunkQuestion};
 use super::utils::ResourceTypes;
@@ -69,9 +70,6 @@ pub fn refuses_copy_of(
     if !resources.holds(kind) {
         return false;
     }
-    // TODO: the trait a clone thunk answers is still found by its name
-    // (`CLONEABLE_TRAIT_NAME` in `thunk_methods::is_asked_of`); a mark on the
-    // trait's declaration is to replace it.
     if kind.as_builtin_collection().is_some() {
         let elements = copied_element_kinds(kind, definitions);
         return (elements.iter())
@@ -109,15 +107,27 @@ pub fn copied_element_kinds(
     }
 }
 
-/// The refusal of a copy of `element`, a resource with no `clone`, placed at
-/// `span`. `copier` names the method the program calls when the copy is made
-/// inside it; `related` says where.
+/// A copy refused at an element type, and the copy trait its repair names.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RefusedCopy<'a> {
+    /// The element type: a resource with no `clone`.
+    pub element: &'a TypeKind,
+    /// The copy trait, where a module declares one.
+    pub copy_trait: Option<&'a str>,
+}
+
+/// The refusal of `refused`, placed at `span`. `copier` names the method the
+/// program calls when the copy is made inside it; `related` says where.
 pub(crate) fn copy_refusal(
-    element: &TypeKind,
+    refused: RefusedCopy<'_>,
     copier: Option<String>,
     span: Span,
     related: Vec<RelatedNote>,
 ) -> TypeError {
+    let RefusedCopy {
+        element,
+        copy_trait,
+    } = refused;
     let message = match copier {
         Some(copier) => format!(
             "`{copier}` copies elements of `{element}`, a resource with no `clone` to copy it with"
@@ -128,10 +138,7 @@ pub(crate) fn copy_refusal(
         kind: TypeErrorKind::Coded {
             code: DiagnosticCode::OwnResourceElementCopied,
             message,
-            help: Some(format!(
-                "implement `Cloneable` on `{element}` so each copy is its own value, or hand \
-                 each value over instead of copying it"
-            )),
+            help: Some(copy_repair(element, copy_trait)),
             expected: None,
             actual: None,
         },
@@ -139,6 +146,18 @@ pub(crate) fn copy_refusal(
         source_override: None,
         repair: None,
         related,
+    }
+}
+
+/// The repair of a copy of `element`: implement the copy trait
+/// `copy_trait` where one is declared, or hand each value over.
+fn copy_repair(element: &TypeKind, copy_trait: Option<&str>) -> String {
+    match copy_trait {
+        Some(copy_trait) => format!(
+            "implement `{copy_trait}` on `{element}` so each copy is its own value, or hand \
+             each value over instead of copying it"
+        ),
+        None => "hand each value over instead of copying it".to_string(),
     }
 }
 
@@ -152,6 +171,7 @@ pub(crate) fn refusals_at_known_copies<'s>(
 ) -> Vec<TypeError> {
     let mut reported = HashSet::new();
     let mut refusals = Vec::new();
+    let copy_trait = context::copy_trait(known.type_definitions);
     for copy in copies {
         for at in copy_types(&copy.body, &copy.parameter, known) {
             let element = &at.ty.kind;
@@ -162,26 +182,33 @@ pub(crate) fn refusals_at_known_copies<'s>(
                 .reached
                 .map_or(copy.span, |reached| reached.program_site());
             if reported.insert((site, element.clone())) {
-                refusals.push(refusal_at(copy, &at.ty, at.reached, &source_of));
+                let refused = RefusedCopy {
+                    element,
+                    copy_trait,
+                };
+                refusals.push(refusal_at(copy, refused, at.reached, &source_of));
             }
         }
     }
     refusals
 }
 
-/// The refusal of `copy` at the element type `element`: at the program's
-/// site of `reached`, naming the method the program calls and the line the
-/// copy is made at; at the copy itself, in its file, where no site of the
-/// program reaches it (a default inherited by a class).
+/// The refusal of `copy`, refused as `refused`.
+///
+/// When the program reaches the copy, the refusal sits at the program's site
+/// of `reached`. It names the method the program calls and the line that
+/// makes the copy. When nothing in the program reaches it, the refusal sits
+/// at the copy itself, in its own file. A default method a class inherits is
+/// such a copy.
 fn refusal_at<'s>(
     copy: &OpenCopy,
-    element: &Type,
+    refused: RefusedCopy<'_>,
     reached: Option<&super::reached_instantiations::ReachedCopy>,
     source_of: &impl Fn(&str) -> Option<&'s str>,
 ) -> TypeError {
     let text = copy.file.as_deref().and_then(source_of);
     let Some(reached) = reached else {
-        let mut refusal = copy_refusal(&element.kind, None, copy.span, Vec::new());
+        let mut refusal = copy_refusal(refused, None, copy.span, Vec::new());
         refusal.source_override = (copy.file.clone()).zip(text.map(str::to_string));
         return refusal;
     };
@@ -199,9 +226,22 @@ fn refusal_at<'s>(
         .into_iter()
         .collect();
     copy_refusal(
-        &element.kind,
+        refused,
         Some(format!("{owner}.{name}")),
         reached.program_site(),
         related,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_copy_repair_without_a_copy_trait_hands_each_value_over() {
+        let definitions = HashMap::new();
+        let element = TypeKind::Custom("Res".to_string(), None);
+        let repair = copy_repair(&element, context::copy_trait(&definitions));
+        assert_eq!(repair, "hand each value over instead of copying it");
+    }
 }

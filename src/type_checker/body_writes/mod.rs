@@ -182,7 +182,7 @@ pub(crate) fn for_each_member<'s>(statement: &'s Statement, visit: &mut impl FnM
         StatementKind::Class(class) => &class.body,
         StatementKind::Struct(_, _, _, methods, _, _)
         | StatementKind::Enum(_, _, _, methods, _, _)
-        | StatementKind::Trait(_, _, _, methods, _) => methods,
+        | StatementKind::Trait(_, _, _, methods, _, _) => methods,
         StatementKind::FunctionDeclaration(_)
         | StatementKind::Expression(_)
         | StatementKind::Variable(..)

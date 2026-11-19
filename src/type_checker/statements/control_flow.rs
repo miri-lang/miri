@@ -1697,7 +1697,7 @@ fn is_identifier_read_in_stmt_impl(
         | StatementKind::Enum(_, _, _, _, _, _)
         | StatementKind::Struct(_, _, _, _, _, _)
         | StatementKind::Class(_)
-        | StatementKind::Trait(_, _, _, _, _)
+        | StatementKind::Trait(..)
         | StatementKind::RuntimeFunctionDeclaration(..)
         | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
     }

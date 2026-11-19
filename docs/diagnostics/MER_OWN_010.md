@@ -9,7 +9,7 @@ A collection operation that copies its elements, `clone`, `filter`, `resize`, `p
 
 ## Help
 
-- `` implement `Cloneable` on `{element}` so each copy is its own value, or hand each value over instead of copying it ``
+- `` implement `{copy_trait}` on `{element}` so each copy is its own value, or hand each value over instead of copying it ``
 
 ## Before
 

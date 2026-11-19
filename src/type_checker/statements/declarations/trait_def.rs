@@ -61,6 +61,7 @@ pub(crate) struct TraitDeclaration<'a> {
     pub parent_traits: &'a [Expression],
     pub body: &'a [Statement],
     pub visibility: &'a MemberVisibility,
+    pub attributes: &'a [Attribute],
     pub span: Span,
 }
 
@@ -95,6 +96,7 @@ impl TypeChecker {
             parent_traits,
             body,
             visibility,
+            attributes,
             span,
         } = declaration;
         let name = self.trait_name(name_expr, visibility, span)?;
@@ -119,14 +121,16 @@ impl TypeChecker {
         let (methods, method_statements) =
             self.collect_trait_methods(body, generic_defs.as_deref().unwrap_or_default(), context);
 
-        let trait_def = TraitDefinition {
+        let mut trait_def = TraitDefinition {
             name: name.clone(),
             generics: generic_defs,
             parent_traits: parent_trait_names,
             parent_trait_args,
             methods,
             module: self.modules.current_module.clone(),
+            is_copy_trait: false,
         };
+        self.record_copy_trait(&mut trait_def, attributes, name_expr.span);
         self.finalize_trait_definition(&name, &trait_type, trait_def, visibility, context);
         context.exit_class();
         context.exit_scope();

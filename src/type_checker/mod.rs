@@ -59,6 +59,7 @@ mod function_analysis;
 pub use function_analysis::{CalleeKind, DeclaredFunction, ModuleId};
 pub mod body_writes;
 pub mod copy_judgement;
+mod copy_trait;
 pub(crate) mod emptying_methods;
 pub(crate) mod generics;
 mod gpu_buffer_init;
@@ -1404,7 +1405,7 @@ impl TypeChecker {
             StatementKind::Class(class_data) => self
                 .shell_class(class_data)
                 .zip(class_data.generics.as_deref()),
-            StatementKind::Trait(name_expr, generics_expr, _, _, visibility) => self
+            StatementKind::Trait(name_expr, generics_expr, _, _, visibility, _) => self
                 .shell_trait(name_expr, generics_expr.as_deref(), visibility)
                 .zip(generics_expr.as_deref()),
             StatementKind::Struct(name_expr, generics_expr, _, _, visibility, _) => self
@@ -1491,6 +1492,7 @@ impl TypeChecker {
                 parent_trait_args: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 module: self.modules.current_module.clone(),
+                is_copy_trait: false,
             }),
         );
         self.modules.pre_registered_types.insert(name_str.clone());

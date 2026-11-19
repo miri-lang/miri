@@ -5,13 +5,13 @@
 //! same one, and which element types answer a container's questions
 //! themselves.
 
-use miri::ast::types::{Type, TypeKind, CLONEABLE_TRAIT_NAME};
+use miri::ast::types::{Type, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
 use miri::mir::type_facts::{
     ClassDefinition, ElementIdentity, FloatWidth, TypeDefinition, TypeFacts,
 };
-use miri::type_checker::context::{EnumDefinition, StructDefinition};
+use miri::type_checker::context::{EnumDefinition, StructDefinition, TraitDefinition};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 fn ty(kind: TypeKind) -> Type {
@@ -39,6 +39,32 @@ fn defs<const N: usize>(entries: [(&str, TypeDefinition); N]) -> HashMap<String,
         .into_iter()
         .map(|(name, def)| (name.to_string(), def))
         .collect()
+}
+
+/// The copy trait the tests mark, named unlike the standard library's so a
+/// reading of it by name would miss it.
+const COPY_TRAIT: &str = "Duplicable";
+
+/// A trait `name` extending `parents`, the copy trait when `is_copy_trait`.
+fn trait_def(name: &str, parents: &[&str], is_copy_trait: bool) -> TypeDefinition {
+    TypeDefinition::Trait(TraitDefinition {
+        name: name.to_string(),
+        generics: None,
+        parent_traits: parents.iter().map(|parent| parent.to_string()).collect(),
+        parent_trait_args: BTreeMap::new(),
+        methods: BTreeMap::new(),
+        module: String::new(),
+        is_copy_trait,
+    })
+}
+
+/// `entries` beside the marked copy trait.
+fn defs_with_copy_trait<const N: usize>(
+    entries: [(&str, TypeDefinition); N],
+) -> HashMap<String, TypeDefinition> {
+    let mut table = defs(entries);
+    table.insert(COPY_TRAIT.to_string(), trait_def(COPY_TRAIT, &[], true));
+    table
 }
 
 /// The settled facts over `table`, with no instantiations and no bodies.
@@ -97,38 +123,66 @@ fn an_open_type_parameter_registers_no_rule() {
     assert_eq!(identity, ElementIdentity::Unregistered);
 }
 #[test]
-fn test_class_listing_the_cloneable_trait_implements_it() {
+fn test_class_listing_the_copy_trait_implements_it() {
     let mut widget = class("Widget");
-    widget.traits = vec![CLONEABLE_TRAIT_NAME.to_string()];
-    let table = defs([("Widget", TypeDefinition::Class(widget))]);
+    widget.traits = vec![COPY_TRAIT.to_string()];
+    let table = defs_with_copy_trait([("Widget", TypeDefinition::Class(widget))]);
     let facts = facts_of(table);
 
     assert!(facts.is_cloneable("Widget"));
 }
 
 #[test]
-fn test_class_with_multiple_traits_implements_cloneable() {
+fn test_class_with_multiple_traits_implements_the_copy_trait() {
     let mut widget = class("Widget");
     widget.traits = vec![
         "Printable".to_string(),
-        CLONEABLE_TRAIT_NAME.to_string(),
+        COPY_TRAIT.to_string(),
         "Equatable".to_string(),
     ];
-    let table = defs([("Widget", TypeDefinition::Class(widget))]);
+    let table = defs_with_copy_trait([("Widget", TypeDefinition::Class(widget))]);
     let facts = facts_of(table);
 
     assert!(facts.is_cloneable("Widget"));
+}
+
+#[test]
+fn test_a_trait_extending_the_copy_trait_makes_its_class_cloneable() {
+    let mut widget = class("Widget");
+    widget.traits = vec!["Copyable".to_string()];
+    let table = defs_with_copy_trait([
+        ("Widget", TypeDefinition::Class(widget)),
+        ("Copyable", trait_def("Copyable", &[COPY_TRAIT], false)),
+    ]);
+    let facts = facts_of(table);
+
+    assert!(facts.is_cloneable("Widget"));
+}
+
+/// A trait is the copy trait by its marker, never by its name: one named
+/// like the standard library's, unmarked, copies nothing.
+#[test]
+fn test_an_unmarked_trait_named_like_the_copy_trait_is_not_it() {
+    let mut widget = class("Widget");
+    widget.traits = vec!["Cloneable".to_string()];
+    let table = defs_with_copy_trait([
+        ("Widget", TypeDefinition::Class(widget)),
+        ("Cloneable", trait_def("Cloneable", &[], false)),
+    ]);
+    let facts = facts_of(table);
+
+    assert!(!facts.is_cloneable("Widget"));
 }
 
 #[test]
 fn test_cloneable_is_inherited_through_the_base_chain() {
     let mut root = class("Root");
-    root.traits = vec![CLONEABLE_TRAIT_NAME.to_string()];
+    root.traits = vec![COPY_TRAIT.to_string()];
     let mut middle = class("Middle");
     middle.base_class = Some("Root".to_string());
     let mut leaf = class("Leaf");
     leaf.base_class = Some("Middle".to_string());
-    let table = defs([
+    let table = defs_with_copy_trait([
         ("Root", TypeDefinition::Class(root)),
         ("Middle", TypeDefinition::Class(middle)),
         ("Leaf", TypeDefinition::Class(leaf)),

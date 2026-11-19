@@ -670,7 +670,9 @@ impl<'a> UseAfterMoveChecker<'a> {
                 let open = |method: &str| OpenBody::of_generic_owner((owner?, method), definitions);
                 self.check_open_method_bodies((owner, &class_data.body), open);
             }
-            StatementKind::Trait(name, _, _, methods, _) => self.check_trait_methods(name, methods),
+            StatementKind::Trait(name, _, _, methods, _, _) => {
+                self.check_trait_methods(name, methods)
+            }
             StatementKind::Struct(name, _, _, methods, _, _)
             | StatementKind::Enum(name, _, _, methods, _, _) => {
                 self.check_open_method_bodies((self.declared_name(name), methods), |_| None);
@@ -2286,6 +2288,7 @@ static NO_REPAIRS: PlaceRepairs = PlaceRepairs {
     optional: None,
     emptying_optional: None,
     replacing: None,
+    copy_trait: None,
 };
 
 /// How a refusal names the keeper `sink`.

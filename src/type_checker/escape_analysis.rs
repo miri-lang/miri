@@ -1400,7 +1400,7 @@ fn collect_function_defs<'a>(
                 }
             }
             StatementKind::Struct(name_expr, _, _, methods, _, _)
-            | StatementKind::Trait(name_expr, _, _, methods, _)
+            | StatementKind::Trait(name_expr, _, _, methods, _, _)
             | StatementKind::Enum(name_expr, _, _, methods, _, _) => {
                 if let Some(s) = facts.names.declared(name_expr) {
                     collect_function_defs(methods, fn_defs, Some(s), facts, located);

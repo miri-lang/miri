@@ -879,6 +879,17 @@ class Counter
     assert_eq!(assert_render_is_a_fixed_point(source), source);
 }
 
+/// An attribute on a trait is part of the program: a rewrite keeps it.
+#[test]
+fn test_an_attribute_on_a_trait_is_kept() {
+    let source = "\
+@copy_trait
+public trait Duplicable
+    fn clone() Self
+";
+    assert_eq!(assert_render_is_a_fixed_point(source), source);
+}
+
 #[test]
 fn test_a_collection_type_keeps_the_spelling_it_was_written_with() {
     let source = "\

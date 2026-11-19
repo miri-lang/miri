@@ -500,7 +500,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (92 codes: 001-092)
+    // TYP — Type checker (93 codes: 001-093)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1142,6 +1142,13 @@ diagnostics!(
     "092",
     TypOptionalDeclaration,
     "Optional Declaration",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "TYP",
+    "093",
+    TypCopyTraitDeclaration,
+    "Copy Trait Declaration",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

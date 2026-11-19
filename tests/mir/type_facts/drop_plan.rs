@@ -342,6 +342,7 @@ fn test_all_type_definition_variants_are_resolved_for_custom_kind() {
         parent_trait_args: BTreeMap::new(),
         methods: BTreeMap::new(),
         module: String::new(),
+        is_copy_trait: false,
     });
 
     let table = defs([

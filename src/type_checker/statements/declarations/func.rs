@@ -843,7 +843,7 @@ impl TypeChecker {
             StatementKind::Enum(_, _, _, _, _, _) => false,
             StatementKind::Struct(_, _, _, _, _, _) => false,
             StatementKind::Class(_) => false,
-            StatementKind::Trait(_, _, _, _, _) => false,
+            StatementKind::Trait(..) => false,
             StatementKind::FunctionDeclaration(_) => {
                 // Nested function declarations don't execute host code in outer scope
                 false
@@ -939,7 +939,7 @@ impl TypeChecker {
             StatementKind::Enum(_, _, _, _, _, _) => false,
             StatementKind::Struct(_, _, _, _, _, _) => false,
             StatementKind::Class(_) => false,
-            StatementKind::Trait(_, _, _, _, _) => false,
+            StatementKind::Trait(..) => false,
             StatementKind::FunctionDeclaration(_) => {
                 // Nested function declarations don't reference params
                 false
@@ -1288,7 +1288,7 @@ impl TypeChecker {
             StatementKind::Enum(_, _, _, _, _, _) => false,
             StatementKind::Struct(_, _, _, _, _, _) => false,
             StatementKind::Class(_) => false,
-            StatementKind::Trait(_, _, _, _, _) => false,
+            StatementKind::Trait(..) => false,
             StatementKind::FunctionDeclaration(_) => false,
             StatementKind::RuntimeFunctionDeclaration(..) => false,
             StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
@@ -1380,7 +1380,7 @@ impl TypeChecker {
             StatementKind::Enum(_, _, _, _, _, _) => false,
             StatementKind::Struct(_, _, _, _, _, _) => false,
             StatementKind::Class(_) => false,
-            StatementKind::Trait(_, _, _, _, _) => false,
+            StatementKind::Trait(..) => false,
             StatementKind::FunctionDeclaration(_) => false,
             StatementKind::RuntimeFunctionDeclaration(..) => false,
             StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,

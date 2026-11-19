@@ -168,10 +168,10 @@ impl TypeFacts {
     }
 
     /// Whether a `type_name` element is copied through its own `clone`: the
-    /// class, or a class it extends, implements `Cloneable`, directly or
+    /// class, or a class it extends, implements the copy trait, directly or
     /// through a trait that extends it.
     pub fn is_cloneable(&self, type_name: &str) -> bool {
-        self.implements(type_name, crate::ast::types::CLONEABLE_TRAIT_NAME)
+        crate::type_checker::context::implements_copy_trait(type_name, self.definitions())
     }
 
     /// Whether a copy of a list holding lists of `kind` copies each inner

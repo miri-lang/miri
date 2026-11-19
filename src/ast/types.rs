@@ -22,19 +22,18 @@ pub enum BuiltinCollectionKind {
     Set,
 }
 
-/// Canonical name of the built-in `Cloneable` trait.
-///
-/// Centralized so codegen and runtime-helper dispatch share one source of
-/// truth instead of scattering `"Cloneable"` string literals across the
-/// compiler. Mirrors the role of [`BuiltinCollectionKind`] / [`RESULT_TYPE_NAME`].
-pub const CLONEABLE_TRAIT_NAME: &str = "Cloneable";
+// TODO: the ordering, operator, equality and hashing traits below are still
+// found by their names, while the copy trait is found by its `@copy_trait`
+// marker. So a program's own trait that shares one of these names is taken
+// for the standard library's. Missing: a marker for each on its
+// standard-library declaration, recorded on the trait's definition.
 
 /// Canonical name of the built-in `Comparable` trait, which a type implements
 /// to say how its values sort.
 ///
-/// Centralized beside [`CLONEABLE_TRAIT_NAME`] so the type checker's ordering
-/// gate, the operator lowering that calls the method, and the element
-/// comparator codegen registers all name one trait.
+/// Centralized so the type checker's ordering gate, the operator lowering
+/// that calls the method, and the element comparator codegen registers all
+/// name one trait.
 pub const ORDERING_TRAIT_NAME: &str = "Comparable";
 
 /// The trait whose `concat` answers `+`.
@@ -87,7 +86,7 @@ pub const STEPPING_METHOD_NAMES: [&str; 3] = [
 /// The residency gate dispatches on this trait to decide whether a type may
 /// back a `gpu let` / `gpu var` binding — it never matches a GPU-eligible type
 /// name. Centralized so the gate and any future marshalling registry share one
-/// spelling. Mirrors [`CLONEABLE_TRAIT_NAME`].
+/// spelling.
 pub const ACCELERABLE_TRAIT_NAME: &str = "Accelerable";
 
 /// Canonical name of the stdlib `Iterable<T>` trait.

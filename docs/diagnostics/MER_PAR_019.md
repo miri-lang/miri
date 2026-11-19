@@ -1,6 +1,6 @@
 ## Rule
 
-An attribute is being applied to a declaration type that does not support attributes. Attributes (marked with `@`) can only precede enum, function, or class declarations. Applying an attribute to a variable, statement, or other construct causes this error.
+An attribute is being applied to a declaration type that does not support attributes. Attributes (marked with `@`) can only precede enum, trait, function, or class declarations. Applying an attribute to a variable, statement, or other construct causes this error.
 
 ## Messages
 
@@ -8,7 +8,7 @@ An attribute is being applied to a declaration type that does not support attrib
 
 ## Help
 
-- `Attributes may only precede an enum, function, or class declaration.`
+- `Attributes may only precede an enum, trait, function, or class declaration.`
 
 ## Before
 

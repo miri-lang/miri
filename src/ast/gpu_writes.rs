@@ -84,7 +84,7 @@ impl WriteWalker<'_> {
             | StatementKind::Enum(_, _, _, _, _, _)
             | StatementKind::Struct(_, _, _, _, _, _)
             | StatementKind::Class(_)
-            | StatementKind::Trait(_, _, _, _, _)
+            | StatementKind::Trait(..)
             | StatementKind::RuntimeFunctionDeclaration(..)
             | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
         }

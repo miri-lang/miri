@@ -1,0 +1,9 @@
+// summary: Accepted counterpart of MER_TYP_093: the trait of the copy trait's shape is declared without the marker.
+// expect-stdout: one copy trait
+use system.io
+
+trait Duplicable
+    fn clone() Self
+
+fn main()
+    println("one copy trait")

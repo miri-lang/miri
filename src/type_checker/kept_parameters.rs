@@ -281,7 +281,7 @@ fn declared_methods<'s>(
     statement: &'s Statement,
     names: &DeclaredNames<'s>,
 ) -> Option<(&'s str, &'s [Statement])> {
-    if let StatementKind::Trait(name, _, _, methods, _)
+    if let StatementKind::Trait(name, _, _, methods, _, _)
     | StatementKind::Enum(name, _, _, methods, _, _) = &statement.node
     {
         return Some((names.declared(name)?, methods.as_slice()));

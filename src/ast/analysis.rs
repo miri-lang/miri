@@ -38,7 +38,7 @@ fn stmt_uses_gpu(stmt: &Statement) -> bool {
         StatementKind::Class(class_data) => class_data.body.iter().any(stmt_uses_gpu),
         StatementKind::Struct(_, _, _, methods, _, _)
         | StatementKind::Enum(_, _, _, methods, _, _)
-        | StatementKind::Trait(_, _, _, methods, _) => methods.iter().any(stmt_uses_gpu),
+        | StatementKind::Trait(_, _, _, methods, _, _) => methods.iter().any(stmt_uses_gpu),
         // A `gpu let` / `gpu var` binding may trigger a cross-residency
         // readback that calls into the GPU runtime even when the program has
         // no `forall` / `gpu fn`, so a gpu-resident declaration alone
@@ -106,7 +106,7 @@ fn statement_uses_regex(statement: &Statement) -> bool {
         StatementKind::Return(value) => optional_uses_regex(value.as_deref()),
         StatementKind::Enum(_, _, _, methods, _, _)
         | StatementKind::Struct(_, _, _, methods, _, _)
-        | StatementKind::Trait(_, _, _, methods, _) => program_uses_regex(methods),
+        | StatementKind::Trait(_, _, _, methods, _, _) => program_uses_regex(methods),
         StatementKind::Class(class) => program_uses_regex(&class.body),
     }
 }

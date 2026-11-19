@@ -149,7 +149,7 @@ impl<'a> Contents<'a> {
                 self.members(methods);
             }
             StatementKind::Class(class) => self.class(class, statement),
-            StatementKind::Trait(name, _, _, body, visibility) => {
+            StatementKind::Trait(name, _, _, body, visibility, _) => {
                 self.declare(declared_name(Some(name)), "trait", visibility, statement);
                 self.members(body);
             }
@@ -364,7 +364,7 @@ fn collect_exported(statement: &Statement, names: &mut HashSet<String>) {
             }
         }
         StatementKind::Struct(name, _, _, _, visibility, _)
-        | StatementKind::Trait(name, _, _, _, visibility) => {
+        | StatementKind::Trait(name, _, _, _, visibility, _) => {
             insert_exported(declared_name(Some(name)), visibility, names);
         }
         StatementKind::Type(parts, visibility) => {

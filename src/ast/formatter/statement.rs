@@ -148,8 +148,14 @@ fn statement_code(sink: &mut Sink, node: &Statement, indent: usize) {
             )
         }
         StatementKind::Class(data) => class(sink, node, data, indent),
-        StatementKind::Trait(name, generics, parents, members, level) => {
-            trait_declaration(sink, node, name, generics, parents, members, level, indent)
+        StatementKind::Trait(name, generics, parents, members, level, attrs) => {
+            let heading = TraitHeading {
+                level,
+                attributes: attrs,
+            };
+            trait_declaration(
+                sink, node, name, generics, parents, members, heading, indent,
+            )
         }
         StatementKind::RuntimeFunctionDeclaration(
             runtime,
@@ -716,11 +722,11 @@ fn trait_declaration(
     generics: &Option<Vec<Expression>>,
     parents: &[Expression],
     body_members: &[Statement],
-    level: &MemberVisibility,
+    heading: TraitHeading<'_>,
     indent: usize,
 ) {
     let mark = sink.mark();
-    trait_header(sink, name, generics.as_deref(), parents, level, indent);
+    trait_header(sink, name, generics.as_deref(), parents, heading, indent);
     opening_comment(sink, node);
     members(sink, body_members, indent);
     record_named(sink, mark, "trait", name);
@@ -782,16 +788,26 @@ pub(super) fn struct_header(
     implements(sink, traits, indent);
 }
 
+/// What a trait's header writes before its `trait` keyword.
+#[derive(Clone, Copy)]
+pub(super) struct TraitHeading<'a> {
+    /// The trait's visibility.
+    pub(super) level: &'a MemberVisibility,
+    /// The attributes written above the trait.
+    pub(super) attributes: &'a [Attribute],
+}
+
 /// Everything a trait declares apart from its members.
 pub(super) fn trait_header(
     sink: &mut Sink,
     name: &Expression,
     generics: Option<&[Expression]>,
     parents: &[Expression],
-    level: &MemberVisibility,
+    heading: TraitHeading<'_>,
     indent: usize,
 ) {
-    visibility(sink, level);
+    attributes(sink, heading.attributes, indent);
+    visibility(sink, heading.level);
     sink.emit("trait ");
     format_expression(sink, name, indent);
     generic_arguments(sink, generics);

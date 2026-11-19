@@ -178,6 +178,7 @@ pub fn trait_statement(
         parent_traits,
         body,
         visibility,
+        Vec::new(),
     ))
 }
 

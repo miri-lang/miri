@@ -3,6 +3,7 @@
 
 pub use crate::integration::utils;
 
+pub mod copy_trait;
 pub mod deprecated;
 pub mod enum_attributes;
 pub mod non_exhaustive;

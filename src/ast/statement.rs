@@ -371,13 +371,14 @@ pub enum StatementKind {
     Class(Box<ClassData>),
 
     /// A trait declaration.
-    /// (name, generics, parent_traits, body, visibility)
+    /// (name, generics, parent_traits, body, visibility, attributes)
     Trait(
         Box<Expression>,         // Trait name
         Option<Vec<Expression>>, // Generic type parameters
         Vec<Expression>,         // Parent traits (multiple, via extends)
         Vec<Statement>,          // Trait body (method signatures)
         MemberVisibility,        // Trait visibility
+        Vec<Attribute>,          // Attributes written before the declaration
     ),
 
     /// A runtime function declaration (extern binding to a runtime library).

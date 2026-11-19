@@ -147,7 +147,8 @@ impl TypeChecker {
         statement: &'a Statement,
         context: &mut Context,
     ) -> Option<TraitBodies<'a>> {
-        let StatementKind::Trait(name, generics, parent_traits, body, visibility) = &statement.node
+        let StatementKind::Trait(name, generics, parent_traits, body, visibility, attributes) =
+            &statement.node
         else {
             return None;
         };
@@ -161,6 +162,7 @@ impl TypeChecker {
             parent_traits,
             body,
             visibility,
+            attributes,
             span: statement.span,
         };
         let bodies = self.define_trait(declaration, context);

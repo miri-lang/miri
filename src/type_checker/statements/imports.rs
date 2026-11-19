@@ -1808,7 +1808,7 @@ fn collect_function_declarations(stmts: &[Statement], ids: &mut Vec<usize>) {
             }
             StatementKind::Struct(_, _, _, methods, _, _)
             | StatementKind::Enum(_, _, _, methods, _, _)
-            | StatementKind::Trait(_, _, _, methods, _) => {
+            | StatementKind::Trait(_, _, _, methods, _, _) => {
                 collect_function_declarations(methods, ids)
             }
             _ => {}

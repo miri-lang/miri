@@ -93,6 +93,7 @@ fn trait_definition(name: &str) -> TypeDefinition {
         parent_trait_args: BTreeMap::new(),
         methods: BTreeMap::new(),
         module: String::new(),
+        is_copy_trait: false,
     })
 }
 

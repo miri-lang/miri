@@ -116,8 +116,9 @@ fn visit_statement(statement: &Statement, furthest: &mut Reach) {
             visit_expressions(traits, furthest);
         }
         StatementKind::Class(data) => visit_class(data, furthest),
-        StatementKind::Trait(name, generics, parents, body, _) => {
-            visit_container(name, generics.as_deref(), parents, body, furthest)
+        StatementKind::Trait(name, generics, parents, body, _, attributes) => {
+            visit_container(name, generics.as_deref(), parents, body, furthest);
+            visit_attributes(attributes, furthest);
         }
         StatementKind::RuntimeFunctionDeclaration(_, _, generics, params, return_type, _) => {
             visit_signature(

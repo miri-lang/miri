@@ -647,7 +647,7 @@ impl Outline<'_> {
             | StatementKind::Type(_, visibility)
             | StatementKind::Enum(_, _, _, _, visibility, _)
             | StatementKind::Struct(_, _, _, _, visibility, _)
-            | StatementKind::Trait(_, _, _, _, visibility) => is_public(visibility),
+            | StatementKind::Trait(_, _, _, _, visibility, _) => is_public(visibility),
             StatementKind::Class(data) => is_public(&data.visibility),
             StatementKind::FunctionDeclaration(declaration) => {
                 is_public(&declaration.properties.visibility)
