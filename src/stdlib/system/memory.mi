@@ -22,6 +22,12 @@ runtime "core" fn miri_rt_replace<T>(place out T, new T) T
 /// Managed fields (String, List, Array, Set, Map) are recursively cloned;
 /// primitive fields (int, bool, float) are bitwise-copied.
 ///
+/// A collection copies its elements through their `clone`: `clone()`,
+/// `filter`, `resize` and `push_copy` call it once per element they copy, so
+/// each copy of a class with a `drop` hook is its own value and runs its own
+/// hook. A collection of such a class that does not implement `Cloneable`
+/// cannot be copied: the call is refused where the program makes it.
+///
 /// Example:
 ///     use system.memory
 ///     let a = "hello"

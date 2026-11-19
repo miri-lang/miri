@@ -364,8 +364,8 @@ fn kept_caller_place(
     facts: &KeepFacts<'_>,
     statement: &Statement,
 ) -> (Option<TypeError>, Vec<OpenRefusal>) {
-    let generic_owner =
-        owner.and_then(|owner| OpenBody::of_generic_owner(owner, facts.type_definitions));
+    let generic_owner = owner
+        .and_then(|owner| OpenBody::of_generic_owner((owner, &decl.name), facts.type_definitions));
     let open_body = OpenBody::of_declaration(function, decl, generic_owner);
     let mut closed = None;
     let mut open = Vec::new();

@@ -81,6 +81,61 @@ fn main()
 }
 
 #[test]
+fn clones_and_stores_on_one_parameter_are_refused() {
+    type_checker_error_test(
+        r#"
+class Bag<T>
+    var n int
+    @writes("l")
+    @element("item")
+    @stores("item")
+    @clones("item")
+    runtime "core" fn miri_rt_x(l Self, item T)
+
+fn main()
+    return
+"#,
+        "`@clones` names `item`, which is not an `@element`, `@key` or `@value` the entry point only reads",
+    );
+}
+
+#[test]
+fn clones_naming_no_parameter_is_refused() {
+    type_checker_error_test(
+        r#"
+class Bag<T>
+    var n int
+    @writes("l")
+    @element("item")
+    @clones("thing")
+    runtime "core" fn miri_rt_x(l Self, item T)
+
+fn main()
+    return
+"#,
+        "`miri_rt_x` has no parameter `thing`",
+    );
+}
+
+#[test]
+fn clones_naming_one_parameter_twice_is_refused() {
+    type_checker_error_test(
+        r#"
+class Bag<T>
+    var n int
+    @writes("l")
+    @element("item")
+    @clones("item, item")
+    runtime "core" fn miri_rt_x(l Self, item T)
+
+fn main()
+    return
+"#,
+        "`@clones` names a parameter of `miri_rt_x` twice",
+    );
+}
+
+#[test]
 fn two_uses_stated_for_one_parameter_are_refused() {
     type_checker_error_test(
         r#"

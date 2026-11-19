@@ -131,6 +131,11 @@ pub struct RuntimeEffect {
     /// Matches values against the elements, or keys, of the container at
     /// this position, by the rule the compiler registered for their type.
     pub matches: Option<usize>,
+    /// The element positions whose value the entry point stores a copy of
+    /// in its container, the caller keeping its own: the copy the element's
+    /// `clone` makes where the container registered one, the element shared
+    /// otherwise. Each is an element it reads, never keeps.
+    pub clones: Vec<usize>,
     /// Reads a count or bumps a statistic and reaches no code that could
     /// grow, shrink, replace or release any collection.
     pub leaves_headers: bool,
@@ -158,6 +163,7 @@ impl RuntimeEffect {
             diverges: false,
             orders: None,
             matches: None,
+            clones: Vec::new(),
             leaves_headers: false,
             reads_count: false,
             type_parameters: Vec::new(),

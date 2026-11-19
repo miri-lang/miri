@@ -1672,7 +1672,17 @@ impl<'a> FunctionTranslator<'a> {
         thunk: &Symbol,
         ptr_type: cranelift_codegen::ir::Type,
     ) -> Result<Value, CodegenError> {
-        let clone_name = thunk.link_name();
+        Self::clone_fn_addr(builder, ctx, &thunk.link_name(), ptr_type)
+    }
+
+    /// Address of the function linked as `clone_name`, taking an element
+    /// and returning its copy, as a container's clone callback.
+    pub(crate) fn clone_fn_addr(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        clone_name: &str,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<Value, CodegenError> {
         let sig = Signature {
             params: vec![AbiParam::new(ptr_type)],
             returns: vec![AbiParam::new(ptr_type)],
@@ -1680,8 +1690,8 @@ impl<'a> FunctionTranslator<'a> {
         };
         let func_id = ctx
             .module
-            .declare_function(&clone_name, Linkage::Import, &sig)
-            .map_err(|e| CodegenError::declare_function(clone_name.clone(), e.to_string()))?;
+            .declare_function(clone_name, Linkage::Import, &sig)
+            .map_err(|e| CodegenError::declare_function(clone_name.to_string(), e.to_string()))?;
         let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
         Ok(builder.ins().func_addr(ptr_type, local_func))
     }

@@ -134,6 +134,26 @@ pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
     payload_ptr
 }
 
+/// A container's own copy of the counted element `referenced` refers to,
+/// which the caller keeps: the copy `clone_fn` makes when the container
+/// registered one (`fn(*mut u8) -> *mut u8`), else the same reference with a
+/// count of its own. A null reference copies to null.
+///
+/// # Safety
+/// `referenced` must be null or a live counted element, and `clone_fn` zero
+/// or the element type's clone function.
+pub unsafe fn copy_reference(referenced: usize, clone_fn: usize) -> usize {
+    if referenced == 0 {
+        return 0;
+    }
+    if clone_fn != 0 {
+        let clone: unsafe extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(clone_fn);
+        return clone(referenced as *mut u8) as usize;
+    }
+    incref(referenced as *mut u8);
+    referenced
+}
+
 /// Increments the RC of a managed heap object.
 ///
 /// `ptr` must point to the payload (past the RC header). Immortal objects

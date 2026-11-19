@@ -1,0 +1,19 @@
+// summary: Accepted counterpart of MER_OWN_009: the mapping function builds a new value from the element it is lent.
+// expect-stdout: 2
+// expect-stdout: closed 11
+// expect-stdout: closed 12
+// expect-stdout: closed 1
+// expect-stdout: closed 2
+use system.collections.list
+
+class Conn
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"closed {self.id}")
+
+fn main()
+    let conns = List([Conn(1), Conn(2)])
+    let next = conns.map(fn(c Conn) Conn: Conn(c.id + 10))
+    println(f"{next.length()}")

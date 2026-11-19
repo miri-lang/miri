@@ -20,6 +20,9 @@ public trait Transformable<T> extends Iterable<T>
     abstract fn element_at(index int) T
 
     /// Returns a new List containing each element transformed by `f`.
+    ///
+    /// `f` is lent each element: a function keeping the element it is
+    /// handed, returning it included, is refused where it is passed.
     public fn map(f fn(T) T) [T]
         var result = List<T>()
         var i = 0
@@ -32,6 +35,10 @@ public trait Transformable<T> extends Iterable<T>
 
     /// Returns a new List containing only elements for which `f` returns true.
     ///
+    /// `f` is lent each element, and each element kept is a copy
+    /// ([`List.push_copy`]): its `clone()` when its type implements
+    /// `Cloneable`.
+    ///
     /// The result is given room for every element up front, so building it
     /// never reallocates; a filter that keeps few elements holds the unused
     /// room until the result is released.
@@ -43,7 +50,7 @@ public trait Transformable<T> extends Iterable<T>
         while i < n
             let item = self.element_at(i)
             if f(item)
-                result.push(item)
+                result.push_copy(item)
             i += 1
         return result
 
@@ -57,7 +64,7 @@ public trait Transformable<T> extends Iterable<T>
             var j = 0
             let m = mapped.length()
             while j < m
-                result.push(mapped.element_at(j))
+                result.push_copy(mapped.element_at(j))
                 j += 1
             i += 1
         return result

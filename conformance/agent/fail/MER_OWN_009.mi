@@ -1,0 +1,15 @@
+// expect: MER_OWN_009
+// summary: Triggers MER_OWN_009: a mapping function returns the element map lends it.
+use system.collections.list
+
+class Conn
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"closed {self.id}")
+
+fn main()
+    let conns = List([Conn(1), Conn(2)])
+    let same = conns.map(fn(c Conn) Conn: c)
+    println(f"{same.length()}")

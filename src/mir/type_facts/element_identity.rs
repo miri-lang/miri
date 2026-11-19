@@ -174,6 +174,26 @@ impl TypeFacts {
         self.implements(type_name, crate::ast::types::CLONEABLE_TRAIT_NAME)
     }
 
+    /// Whether a copy of a list holding lists of `kind` copies each inner
+    /// list through the runtime's list copy, rather than sharing it: an
+    /// inner list whose own elements are copied through their `clone`, so
+    /// the copy holds values of its own all the way down.
+    ///
+    /// TODO: an inner array, set or map is still shared by the two copies
+    /// even where its elements are `Cloneable`; their runtime copies take
+    /// other arguments than the one clone callback a container calls.
+    pub fn copies_inner_list(&self, kind: &TypeKind) -> bool {
+        let Some(element) = list_element(kind) else {
+            return false;
+        };
+        if let TypeKind::Custom(name, _) = &element.kind {
+            if BuiltinCollectionKind::from_name(name).is_none() {
+                return self.has_clone_thunk(name);
+            }
+        }
+        self.copies_inner_list(&element.kind)
+    }
+
     /// Whether a clone thunk is emitted for `type_name`: a thunk copies its
     /// elements through a `clone` body
     /// ([`crate::type_checker::thunk_methods::thunk_body`]); an abstract class
@@ -320,4 +340,17 @@ fn is_matched_by_bytes(kind: &TypeKind) -> bool {
             | TypeKind::Identifier
             | TypeKind::RawPtr
     )
+}
+
+/// The element type of a list of `kind`; `None` when `kind` is no list.
+fn list_element(kind: &TypeKind) -> Option<&Type> {
+    let argument = if let TypeKind::List(argument) = kind {
+        Some(&**argument)
+    } else if let TypeKind::Custom(name, Some(arguments)) = kind {
+        let is_list = BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::List);
+        arguments.first().filter(|_| is_list)
+    } else {
+        None
+    };
+    argument.and_then(crate::ast::type_arguments::argument_type)
 }

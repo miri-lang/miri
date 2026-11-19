@@ -369,6 +369,7 @@ fn the_standard_library_collections_write_only_through_their_writers() {
                 "iterator",
                 "pop",
                 "push",
+                "push_copy",
                 "remove",
                 "remove_at",
                 "reserve",
@@ -378,8 +379,14 @@ fn the_standard_library_collections_write_only_through_their_writers() {
                 "sort",
             ],
         ),
-        ("Map", vec!["clear", "iterator", "remove", "set"]),
-        ("Set", vec!["add", "clear", "iterator", "remove"]),
+        (
+            "Map",
+            vec!["clear", "iterator", "remove", "set", "set_copy"],
+        ),
+        (
+            "Set",
+            vec!["add", "add_copy", "clear", "iterator", "remove"],
+        ),
         ("Array", vec!["iterator", "reverse", "set", "sort"]),
     ] {
         let (writers, readers) = split_of(&writes, class);

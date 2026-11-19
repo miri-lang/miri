@@ -64,6 +64,12 @@ public class Map<K, V> implements Equatable, Hashable, Iterable<K>, Cloneable
     @reads("m")
     @copies("m")
     runtime "core" fn miri_rt_map_clone(m Self) Map<K, V>
+    @writes("m")
+    @key("key")
+    @value("value")
+    @clones("key, value")
+    @matches("m")
+    runtime "core" fn miri_rt_map_set_copy(m Self, key K, value V)
 
     /// Returns the number of key-value pairs in the map.
     public fn length() int: miri_rt_map_len(self)
@@ -112,6 +118,13 @@ public class Map<K, V> implements Equatable, Hashable, Iterable<K>, Cloneable
     public fn set(key K, value V)
         miri_rt_map_set(self, key, value)
 
+    /// Sets a copy of `key` and of `value`, which stay the caller's: each
+    /// the copy its own `clone()` makes when its type implements `Cloneable`,
+    /// a key shared otherwise. A call copying a resource with no `clone` is
+    /// refused where the program reaches it.
+    fn set_copy(key K, value V)
+        miri_rt_map_set_copy(self, key, value)
+
     /// Returns the value associated with the given key, or None if the key is not in the map.
     public fn get(key K) V?
         let slot = miri_rt_map_slot_of(self, key)
@@ -149,7 +162,7 @@ public class Map<K, V> implements Equatable, Hashable, Iterable<K>, Cloneable
             let k = self.element_at(i)
             let v = self.value_at(i)
             if f(k, v)
-                result.set(k, v)
+                result.set_copy(k, v)
             i += 1
         return result
 

@@ -37,6 +37,10 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Indexed<T>, C
     runtime "core" fn miri_rt_list_push(l Self, item T)
     @writes("l")
     @element("item")
+    @clones("item")
+    runtime "core" fn miri_rt_list_push_copy(l Self, item T)
+    @writes("l")
+    @element("item")
     @stores("item")
     runtime "core" fn miri_rt_list_set(l Self, index int, item T) bool
     @writes("l")
@@ -100,6 +104,14 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Indexed<T>, C
     /// Appends an element to the end of the list.
     public fn push(item T)
         miri_rt_list_push(self, item)
+
+    /// Appends a copy of `item`, which stays the caller's: the copy its own
+    /// `clone()` makes when its type implements `Cloneable`, else `item`
+    /// itself, shared, as a plain value is. A call copying a resource that
+    /// does not implement `Cloneable` is refused where the program makes it:
+    /// move the element in with `push` instead.
+    public fn push_copy(item T)
+        miri_rt_list_push_copy(self, item)
 
     /// Removes and returns the last element, or None if the list is empty.
     ///
@@ -166,13 +178,18 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Indexed<T>, C
     public fn reserve(capacity int)
         miri_rt_list_reserve(self, capacity)
 
-    /// Grows the list to `length` elements by appending `value`, or shrinks it
-    /// to `length` by removing elements from the end. A list built to a known
-    /// size is filled in one call: `flags.resize(n, false)`.
+    /// Grows the list to `length` elements by appending copies of `value`, or
+    /// shrinks it to `length` by removing elements from the end. A list built
+    /// to a known size is filled in one call: `flags.resize(n, false)`.
+    ///
+    /// Each element appended is its own copy ([`push_copy`]): `value`'s
+    /// `clone()` when its type implements `Cloneable`, and `value` stays the
+    /// caller's. Growing a list of a resource that does not implement
+    /// `Cloneable` is refused where the program calls it.
     public fn resize(length int, value T)
         self.reserve(length)
         while self.length() < length
-            self.push(value)
+            miri_rt_list_push_copy(self, value)
         while self.length() > length
             self.pop()
 
@@ -191,7 +208,7 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Indexed<T>, C
         result.reserve(n)
         var i = 0
         while i < n
-            result.push(self.element_at(i))
+            result.push_copy(self.element_at(i))
             i += 1
         miri_rt_list_sort_by(result, f)
         return result
@@ -206,6 +223,9 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Indexed<T>, C
         if len > 0: return Some(len - 1)
         return None
 
-    /// Returns a deep copy of this list.
+    /// Returns a copy of this list, each element copied by its own `clone()`
+    /// when its type implements `Cloneable` and shared when it is a plain
+    /// value. Copying a list of a resource that does not implement
+    /// `Cloneable` is refused where the program calls it.
     public fn clone() List<T>
         return miri_rt_list_clone(self)

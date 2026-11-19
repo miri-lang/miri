@@ -1692,6 +1692,8 @@ impl Pipeline {
             .map(|lowered| (lowered.symbol, lowered.body))
             .collect();
         Self::record_reached_census(result, &bodies)?;
+        mir::lowering::copy_guard::refuse_unjudged_copies(&result.type_checker, &bodies)
+            .map_err(CompilerError::Lowering)?;
         Ok(bodies)
     }
 
@@ -1937,20 +1939,11 @@ fn read_trap_report(path: &std::path::Path) -> Option<DiagnosticCode> {
 mod census {
     use crate::ast::types::{Type, TypeKind};
     use crate::mir;
+    use crate::mir::lowering::copy_guard::reached_copy_symbol;
     use crate::mir::symbol::{Symbol, TypeInstance};
     use crate::type_checker::instantiation_limits::instantiation_argument;
-    use crate::type_checker::{CopyOwner, ReachedCopy, ReachedProgram};
+    use crate::type_checker::{ReachedCopy, ReachedProgram};
     use std::collections::HashSet;
-
-    /// The symbol lowering compiles `copy` under.
-    fn copy_symbol(copy: &ReachedCopy) -> Symbol {
-        match &copy.owner {
-            CopyOwner::Function(module) => Symbol::function(module, &copy.name, &copy.arguments),
-            CopyOwner::Type { name, arguments } => {
-                Symbol::method(name, arguments, &copy.name, &copy.arguments)
-            }
-        }
-    }
 
     /// Whether `body`, lowered as `symbol`, is a copy of a generic body:
     /// a function or a method its substitution bound parameters of.
@@ -1967,7 +1960,7 @@ mod census {
     ) -> Vec<String> {
         let compiled: HashSet<&Symbol> = lowered.iter().map(|(symbol, _)| symbol).collect();
         let reached: Vec<(Symbol, &ReachedCopy)> = (program.copies().iter())
-            .map(|copy| (copy_symbol(copy), copy))
+            .map(|copy| (reached_copy_symbol(copy), copy))
             .collect();
         let named: HashSet<&Symbol> = reached.iter().map(|(symbol, _)| symbol).collect();
         let missing = (reached.iter())

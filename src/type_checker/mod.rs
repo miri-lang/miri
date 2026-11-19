@@ -58,6 +58,7 @@ mod format_specs;
 mod function_analysis;
 pub use function_analysis::{CalleeKind, DeclaredFunction, ModuleId};
 pub mod body_writes;
+pub mod copy_judgement;
 pub(crate) mod emptying_methods;
 pub(crate) mod generics;
 mod gpu_buffer_init;
@@ -71,6 +72,7 @@ pub(crate) mod int_literals;
 pub(crate) mod iteration_plan;
 pub mod kept_parameters;
 pub(crate) mod launch_rules;
+pub(crate) mod lent_functions;
 pub mod literal_hooks;
 pub(crate) mod member_hints;
 pub(crate) mod module_loader;
@@ -85,6 +87,7 @@ mod reached_instantiations;
 mod reference_cycles;
 pub mod reference_sharing;
 pub mod resource_types;
+pub(crate) mod returned_places;
 pub(crate) mod runtime_settled;
 pub mod slot_conventions;
 mod source_arithmetic;
@@ -200,6 +203,12 @@ pub struct TypeChecker {
     /// The methods that write their receiver, so a call of one on a value
     /// another binding shares copies it first; see [`body_writes`].
     pub receiver_writes: body_writes::ReceiverWrites,
+    /// The methods handing back a place of their receiver; see
+    /// [`returned_places`].
+    pub(crate) returned_places: returned_places::ReturnedPlaces,
+    /// The function-typed parameters each method lends its arguments
+    /// through; see [`lent_functions`].
+    pub(crate) lending_methods: lent_functions::LendingMethods,
     /// The parameters each body writes, so lowering binds a copy of each on
     /// entry; see [`body_writes`].
     pub parameter_writes: body_writes::ParameterWrites,
@@ -418,6 +427,8 @@ impl TypeChecker {
             iteration_plans: HashMap::new(),
             protocol_loops: Vec::new(),
             receiver_writes: body_writes::ReceiverWrites::default(),
+            returned_places: returned_places::ReturnedPlaces::default(),
+            lending_methods: lent_functions::LendingMethods::default(),
             parameter_writes: body_writes::ParameterWrites::default(),
             captured_mentions: body_writes::CapturedMentions::default(),
             held_operands: body_writes::HeldOperands::default(),
@@ -631,6 +642,13 @@ impl TypeChecker {
     /// ([`use_after_move::ConsumedArguments::ended_scrutinee`]).
     pub fn ended_scrutinee(&self, argument: &Expression) -> Option<usize> {
         self.consumed_arguments.ended_scrutinee(argument)
+    }
+
+    /// Whether `argument` is handed to a call through a lending parameter,
+    /// which reads it only
+    /// ([`use_after_move::ConsumedArguments::is_lent_argument`]).
+    pub fn is_lent_argument(&self, argument: &Expression) -> bool {
+        self.consumed_arguments.is_lent_argument(argument)
     }
 
     /// Whether a keeper handed `argument` is handed a copy it funds while
@@ -1014,6 +1032,7 @@ impl TypeChecker {
         );
         self.report_unrestorable_replacements();
         self.report_misused_emptying_marks(top_level_statements(program));
+        self.infer_lending(program);
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_kept_parameters(program, &context);
         self.run_pass_use_after_move(program, &context);
@@ -1088,24 +1107,54 @@ impl TypeChecker {
         self.refuse_open_generic_calls_since(0);
     }
 
+    /// Works out which methods hand back a place of their receiver
+    /// ([`returned_places`]), then which function-typed parameters each
+    /// method lends its arguments through ([`lent_functions`]), over the
+    /// program's declarations and every module's.
+    fn infer_lending(&mut self, program: &Program) {
+        let statements = || top_level_statements(program).chain(&self.imported_statements);
+        let empty = returned_places::ReturnedPlaces::default();
+        let facts = lent_functions::LendingFacts {
+            place: place_reads::PlaceFacts {
+                types: &self.type_table.types,
+                type_definitions: &self.type_table.global_type_definitions,
+                writes: &self.receiver_writes,
+                returned: &empty,
+                effects: &self.runtime_effects,
+            },
+            effects: &self.runtime_effects,
+            names: self.declared_names(),
+        };
+        let (returned, lending) = lent_functions::LendingMethods::infer(statements(), &facts);
+        self.returned_places = returned;
+        self.lending_methods = lending;
+    }
+
     fn run_pass_escape_summaries(&mut self, program: &Program, context: &mut Context) {
         if !self.diagnostics.is_empty() {
             return;
         }
-        let facts = escape_analysis::ProgramFacts {
+        context.escape_summaries = escape_analysis::compute_escape_summaries(
+            &program.body,
+            &self.imported_statements,
+            &self.program_facts(),
+            escape_analysis::runtime_escape_summaries(&self.runtime_effects),
+        );
+    }
+
+    /// The facts the escape summaries are computed against, and the
+    /// consumption check reads.
+    fn program_facts(&self) -> escape_analysis::ProgramFacts<'_> {
+        escape_analysis::ProgramFacts {
             types: &self.type_table.types,
             type_defs: &self.type_table.global_type_definitions,
             resources: self.resource_types(),
             callees: &self.fn_analysis.declared_callees,
             modules: &self.fn_analysis.declaring_modules,
             names: self.declared_names(),
-        };
-        context.escape_summaries = escape_analysis::compute_escape_summaries(
-            &program.body,
-            &self.imported_statements,
-            &facts,
-            escape_analysis::runtime_escape_summaries(&self.runtime_effects),
-        );
+            returned: &self.returned_places,
+            lending: &self.lending_methods,
+        }
     }
 
     /// Records which arguments and reads consume a resource, over the
@@ -1119,23 +1168,19 @@ impl TypeChecker {
     /// against the module's file; its warnings are not reported, as no
     /// hygiene note is on an imported file.
     ///
-    /// The standard library is exempt from one refusal: a use after an open
-    /// site (a value of the class's `T`, a default's `Self`). That refusal
-    /// is raised at every instance the program builds rather than at the
-    /// methods it calls, so a library collection would refuse every program
-    /// holding a resource in it; lowering still keeps a funded copy at every
-    /// open site some path reaches a use from, so no copy reads a value it
-    /// moved.
-    ///
-    /// TODO: refuse a use after an open site at the copies the program
-    /// reaches ([`Self::reached_program`]); the standard library's exemption
-    /// goes once the refusal is raised there.
+    /// The standard library is checked as any module is: a use after an
+    /// open site (a value of the class's `T`, a default's `Self`) is refused
+    /// at the copies the program reaches ([`open_consumption`]). Each copy a
+    /// body makes of an element through a `runtime` entry point declared
+    /// `@clones` or `@copies` is judged at those copies too
+    /// ([`copy_judgement`]), refused where the program reaches it at a
+    /// resource with no `clone`.
     fn run_pass_use_after_move(&mut self, program: &Program, context: &Context) {
         if !self.diagnostics.is_empty() {
             return;
         }
         let repairs = self.place_repairs(program);
-        let mut findings = (self.use_after_move_checker(context))
+        let (mut findings, mut copies) = (self.use_after_move_checker(context))
             .with_place_repairs(&repairs)
             .check_program(program);
         self.diagnostics
@@ -1144,19 +1189,38 @@ impl TypeChecker {
         let imported: Vec<_> = (self.modules.imported_bodies.iter())
             .map(|(file, statements)| {
                 let statements = self.imported_statements.get(statements.clone());
-                let mut findings = (self.use_after_move_checker(context))
+                let (findings, mut file_copies) = (self.use_after_move_checker(context))
                     .with_place_repairs(&repairs)
                     .check_statements(statements.unwrap_or_default());
-                if file.is_library {
-                    findings.open_refusals.clear();
+                for copy in &mut file_copies {
+                    copy.file = Some(file.path.clone());
                 }
                 let is_refused = !findings.errors.is_empty() || !findings.open_refusals.is_empty();
                 let source = is_refused.then(|| (file.path.clone(), file.text.clone()));
-                (findings, source)
+                (findings, file_copies, source)
             })
             .collect();
-        for (findings, source) in imported {
+        for (findings, mut file_copies, source) in imported {
+            copies.append(&mut file_copies);
             self.record_consumption(findings, source);
+        }
+        let source_of = |path: &str| {
+            (self.modules.imported_bodies.iter())
+                .find(|(file, _)| file.path == path)
+                .map(|(file, _)| file.text.as_str())
+        };
+        let refusals =
+            copy_judgement::refusals_at_known_copies(&copies, &self.known_copies(), source_of);
+        self.diagnostics.extend_errors(refusals);
+    }
+
+    /// The copies of the program's bodies compiled once per copy that the
+    /// type checker knows ([`open_consumption::copy_types`]).
+    fn known_copies(&self) -> open_consumption::Copies<'_> {
+        open_consumption::Copies {
+            type_definitions: &self.type_table.global_type_definitions,
+            resources: self.resource_types(),
+            reached: self.reached_program().copies(),
         }
     }
 
@@ -1184,8 +1248,10 @@ impl TypeChecker {
     ) -> use_after_move::UseAfterMoveChecker<'a> {
         use_after_move::UseAfterMoveChecker::new(
             self,
-            &self.type_table.types,
-            &self.type_table.global_type_definitions,
+            (
+                &self.type_table.types,
+                &self.type_table.global_type_definitions,
+            ),
             &context.escape_summaries,
             (
                 &self.fn_analysis.declared_callees,
@@ -1196,10 +1262,10 @@ impl TypeChecker {
                 conventions: &self.slot_conventions,
                 restored: &self.receiver_writes,
             },
-            self.resource_types(),
+            (self.resource_types(), &self.runtime_effects),
+            self.program_facts(),
         )
         .with_iteration_plans(&self.iteration_plans)
-        .with_declared_names(self.declared_names())
     }
 
     /// Keeps what the consumption check found in one file, or one
@@ -1224,13 +1290,7 @@ impl TypeChecker {
         }
         self.diagnostics.extend_errors(errors);
         self.consumed_arguments.extend(consumed_arguments);
-        let copies = open_consumption::Copies {
-            type_definitions: &self.type_table.global_type_definitions,
-            resources: self.resource_types(),
-            instantiations: self.ownership_instantiations(),
-            reached: self.reached_program().copies(),
-        };
-        let refusals = open_consumption::refusals_at_copies(open_refusals, &copies);
+        let refusals = open_consumption::refusals_at_copies(open_refusals, &self.known_copies());
         self.diagnostics.extend_errors(refusals);
     }
 
@@ -1285,7 +1345,6 @@ impl TypeChecker {
         let copies = open_consumption::Copies {
             type_definitions,
             resources: self.resource_types(),
-            instantiations: self.ownership_instantiations(),
             reached: self.reached_program().copies(),
         };
         let refusals = open_consumption::refusals_at_copies(open_refusals, &copies);

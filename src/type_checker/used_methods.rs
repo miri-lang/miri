@@ -369,7 +369,42 @@ impl TypeChecker {
         let Some(element) = arguments.get(position).and_then(written_type) else {
             return;
         };
-        self.record_element_method_use(held_value(&element), CLONE_METHOD_NAME, span, context);
+        let element = held_value(&element);
+        if element.kind.as_builtin_collection().is_some() {
+            // The runtime copies an inner collection itself, never through
+            // a `clone` body of its class: building one runs no copy, and a
+            // copy of the outer collection is judged where the program makes
+            // it (`copy_judgement::refuses_copy_of`).
+            self.record_element_method_requirement(element, CLONE_METHOD_NAME, context);
+            return;
+        }
+        self.record_element_method_use(element, CLONE_METHOD_NAME, span, context);
+    }
+
+    /// Record the copy `List(list)` makes of a `list` argument of type
+    /// `argument`: the copy the list's own `clone` makes, so the call runs
+    /// that `clone` on it and is judged where it is made, as `list.clone()`
+    /// is ([`super::copy_judgement`]).
+    pub(crate) fn record_list_argument_copied(
+        &mut self,
+        argument: &Type,
+        span: Span,
+        context: &Context,
+    ) {
+        if argument.kind.as_builtin_collection() != Some(BuiltinCollectionKind::List) {
+            return;
+        }
+        let Some((class_name, substitution)) = self.class_instance(argument) else {
+            return;
+        };
+        self.record_receiver_method_sites(
+            &class_name,
+            CLONE_METHOD_NAME,
+            &substitution,
+            argument,
+            span,
+            context,
+        );
     }
 
     /// Record that `method` runs on values of `element`: a requirement of the

@@ -9,6 +9,7 @@ pub mod casts;
 pub mod collections;
 pub mod compilation_ids;
 pub mod constant;
+pub mod copy_guard;
 pub mod device_handles;
 pub mod dispatch_symbols;
 pub mod enums;

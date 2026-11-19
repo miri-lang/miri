@@ -174,6 +174,8 @@ struct Step {
     /// Whether a call through a trait reached the body by reading its slot.
     through_slot: bool,
     outer: Lineage,
+    /// Where the site reaching the body is written.
+    site: Span,
 }
 
 impl Step {
@@ -508,6 +510,7 @@ impl TypeChecker {
             bound: restated,
             through_slot: site.through_slot.is_some(),
             outer: writer.clone(),
+            site: site.span,
         });
         self.refuse_body_past_limits(&step, site.span, context, walk)?;
         walk.admitted += 1;

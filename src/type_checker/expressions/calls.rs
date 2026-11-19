@@ -2886,6 +2886,9 @@ impl TypeChecker {
         if BuiltinCollectionKind::from_name(name) != Some(BuiltinCollectionKind::List) {
             return None;
         }
+        if let Some((_, argument)) = positional_args.first() {
+            self.record_list_argument_copied(argument, span, context);
+        }
 
         if let Some(args) = type_args {
             if args.len() != 1 {

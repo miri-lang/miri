@@ -285,6 +285,22 @@ impl MiriSet {
         unsafe { self.find_slot(elem).is_some() }
     }
 
+    /// The set's own reference to the element at `elem`, a reference word:
+    /// the element's `clone` when one is registered, the same reference with
+    /// a count of its own otherwise; `None` for a plain element, whose bytes
+    /// are the copy, and for an element that is not one reference word wide.
+    ///
+    /// # Safety
+    /// `elem` must point at one slot of this set's element width.
+    unsafe fn copied_reference(&self, elem: *const u8) -> Option<usize> {
+        let is_counted = self.elem_clone_fn != 0 || self.elem_drop_fn != 0;
+        let is_word = self.elem_size == std::mem::size_of::<usize>();
+        (is_counted && is_word).then(|| {
+            let referenced = elem.cast::<usize>().read_unaligned();
+            crate::rc::copy_reference(referenced, self.elem_clone_fn)
+        })
+    }
+
     unsafe fn insert(&mut self, elem: *const u8) -> bool {
         self.ensure_capacity();
         let slot = self.find_insert_slot(elem);
@@ -459,6 +475,39 @@ pub mod ffi {
                 1
             } else {
                 set.release_element(elem);
+                0
+            }
+        })
+    }
+
+    /// Adds a copy of an element the caller only lends; returns true (1) if
+    /// the copy was newly inserted, false (0) if the set holds the element.
+    ///
+    /// The element is handed over by address as `miri_rt_set_add` takes it,
+    /// but the caller keeps its reference: the set stores the copy the
+    /// element's own `clone` makes when one is registered, and a reference of
+    /// its own to a shared element otherwise. A copy the set already holds is
+    /// released again.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_add_copy(
+        ptr: *mut MiriSet,
+        elem: *const u8,
+        payload: usize,
+    ) -> u8 {
+        guard::guard_check(ptr as *mut u8);
+        let Some((set, _held)) = element_receiver(ptr, elem, payload) else {
+            return 0;
+        };
+        with_slot_bytes(elem, payload, set.elem_size, |elem| {
+            let copy = set.copied_reference(elem);
+            let copied = copy
+                .as_ref()
+                .map_or(elem, |word| word as *const usize as *const u8);
+            if set.insert(copied) {
+                1
+            } else {
+                set.release_element(copied);
                 0
             }
         })

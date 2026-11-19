@@ -24,12 +24,32 @@ fn with_h(program: &str) -> String {
     format!("{H}\n{program}")
 }
 
-/// `sorted_by` over resources: the comparator borrows each element, and each
-/// hook runs once, where the last list holding the element ends.
+/// `H` implementing `Cloneable`, so a list of it can be copied: each copy
+/// is a new `H` with the same key.
+const CLONEABLE_H: &str = r#"
+use system.io
+use system.collections.list
+use system.memory
+
+class H implements Cloneable
+    var k int
+    fn clone() H
+        return H(k: self.k)
+    fn drop(self)
+        println(f"closed {self.k}")
+"#;
+
+fn with_cloneable_h(program: &str) -> String {
+    format!("{CLONEABLE_H}\n{program}")
+}
+
+/// `sorted_by` over resources: the sorted list holds a clone of each
+/// element, the comparator borrows each one, and every hook runs once,
+/// where the list holding the value ends.
 #[test]
 fn sorted_by_over_resources_runs_each_hook_once_where_the_lists_end() {
     assert_heap_guard_output(
-        &with_h(
+        &with_cloneable_h(
             r#"
 fn main()
     var xs = List<H>()
@@ -39,7 +59,7 @@ fn main()
     println(f"len {s.length()} first {s[0].k}")
 "#,
         ),
-        "len 2 first 1\nclosed 2\nclosed 1",
+        "len 2 first 1\nclosed 1\nclosed 2\nclosed 2\nclosed 1",
     );
 }
 
@@ -48,7 +68,7 @@ fn main()
 #[test]
 fn sorted_by_with_a_named_comparator_runs_each_hook_once() {
     assert_heap_guard_output(
-        &with_h(
+        &with_cloneable_h(
             r#"
 fn by_key(a H, b H) int
     return a.k - b.k
@@ -61,7 +81,7 @@ fn main()
     println(f"len {s.length()} first {s[0].k}")
 "#,
         ),
-        "len 2 first 1\nclosed 2\nclosed 1",
+        "len 2 first 1\nclosed 1\nclosed 2\nclosed 2\nclosed 1",
     );
 }
 

@@ -255,6 +255,24 @@ impl MiriList {
         }
     }
 
+    /// Makes the reference in the slot at `slot` this list's own copy of
+    /// the element it refers to: the element's `clone` when one is
+    /// registered, a reference of its own otherwise. A plain element, and
+    /// any slot that is not one reference word wide, is left untouched.
+    ///
+    /// # Safety
+    /// `slot` must point at a slot of this list holding an element whose
+    /// reference, if any, is still the one it was read from.
+    unsafe fn copy_referenced_element(&self, slot: *mut u8) {
+        let is_counted = self.elem_clone_fn != 0 || self.elem_drop_fn != 0;
+        if !is_counted || self.elem_size != std::mem::size_of::<usize>() {
+            return;
+        }
+        let slot = slot.cast::<usize>();
+        let copy = crate::rc::copy_reference(slot.read_unaligned(), self.elem_clone_fn);
+        slot.write_unaligned(copy);
+    }
+
     /// Inserts the element `payload` bytes wide at `src` at `index`, shifting
     /// later elements. Returns false when `index` is past the end.
     ///
@@ -674,6 +692,31 @@ pub mod ffi {
         list.push_element(elem, payload);
     }
 
+    /// Appends a copy of an element the caller only lends.
+    ///
+    /// The element is handed over by address as `miri_rt_list_push` takes
+    /// it, but the caller keeps its reference: the list stores the copy the
+    /// element's own `clone` makes when one is registered, and a reference
+    /// of its own to a shared element otherwise.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_push_copy(
+        ptr: *mut MiriList,
+        elem: *const u8,
+        payload: usize,
+    ) {
+        guard::guard_check(ptr as *mut u8);
+        if ptr.is_null() || elem.is_null() {
+            return;
+        }
+        let list = &mut *ptr;
+        require_fits_slot(payload, list.elem_size);
+        list.push_element(elem, payload);
+        if list.len > 0 && !list.data.is_null() {
+            list.copy_referenced_element(list.data.add((list.len - 1) * list.elem_size));
+        }
+    }
+
     /// Pops the last element from the list.
     /// Returns true (1) if successful, false (0) if the list was empty.
     #[no_mangle]
@@ -976,24 +1019,10 @@ pub mod ffi {
         (*list).elem_clone_fn = src.elem_clone_fn;
         (*list).elem_order = src.elem_order;
 
-        if src.elem_clone_fn != 0 && !src.data.is_null() && src.len > 0 && src.elem_size > 0 {
-            let clone_fn: unsafe extern "C" fn(*mut u8) -> *mut u8 =
-                std::mem::transmute(src.elem_clone_fn);
-            for i in 0..src.len {
-                let slot = (*list).data.add(i * src.elem_size) as *mut usize;
-                let ptr_val = *slot;
-                if ptr_val != 0 {
-                    let new_elem = clone_fn(ptr_val as *mut u8);
-                    *slot = new_elem as usize;
-                }
-            }
-        } else if src.elem_drop_fn != 0 && !src.data.is_null() && src.len > 0 && src.elem_size > 0 {
-            for i in 0..src.len {
-                let slot = src.data.add(i * src.elem_size) as *const usize;
-                let ptr_val = *slot;
-                if ptr_val != 0 {
-                    crate::rc::incref(ptr_val as *mut u8);
-                }
+        let copied = &*list;
+        if !copied.data.is_null() {
+            for i in 0..copied.len {
+                copied.copy_referenced_element(copied.data.add(i * copied.elem_size));
             }
         }
 

@@ -11,6 +11,7 @@ pub mod constant;
 pub mod constructor;
 pub mod context;
 pub mod control_flow;
+pub mod copy_judgement;
 pub mod division_by_zero;
 pub mod element_layout;
 pub mod escape_analysis;

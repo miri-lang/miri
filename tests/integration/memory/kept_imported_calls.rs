@@ -388,10 +388,10 @@ fn a_user_module_generic_body_reusing_a_kept_value_is_refused_at_a_resource() {
     assert_project_compiler_error(&files, "holder.mi:");
 }
 
-/// The library's generic bodies that reuse a value after handing it on —
-/// `resize` pushing one value again and again, `filter` storing what its
-/// predicate was handed — hand a funded copy at a resource, so every hook
-/// runs once, where the last holder ends.
+/// The library's generic bodies that copy a value they are lent — `resize`
+/// appending one value again and again, `filter` keeping what its predicate
+/// was handed — copy a `Cloneable` resource by its own `clone`, so every
+/// copy is its own value and every hook runs once, where its holder ends.
 #[test]
 fn library_bodies_reusing_a_resource_run_each_hook_once() {
     assert_heap_guard_output(
@@ -400,11 +400,14 @@ use system.io
 use system.collections.list
 use system.collections.map
 use system.collections.set
+use system.memory
 
-class Res
+class Res implements Cloneable
     public var id int
     fn init(id int)
         self.id = id
+    fn clone() Res
+        return Res(self.id)
     fn drop(self)
         println(f"closed {self.id}")
     public fn equals(other Res) bool
@@ -442,6 +445,6 @@ fn main()
     println(f"{choose()}")
     println("end")
 "#,
-        "resized 3\nclosed 2\nshrunk 1\nclosed 1\n1\nmap kept 1\nclosed 20\nclosed 10\n1\nset kept 1\nclosed 30\nclosed 40\n1\nend",
+        "closed 1\nresized 3\nclosed 1\nclosed 1\nclosed 2\nshrunk 1\nclosed 1\n1\nmap kept 1\nclosed 20\nclosed 20\nclosed 10\n1\nset kept 1\nclosed 40\nclosed 30\nclosed 40\n1\nend",
     );
 }

@@ -25,9 +25,10 @@ use crate::ast::common::Parameter;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::ast::{
-    Attribute, ALLOCATES_ATTRIBUTE, CLOSURE_ATTRIBUTE, COPIES_ATTRIBUTE, DIVERGES_ATTRIBUTE,
-    ELEMENT_ATTRIBUTE, KEY_ATTRIBUTE, MATCHES_ATTRIBUTE, ORDERS_ATTRIBUTE, READS_ATTRIBUTE,
-    RETURNS_ELEMENT_ATTRIBUTE, STORES_ATTRIBUTE, VALUE_ATTRIBUTE, WRITES_ATTRIBUTE,
+    Attribute, ALLOCATES_ATTRIBUTE, CLONES_ATTRIBUTE, CLOSURE_ATTRIBUTE, COPIES_ATTRIBUTE,
+    DIVERGES_ATTRIBUTE, ELEMENT_ATTRIBUTE, KEY_ATTRIBUTE, MATCHES_ATTRIBUTE, ORDERS_ATTRIBUTE,
+    READS_ATTRIBUTE, RETURNS_ELEMENT_ATTRIBUTE, STORES_ATTRIBUTE, VALUE_ATTRIBUTE,
+    WRITES_ATTRIBUTE,
 };
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
@@ -58,6 +59,7 @@ enum Stated {
     Writes,
     Element(ElementRole),
     Stores,
+    Clones,
     Closure,
     Orders,
     Matches,
@@ -68,13 +70,14 @@ enum Stated {
 }
 
 impl Stated {
-    const ALL: [(&'static str, Stated); 13] = [
+    const ALL: [(&'static str, Stated); 14] = [
         (READS_ATTRIBUTE, Stated::Reads),
         (WRITES_ATTRIBUTE, Stated::Writes),
         (ELEMENT_ATTRIBUTE, Stated::Element(ElementRole::Element)),
         (KEY_ATTRIBUTE, Stated::Element(ElementRole::Key)),
         (VALUE_ATTRIBUTE, Stated::Element(ElementRole::Value)),
         (STORES_ATTRIBUTE, Stated::Stores),
+        (CLONES_ATTRIBUTE, Stated::Clones),
         (CLOSURE_ATTRIBUTE, Stated::Closure),
         (ORDERS_ATTRIBUTE, Stated::Orders),
         (MATCHES_ATTRIBUTE, Stated::Matches),
@@ -182,6 +185,7 @@ fn stated_effect(
     effect.diverges = statements.diverges;
     effect.orders = statements.orders;
     effect.matches = statements.matches;
+    effect.clones = statements.cloned(&effect.params);
     effect.typed_by = (declaration.params.iter())
         .map(|param| statements.bare_parameter(&param.typ))
         .collect();
@@ -204,6 +208,7 @@ struct Statements<'a> {
     /// Each parameter's stated uses, with the attribute that stated each.
     uses: Vec<Vec<(&'static str, ParamUse)>>,
     stores: Vec<bool>,
+    clones: Vec<usize>,
     results: Vec<(&'static str, ResultUse)>,
     diverges: bool,
     orders: Option<usize>,
@@ -225,6 +230,7 @@ impl<'a> Statements<'a> {
             own_parameters,
             uses: vec![Vec::new(); count],
             stores: vec![false; count],
+            clones: Vec::new(),
             results: Vec::new(),
             diverges: false,
             orders: None,
@@ -247,6 +253,10 @@ impl<'a> Statements<'a> {
                 for position in self.positions(argument, span) {
                     self.stores[position] = true;
                 }
+            }
+            Stated::Clones => {
+                let positions = self.positions(argument, span);
+                self.clones.extend(positions);
             }
             Stated::Closure => self.state_closure(argument, span),
             Stated::Orders => self.orders = self.position(argument, span),
@@ -490,6 +500,36 @@ impl<'a> Statements<'a> {
         } else {
             param.name_span
         }
+    }
+
+    /// The positions `@clones` names, refusing a parameter named twice and
+    /// one that is no element the entry point reads, by its use among
+    /// `params`.
+    fn cloned(&mut self, params: &[ParamUse]) -> Vec<usize> {
+        let mut cloned = std::mem::take(&mut self.clones);
+        cloned.sort_unstable();
+        let named = cloned.len();
+        cloned.dedup();
+        if cloned.len() < named {
+            let declared = self.declaration.name;
+            let message = format!("`@clones` names a parameter of `{declared}` twice");
+            self.refuse(message, self.declaration.span);
+        }
+        for &position in &cloned {
+            if matches!(params.get(position), Some(ParamUse::LooksUp(_))) {
+                continue;
+            }
+            let Some(param) = self.declaration.params.get(position) else {
+                continue;
+            };
+            let message = format!(
+                "`@clones` names `{}`, which is not an `@element`, `@key` or `@value` the \
+                 entry point only reads",
+                param.name
+            );
+            self.refuse(message, self.declaration.span);
+        }
+        cloned
     }
 
     /// `use_` with `@stores` applied: a looked-up element becomes a stored

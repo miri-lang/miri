@@ -75,6 +75,8 @@ use crate::runtime_effects::RuntimeEffects;
 
 use super::context::{class_implements_trait, resolve_method_source, MethodSource, TypeDefinition};
 use super::function_analysis::{DeclaredFunction, ModuleId};
+use super::lent_functions::LendingMethods;
+use super::returned_places::ReturnedPlaces;
 use super::statements::returns::collect_tail_statements;
 use super::type_identities::DeclaredNames;
 use super::utils::{is_auto_copy, Instantiations, ResourceTypes};
@@ -98,6 +100,11 @@ enum FunctionValue {
     /// handed, read out of a place, returned by a call, or a reassigned
     /// `var`. A call through it may keep every argument.
     Opaque,
+    /// A function-typed parameter the body lends the arguments at these
+    /// positions through ([`super::lent_functions`]): a call through it
+    /// keeps none of them, whatever body the caller passed, as the caller is
+    /// refused passing one that keeps; it may keep every other argument.
+    Lent(BTreeSet<ParamIndex>),
 }
 
 /// The locals a body has bound to a function value, by name.
@@ -797,13 +804,17 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 let hop = passed(summary_idx);
                 self.apply_summary_for_arg(arg, summary_idx, s, hop, aliases_return, flow);
             }
-        } else if let Some(fn_name) = self.parameter_called(callee) {
+        } else if let Some(called) = self.parameter_called(callee) {
             // A call through a function-typed parameter reaches a function
-            // this body cannot see: it may keep any argument, and its result
-            // may be any of them.
-            for arg in args {
+            // this body cannot see: it may keep any argument it is not lent,
+            // and its result may be any of them.
+            for (position, arg) in args.iter().enumerate() {
+                if called.lent.contains(&position) {
+                    self.classify(arg, false, flow);
+                    continue;
+                }
                 let hop = EscapeNextHop::DynamicFn {
-                    fn_name: fn_name.to_string(),
+                    fn_name: called.name.to_string(),
                 };
                 self.consume_leaf_identifier(arg, hop, flow);
                 self.classify(arg, aliases_return, flow);
@@ -922,12 +933,23 @@ impl<'a> ReturnFlowAnalyzer<'a> {
     /// see which body it runs: it names one of this function's parameters,
     /// a value the caller supplied, or a local holding a value the walk
     /// cannot resolve ([`FunctionValue::Opaque`]).
-    fn parameter_called<'e>(&self, callee: &'e Expression) -> Option<&'e str> {
+    fn parameter_called<'e>(&self, callee: &'e Expression) -> Option<CalledParameter<'e>> {
         let ExpressionKind::Identifier(name, _) = &callee.node else {
             return None;
         };
-        let is_opaque = matches!(self.function_values.get(name), Some(FunctionValue::Opaque));
-        (is_opaque || self.param_indices(name).next().is_some()).then_some(name.as_str())
+        let held = self.function_values.get(name);
+        if let Some(FunctionValue::Lent(lent)) = held {
+            return Some(CalledParameter {
+                name,
+                lent: lent.clone(),
+            });
+        }
+        let is_opaque = held == Some(&FunctionValue::Opaque);
+        let is_called = is_opaque || self.param_indices(name).next().is_some();
+        is_called.then(|| CalledParameter {
+            name,
+            lent: BTreeSet::new(),
+        })
     }
 
     /// Returns `true` if a caller can tell whether `expr` is kept: its type is
@@ -959,7 +981,7 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                     self.escape_summaries.get(function).cloned()
                 }
                 Some(FunctionValue::Lambda(summary)) => Some(EscapeSummary::clone(summary)),
-                Some(FunctionValue::Opaque) => None,
+                Some(FunctionValue::Opaque | FunctionValue::Lent(_)) => None,
                 None => {
                     let key = self.free_callee(callee, name);
                     self.escape_summaries.get(&key).cloned()
@@ -1262,6 +1284,9 @@ struct FunctionDef<'a> {
     tails: Vec<&'a Expression>,
     /// Whether the body is written in the file of the program being checked.
     located: bool,
+    /// The function-typed parameters the body lends arguments through, each
+    /// with the positions it lends ([`super::lent_functions`]).
+    lent: HashMap<String, BTreeSet<ParamIndex>>,
 }
 
 /// Computes escape summaries for every user-defined function in `stmts`,
@@ -1357,6 +1382,7 @@ fn collect_function_defs<'a>(
                     None => decl.params.clone(),
                 };
                 let tails = returned_tails(decl.return_type.as_deref(), body);
+                let lent = facts.lending.lent_in_body(&fn_id);
                 fn_defs.insert(
                     fn_id,
                     FunctionDef {
@@ -1364,6 +1390,7 @@ fn collect_function_defs<'a>(
                         body,
                         tails,
                         located,
+                        lent,
                     },
                 );
             }
@@ -1741,7 +1768,29 @@ fn compute_one_summary(
     facts: &ProgramFacts<'_>,
     summaries: &HashMap<FunctionId, EscapeSummary>,
 ) -> EscapeSummary {
-    summarize_body(def, facts, summaries, LocalScopes::default())
+    let lent =
+        (def.lent.iter()).map(|(name, lent)| (name.clone(), FunctionValue::Lent(lent.clone())));
+    summarize_body(def, facts, summaries, LocalScopes::holding(lent.collect()))
+}
+
+/// The escape summary of the lambda literal `lambda` handed to a call, its
+/// parameters numbered from 0: each name in `enclosing`, a binding of the
+/// scope creating it, holds a value whose body cannot be seen.
+pub(crate) fn lambda_summary(
+    lambda: &LambdaData,
+    enclosing: impl IntoIterator<Item = String>,
+    facts: &ProgramFacts<'_>,
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+) -> EscapeSummary {
+    let def = FunctionDef {
+        params: lambda.params.clone(),
+        body: &lambda.body,
+        tails: returned_tails(lambda.return_type.as_deref(), &lambda.body),
+        located: false,
+        lent: HashMap::new(),
+    };
+    let held = (enclosing.into_iter()).map(|name| (name, FunctionValue::Opaque));
+    summarize_body(&def, facts, summaries, LocalScopes::holding(held.collect()))
 }
 
 /// The escape summary of the body `def` describes, walked starting with the
@@ -1820,6 +1869,19 @@ pub(crate) struct ProgramFacts<'a> {
     /// The identity each type declaration registers its type under, which
     /// a method's summary is keyed by.
     pub(crate) names: DeclaredNames<'a>,
+    /// The methods handing back a place of their receiver.
+    pub(crate) returned: &'a ReturnedPlaces,
+    /// The function-typed parameters each method lends its arguments
+    /// through.
+    pub(crate) lending: &'a LendingMethods,
+}
+
+/// A function-typed parameter, or a local holding a function value the walk
+/// cannot see, that a call is made through.
+pub(crate) struct CalledParameter<'e> {
+    pub(crate) name: &'e str,
+    /// The argument positions the body lends through it.
+    pub(crate) lent: BTreeSet<ParamIndex>,
 }
 
 /// The locals of a body, by scope: a name declared in a scope is dropped when
@@ -2013,6 +2075,7 @@ impl<'a> EscapeWalk<'a> {
             body: &lambda.body,
             tails: returned_tails(lambda.return_type.as_deref(), &lambda.body),
             located: self.located,
+            lent: HashMap::new(),
         };
         summarize_body(&def, self.facts, self.summaries, LocalScopes::holding(held))
     }
@@ -2294,11 +2357,13 @@ impl<'a> EscapeWalk<'a> {
         let Some(callee_id) = analyzer.callee_id(callee) else {
             return;
         };
-        if let Some(fn_name) = analyzer.parameter_called(callee) {
+        if let Some(called) = analyzer.parameter_called(callee) {
             let hop = EscapeNextHop::DynamicFn {
-                fn_name: fn_name.to_string(),
+                fn_name: called.name.to_string(),
             };
-            for arg in args {
+            let kept =
+                (args.iter().enumerate()).filter(|(position, _)| !called.lent.contains(position));
+            for (_, arg) in kept {
                 self.stored(arg, hop.clone(), span, flow);
             }
             return;

@@ -159,6 +159,7 @@ pub mod rt {
     pub const LIST_FREE: &str = "miri_rt_list_free";
     pub const LIST_LEN: &str = "miri_rt_list_len";
     pub const LIST_PUSH: &str = "miri_rt_list_push";
+    pub const LIST_PUSH_COPY: &str = "miri_rt_list_push_copy";
     pub const LIST_POP: &str = "miri_rt_list_pop";
     pub const LIST_SET: &str = "miri_rt_list_set";
     pub const LIST_INSERT: &str = "miri_rt_list_insert";
@@ -195,6 +196,7 @@ pub mod rt {
     pub const MAP_LEN: &str = "miri_rt_map_len";
     pub const MAP_IS_EMPTY: &str = "miri_rt_map_is_empty";
     pub const MAP_SET: &str = "miri_rt_map_set";
+    pub const MAP_SET_COPY: &str = "miri_rt_map_set_copy";
     pub const MAP_GET: &str = "miri_rt_map_get";
     pub const MAP_CONTAINS_KEY: &str = "miri_rt_map_contains_key";
     pub const MAP_SLOT_OF: &str = "miri_rt_map_slot_of";
@@ -235,6 +237,7 @@ pub mod rt {
     pub const SET_FREE: &str = "miri_rt_set_free";
     pub const SET_LEN: &str = "miri_rt_set_len";
     pub const SET_ADD: &str = "miri_rt_set_add";
+    pub const SET_ADD_COPY: &str = "miri_rt_set_add_copy";
     pub const SET_CONTAINS: &str = "miri_rt_set_contains";
     pub const SET_REMOVE: &str = "miri_rt_set_remove";
     pub const SET_CLEAR: &str = "miri_rt_set_clear";
@@ -507,6 +510,7 @@ pub mod rt {
         LIST_FREE,
         LIST_LEN,
         LIST_PUSH,
+        LIST_PUSH_COPY,
         LIST_POP,
         LIST_SET,
         LIST_INSERT,
@@ -533,6 +537,7 @@ pub mod rt {
         MAP_LEN,
         MAP_IS_EMPTY,
         MAP_SET,
+        MAP_SET_COPY,
         MAP_GET,
         MAP_CONTAINS_KEY,
         MAP_SLOT_OF,
@@ -558,6 +563,7 @@ pub mod rt {
         SET_FREE,
         SET_LEN,
         SET_ADD,
+        SET_ADD_COPY,
         SET_CONTAINS,
         SET_REMOVE,
         SET_CLEAR,

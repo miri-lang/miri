@@ -92,6 +92,12 @@ pub const MATCHES_ATTRIBUTE: &str = "matches";
 /// written into storage the caller names.
 pub const RETURNS_ELEMENT_ATTRIBUTE: &str = "returns_element";
 
+/// Names the element parameters of a `runtime` declaration the entry point
+/// stores a copy of in its collection, the caller keeping the element it
+/// lends: the copy the element's own `clone` makes where the collection
+/// registered one, the element shared otherwise.
+pub const CLONES_ATTRIBUTE: &str = "clones";
+
 /// Names the collection parameter a `runtime` declaration's entry point hands
 /// back a fresh copy of.
 pub const COPIES_ATTRIBUTE: &str = "copies";

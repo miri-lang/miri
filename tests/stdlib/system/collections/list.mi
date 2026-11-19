@@ -156,6 +156,15 @@ fn test_reserve_keeps_the_length_and_the_elements()
     assert_eq(nums.get(0), 1)
     assert_eq(nums.get(99), 97)
 
+fn test_push_copy_appends_a_copy_and_leaves_the_value_usable()
+    var names = List<String>()
+    let name = "a"
+    names.push_copy(name)
+    names.push_copy(name)
+    assert_eq(names.length(), 2)
+    assert_eq(names.get(1), "a")
+    assert_eq(name, "a")
+
 fn test_resize_grows_with_the_value_and_shrinks_from_the_end()
     var names = List(["a"])
     names.resize(4, "x")

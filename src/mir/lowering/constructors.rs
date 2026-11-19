@@ -821,7 +821,9 @@ fn is_list_argument(ctx: &LoweringContext, argument: &Expression) -> bool {
 /// Lowers `List(list)`: the runtime copies the source list exactly as its
 /// `clone()` does, so the two lists grow and shrink independently. The copy
 /// keeps the source's element callbacks: managed elements are retained, and
-/// elements whose class implements `Cloneable` are cloned.
+/// elements whose class implements `Cloneable` are cloned. The type checker
+/// records the call as running the list's `clone`, so the copy is judged as
+/// that call's is.
 fn lower_list_from_list(
     ctx: &mut LoweringContext,
     span: &Span,

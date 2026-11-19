@@ -485,7 +485,10 @@ pub(crate) fn hand_over_kept_arguments(
     }
     let operands = funded_operands(ctx, call);
     let taken = |position, arg: &Operand| {
-        let local = handed_over_local(ctx, call, &consumed, arg);
+        let local = match lent_local(ctx, call, position, arg) {
+            Some(lent) => Some(funded_copy(ctx, lent, call.span)),
+            None => handed_over_local(ctx, call, &consumed, arg),
+        };
         if let (None, Some(operands)) = (local, &operands) {
             check_funded_argument(ctx, call.span, operands.get(position).copied(), &consumed)?;
         }
@@ -537,6 +540,25 @@ fn end_matched_scrutinees(
             }
         }
     }
+}
+
+/// The binding of the caller's a call through a lending parameter is handed
+/// at `position` ([`crate::type_checker::TypeChecker::is_lent_argument`]): the function value owns
+/// it but only reads it, so the call hands it a copy it funds, spelled as a
+/// temporary of its own, and the binding stays the caller's. A temporary only
+/// the call releases is handed over as any other.
+fn lent_local(
+    ctx: &LoweringContext,
+    call: &KeptCall<'_>,
+    position: usize,
+    arg: &Operand,
+) -> Option<Local> {
+    let written = (call.receiver.into_iter()).chain(call.args).nth(position)?;
+    let is_lent = ctx
+        .type_checker
+        .is_lent_argument(variable::argument_value(written));
+    let local = whole_local_copied(arg).filter(|_| is_lent)?;
+    (!is_call_temporary(ctx, call, local)).then_some(local)
 }
 
 /// The local a call hands over by `move` at an owned position whose argument

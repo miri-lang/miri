@@ -32,21 +32,22 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::{Diagnostic, RelatedNote, Severity};
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::body_writes::ReceiverWrites;
 use super::context::TypeDefinition;
+use super::copy_judgement::OpenCopy;
 use super::escape_analysis::{
     call_builds_a_value, collect_pattern_bindings, free_callee, method_owner, method_summary,
     named_binding, receiver_method_summary, returned_tails, EscapeNextHop, EscapeSummary,
-    FunctionId, MethodCall,
+    FunctionId, MethodCall, ProgramFacts,
 };
 use super::function_analysis::DeclaredFunction;
 use super::iteration_plan::{IterationPlan, IterationPlans};
-use super::kept_parameters::declared_type_name;
+use super::lent_functions::some_class_hands_back;
 use super::open_consumption::{OpenBody, OpenRefusal};
 use super::place_reads::{
-    handed_out_of_a_place, place_spelling, PlaceBindings, PlaceFacts, PlaceRepairs, ScrutineeOrigin,
+    handed_out_of_a_place, value_spelling, PlaceBindings, PlaceFacts, PlaceRepairs, ScrutineeOrigin,
 };
 use super::slot_conventions::SlotConventions;
 use super::type_identities::DeclaredNames;
@@ -54,6 +55,9 @@ use super::utils::{hands_on_a_reference, runs_drop_hook, ResourceTypes};
 use super::vtable_selectors::DispatchTable;
 use super::ModuleId;
 use crate::ast::captures::collect_lambda_captures;
+
+mod copy_sites;
+mod lending;
 
 /// Why `value.drop()` is refused on a receiver the scope does not own.
 pub(crate) const BORROWED_DROP_MESSAGE: &str = "drop() can only release a value this scope owns";
@@ -127,6 +131,10 @@ pub struct ConsumedArguments {
     /// consumption hands on no reference of its own. MIR lowering funds no
     /// other resource at a position that keeps it.
     funded_copies: HashSet<usize>,
+    /// Each argument a call through a lending parameter is handed
+    /// ([`super::lent_functions`]): the function value owns it, and reads
+    /// it only, so the call hands over a copy it funds.
+    lent_arguments: HashSet<usize>,
 }
 
 /// A binding a kept closure takes over from the scope creating it.
@@ -191,10 +199,17 @@ impl ConsumedArguments {
         self.funded_copies.contains(&argument.id)
     }
 
+    /// Whether `argument` is handed to a call through a lending parameter,
+    /// which reads it only.
+    pub fn is_lent_argument(&self, argument: &Expression) -> bool {
+        self.lent_arguments.contains(&argument.id)
+    }
+
     /// Add every argument `other` records.
     pub fn extend(&mut self, other: ConsumedArguments) {
         self.payload_handovers.extend(other.payload_handovers);
         self.funded_copies.extend(other.funded_copies);
+        self.lent_arguments.extend(other.lent_arguments);
         self.expressions.extend(other.expressions);
         self.open_expressions.extend(other.open_expressions);
         self.open_expressions_used_after
@@ -398,7 +413,9 @@ pub struct UseAfterMoveChecker<'a> {
     iteration_plans: Option<&'a IterationPlans>,
     /// The identity each type declaration registers its type under, which
     /// an open body is named by; read off the written name when absent.
-    names: Option<DeclaredNames<'a>>,
+    names: DeclaredNames<'a>,
+    /// The facts the escape summaries were computed against.
+    facts: ProgramFacts<'a>,
     errors: Vec<TypeError>,
     warnings: Vec<Diagnostic>,
     /// Names currently bound as parameters or `let`/`var` locals.  Used to
@@ -456,6 +473,19 @@ pub struct UseAfterMoveChecker<'a> {
     repairs: Option<&'a PlaceRepairs>,
     /// The module declaring each top-level function, by statement id.
     modules: &'a HashMap<usize, ModuleId>,
+    /// The function-typed parameters the method being analysed lends
+    /// arguments through ([`super::lent_functions`]), each with the
+    /// positions it lends: a call through one consumes nothing it is handed
+    /// there.
+    lent_functions: HashMap<String, BTreeSet<usize>>,
+    /// What each runtime entry point does to its arguments, by name: a call
+    /// to one storing a copy of an element is a copy of it.
+    runtime_effects: &'a crate::runtime_effects::RuntimeEffects,
+    /// Each copy a body compiled once per copy makes of a value of its
+    /// open type parameter.
+    open_copies: Vec<OpenCopy>,
+    /// The method whose body is being checked, when it is one.
+    current_method: Option<FunctionId>,
 }
 
 /// What the checker reads of the program's declared functions: the function
@@ -491,14 +521,20 @@ struct ClosureCaptures {
 }
 
 impl<'a> UseAfterMoveChecker<'a> {
-    pub fn new(
+    pub(crate) fn new(
         flow: &'a dyn Reachability,
-        types: &'a HashMap<usize, Type>,
-        type_definitions: &'a HashMap<String, TypeDefinition>,
+        (types, type_definitions): (
+            &'a HashMap<usize, Type>,
+            &'a HashMap<String, TypeDefinition>,
+        ),
         escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
         (callees, modules): DeclaredFunctions<'a>,
         vtable_calls: VtableCalls<'a>,
-        resources: &'a ResourceTypes,
+        (resources, runtime_effects): (
+            &'a ResourceTypes,
+            &'a crate::runtime_effects::RuntimeEffects,
+        ),
+        facts: ProgramFacts<'a>,
     ) -> Self {
         Self {
             flow,
@@ -509,7 +545,8 @@ impl<'a> UseAfterMoveChecker<'a> {
             vtable_calls,
             resources,
             iteration_plans: None,
-            names: None,
+            names: facts.names,
+            facts,
             errors: vec![],
             warnings: vec![],
             fn_bindings: HashSet::new(),
@@ -523,9 +560,13 @@ impl<'a> UseAfterMoveChecker<'a> {
             tail_values: HashSet::new(),
             open_body: None,
             open_refusals: Vec::new(),
+            current_method: None,
             places: PlaceBindings::default(),
             repairs: None,
             modules,
+            lent_functions: HashMap::new(),
+            runtime_effects,
+            open_copies: Vec::new(),
         }
     }
 
@@ -535,14 +576,6 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// consumes the value it walks.
     pub(crate) fn with_iteration_plans(mut self, plans: &'a IterationPlans) -> Self {
         self.iteration_plans = Some(plans);
-        self
-    }
-
-    /// This checker naming each declared type by the identity `names`
-    /// records for it, so a body of a type a module keeps private is named
-    /// as the type checker registered the type.
-    pub(crate) fn with_declared_names(mut self, names: DeclaredNames<'a>) -> Self {
-        self.names = Some(names);
         self
     }
 
@@ -559,27 +592,31 @@ impl<'a> UseAfterMoveChecker<'a> {
     where
         'a: 'e,
     {
-        match &self.names {
-            Some(names) => names.declared(name),
-            None => declared_type_name(name),
-        }
+        self.names.declared(name)
     }
 
-    pub fn check_program(self, program: &Program) -> UseAfterMoveFindings {
+    pub fn check_program(self, program: &Program) -> (UseAfterMoveFindings, Vec<OpenCopy>) {
         self.check_statements(&program.body)
     }
 
     /// Runs the analysis on `statements`, the top level of a file or one
-    /// declaration of it, and returns what it found.
-    pub fn check_statements(mut self, statements: &[Statement]) -> UseAfterMoveFindings {
+    /// declaration of it, and returns what it found, and beside it each copy
+    /// a body compiled once per copy makes of a value of its open type
+    /// parameter, to be judged at the copies of that body the type checker
+    /// knows ([`super::copy_judgement`]).
+    pub fn check_statements(
+        mut self,
+        statements: &[Statement],
+    ) -> (UseAfterMoveFindings, Vec<OpenCopy>) {
         let mut consumed: HashMap<String, ConsumedInfo> = HashMap::new();
         self.check_block(statements, &mut consumed);
-        UseAfterMoveFindings {
+        let findings = UseAfterMoveFindings {
             errors: self.errors,
             warnings: self.warnings,
             consumed_arguments: self.consumed_arguments,
             open_refusals: self.open_refusals,
-        }
+        };
+        (findings, self.open_copies)
     }
 
     fn check_stmt(&mut self, stmt: &Statement, consumed: &mut HashMap<String, ConsumedInfo>) {
@@ -628,9 +665,10 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.check_stmt(block, consumed);
             }
             StatementKind::Class(class_data) => {
-                let open = self.generic_class_body(&class_data.name);
                 let owner = self.declared_name(&class_data.name);
-                self.check_open_method_bodies((owner, &class_data.body), |_| open.clone());
+                let definitions = self.type_definitions;
+                let open = |method: &str| OpenBody::of_generic_owner((owner?, method), definitions);
+                self.check_open_method_bodies((owner, &class_data.body), open);
             }
             StatementKind::Trait(name, _, _, methods, _) => self.check_trait_methods(name, methods),
             StatementKind::Struct(name, _, _, methods, _, _)
@@ -673,7 +711,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         decl: &crate::ast::statement::FunctionDeclarationData,
     ) {
         let Some(module) = self.modules.get(&statement) else {
-            self.check_fn_decl(decl);
+            self.check_fn_decl(decl, HashMap::new());
             return;
         };
         let function = FunctionId::Declared(DeclaredFunction {
@@ -682,7 +720,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         });
         let open = OpenBody::of_declaration(&function, decl, None);
         let outer = std::mem::replace(&mut self.open_body, open);
-        self.check_fn_decl(decl);
+        self.check_fn_decl(decl, HashMap::new());
         self.open_body = outer;
     }
 
@@ -700,30 +738,37 @@ impl<'a> UseAfterMoveChecker<'a> {
         for member in members {
             if let StatementKind::FunctionDeclaration(decl) = &member.node {
                 let mut body = open(&decl.name);
+                let mut lent = HashMap::new();
+                let mut current = None;
                 if let Some(owner) = owner {
                     let method = FunctionId::method(owner, &decl.name);
                     body = OpenBody::of_declaration(&method, decl, body);
+                    lent = self.facts.lending.lent_in_body(&method);
+                    current = Some(method);
                 }
                 let outer = std::mem::replace(&mut self.open_body, body);
-                self.check_fn_decl(decl);
+                let outer_method = std::mem::replace(&mut self.current_method, current);
+                self.check_fn_decl(decl, lent);
+                self.current_method = outer_method;
                 self.open_body = outer;
             }
         }
     }
 
-    /// The body a method of the class named by `name` is, when the class
-    /// declares type parameters: compiled once per instantiation.
-    fn generic_class_body(&self, name: &Expression) -> Option<OpenBody> {
-        OpenBody::of_generic_owner(self.declared_name(name)?, self.type_definitions)
-    }
-
-    fn check_fn_decl(&mut self, decl: &crate::ast::statement::FunctionDeclarationData) {
+    /// Analyses the body of `decl`, which lends arguments through the
+    /// function-typed parameters `lent` names.
+    fn check_fn_decl(
+        &mut self,
+        decl: &crate::ast::statement::FunctionDeclarationData,
+        lent: HashMap<String, BTreeSet<usize>>,
+    ) {
         let Some(body) = &decl.body else { return };
         let prev_bindings = std::mem::take(&mut self.fn_bindings);
         let prev_gpu = std::mem::take(&mut self.gpu_bindings);
         let prev_owned = std::mem::take(&mut self.owned_locals);
         let prev_places = std::mem::take(&mut self.places);
         let prev_closures = std::mem::take(&mut self.closures);
+        let prev_lent = std::mem::replace(&mut self.lent_functions, lent);
         let tails = returned_tails(decl.return_type.as_deref(), body);
         let prev_tails = std::mem::replace(
             &mut self.tail_values,
@@ -736,6 +781,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         let mut fn_consumed: HashMap<String, ConsumedInfo> = HashMap::new();
         self.check_stmt(body, &mut fn_consumed);
         self.closures = prev_closures;
+        self.lent_functions = prev_lent;
         self.tail_values = prev_tails;
         self.loop_exits = prev_loops;
         self.fn_bindings = prev_bindings;
@@ -837,6 +883,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
         self.fn_bindings.insert(decl.name.clone());
         self.owned_locals.insert(decl.name.clone());
+        self.lent_functions.remove(&decl.name);
         let facts = self.place_facts();
         let borrowed =
             (decl.initializer.as_ref()).and_then(|init| facts.borrowed_place(init, &self.places));
@@ -1040,7 +1087,9 @@ impl<'a> UseAfterMoveChecker<'a> {
         let prev_gpu = self.gpu_bindings.clone();
         let prev_owned = self.owned_locals.clone();
         let places_mark = self.places.mark();
+        let prev_lent = self.lent_functions.clone();
         for d in decls {
+            self.lent_functions.remove(&d.name);
             self.fn_bindings.insert(d.name.clone());
             self.owned_locals.remove(d.name.as_str());
             match &walked {
@@ -1060,6 +1109,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         };
         self.check_loop(pass, &loop_variables, consumed);
         restore_shadowed(consumed, shadowed);
+        self.lent_functions = prev_lent;
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
         self.owned_locals = prev_owned;
@@ -1291,13 +1341,16 @@ impl<'a> UseAfterMoveChecker<'a> {
         let prev_bindings = self.fn_bindings.clone();
         let prev_owned = std::mem::take(&mut self.owned_locals);
         let places_mark = self.places.mark();
+        let prev_lent = self.lent_functions.clone();
         for p in &lambda.params {
             self.fn_bindings.insert(p.name.clone());
             self.places.forget(&p.name);
+            self.lent_functions.remove(&p.name);
         }
         let prev_loops = std::mem::take(&mut self.loop_exits);
         let mut lambda_consumed = HashMap::new();
         self.check_stmt(&lambda.body, &mut lambda_consumed);
+        self.lent_functions = prev_lent;
         self.loop_exits = prev_loops;
         self.fn_bindings = prev_bindings;
         self.owned_locals = prev_owned;
@@ -1500,11 +1553,15 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.owned_locals
             .retain(|name| !arm_bindings.contains(name));
         self.places.bind_arm(&arm_bindings, origin);
+        let prev_lent = self.lent_functions.clone();
+        self.lent_functions
+            .retain(|name, _| !arm_bindings.contains(name));
         self.fn_bindings.extend(arm_bindings);
         if let Some(guard) = &branch.guard {
             self.check_expr(guard, &mut arm_consumed);
         }
         self.check_stmt(&branch.body, &mut arm_consumed);
+        self.lent_functions = prev_lent;
         self.fn_bindings = prev_bindings;
         self.owned_locals = prev_owned;
         self.places.restore(places_mark);
@@ -1543,19 +1600,30 @@ impl<'a> UseAfterMoveChecker<'a> {
         let is_dynamic_fn = method_summary.is_none()
             && free_fn_summary.is_none()
             && self.is_dynamic_fn_callee(callee);
+        let lent_here = (self.lent_positions_called(callee)).filter(|_| is_dynamic_fn);
 
         self.check_expr(callee, consumed);
         for arg in args {
             self.check_argument(arg, consumed);
         }
 
+        self.refuse_keepers_handed_to_lenders(callee, args);
+        self.record_element_copies(callee, args);
         // A GPU atomic built-in writes through the buffer it is handed and
         // keeps nothing, so the buffer stays usable after the call.
-        if method_summary.is_none() && free_fn_summary.is_none() && is_gpu_atomic_builtin(callee) {
+        let is_atomic =
+            method_summary.is_none() && free_fn_summary.is_none() && is_gpu_atomic_builtin(callee);
+        if is_atomic {
             return;
         }
 
         let consumed_before: HashSet<String> = consumed.keys().cloned().collect();
+        if let Some(lent) = lent_here {
+            self.consume_through_lending_parameter((&fn_name, &lent), args, consumed);
+            let passed = args.iter().map(argument_value);
+            self.refuse_a_kept_resource_passed_again(passed, &fn_name, &consumed_before, consumed);
+            return;
+        }
         self.consume_call_arguments(
             callee,
             args,
@@ -1926,6 +1994,8 @@ impl<'a> UseAfterMoveChecker<'a> {
             types: self.types,
             type_definitions: self.type_definitions,
             writes: self.vtable_calls.restored,
+            returned: self.facts.returned,
+            effects: self.runtime_effects,
         }
     }
 
@@ -1940,7 +2010,12 @@ impl<'a> UseAfterMoveChecker<'a> {
         if open.is_none() && !self.is_resource_expr(value) {
             return false;
         }
-        let Some(place) = self.place_facts().borrowed_place(value, &self.places) else {
+        // A value whose place depends on the class running the body is
+        // borrowed when some class running it hands back a place: the body
+        // is checked once for every one of them.
+        let place = (self.place_facts().borrowed_place(value, &self.places))
+            .filter(|place| self.is_borrowed_at_some_class(place));
+        let Some(place) = place else {
             // TODO: a plain resource field handed to a keeper is still a
             // funded copy (two holders); refusing it needs `out` on a place
             // path so the repair `replace(out h.f, new)` compiles. An element
@@ -1948,7 +2023,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             // same way until that repair compiles for it.
             return false;
         };
-        let spelled = place_spelling(value).unwrap_or_default();
+        let spelled = value_spelling(value);
         let repairs = self.repairs.unwrap_or(&NO_REPAIRS);
         let error =
             handed_out_of_a_place(&spelled, &place, (&keeper_name(sink), repairs), value.span);
@@ -1964,6 +2039,19 @@ impl<'a> UseAfterMoveChecker<'a> {
             });
         }
         true
+    }
+
+    /// Whether `place` is borrowed at some class running the body checked:
+    /// at every class when it does not depend on the class.
+    fn is_borrowed_at_some_class(&self, place: &super::place_reads::BorrowedPlace) -> bool {
+        place.per_copy().is_none_or(|methods| {
+            some_class_hands_back(
+                self.type_definitions,
+                self.facts.returned,
+                self.current_method.as_ref(),
+                methods,
+            )
+        })
     }
 
     /// When `name`, which `value` reads, is a payload the scope's own
@@ -1998,6 +2086,40 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// resolved to, and otherwise the name it is written as.
     fn named_callee(&self, callee: &Expression, name: &str) -> FunctionId {
         free_callee(callee, name, self.callees)
+    }
+
+    /// Handles the arguments of a call through `name`, a parameter lending
+    /// the positions `lent`: each lent resource is a copy the call funds
+    /// while its holder keeps its own, as the function value owns what it
+    /// is handed and only reads it; each other argument is consumed, as by
+    /// any call through a function value.
+    fn consume_through_lending_parameter(
+        &mut self,
+        (name, lent): (&str, &BTreeSet<usize>),
+        args: &[Expression],
+        consumed: &mut Consumed,
+    ) {
+        let sink = Sink::DynamicFn(name.to_string());
+        for (position, arg) in args.iter().enumerate() {
+            if !lent.contains(&position) {
+                self.consume_resource_arg(arg, &sink, position, consumed);
+                continue;
+            }
+            let value = argument_value(arg);
+            self.consumed_arguments.lent_arguments.insert(value.id);
+            if self.is_resource_expr(value) {
+                self.consumed_arguments.funded_copies.insert(value.id);
+            }
+        }
+    }
+
+    /// The positions the function-typed parameter `callee` names lends,
+    /// when the method being analysed lends arguments through it.
+    fn lent_positions_called(&self, callee: &Expression) -> Option<BTreeSet<usize>> {
+        let ExpressionKind::Identifier(name, _) = &callee.node else {
+            return None;
+        };
+        self.lent_functions.get(name.as_str()).cloned()
     }
 
     /// Dynamic-fn classifier — see `fn_bindings` field doc.
@@ -2202,7 +2324,7 @@ fn slot_summary(mut summary: EscapeSummary, convention: &[bool]) -> EscapeSummar
 
 /// The value a `for` loop's iterable expression walks: the value itself,
 /// which the parser may wrap as an iterable-object range.
-fn walked_value(iter: &Expression) -> &Expression {
+pub(crate) fn walked_value(iter: &Expression) -> &Expression {
     if let ExpressionKind::Range(value, _, RangeExpressionType::IterableObject) = &iter.node {
         return value;
     }

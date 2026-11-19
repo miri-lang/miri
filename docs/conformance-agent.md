@@ -36,6 +36,8 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_OWN_008 | Triggers MER_OWN_008: a list element is handed to a function that keeps it. |
 | MER_OWN_008_optional_field | Triggers MER_OWN_008: an optional field is handed to a function that keeps it. |
 | MER_OWN_008_out_parameter | Triggers MER_OWN_008: a function keeps the value of its out parameter, which the caller gets back. |
+| MER_OWN_009 | Triggers MER_OWN_009: a mapping function returns the element map lends it. |
+| MER_OWN_010 | Triggers MER_OWN_010: a list of a resource that does not implement Cloneable is cloned. |
 | MER_PAR_001 | Triggers MER_PAR_001: Unexpected Token. |
 | MER_PAR_001_colon_annotation | Colon-style type annotation (Rust-like syntax, not Miri). |
 | MER_PAR_001_arrow_return_type | Arrow-style return type (Rust-like syntax, not Miri). |
@@ -196,6 +198,8 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_OWN_008 | Accepted counterpart of MER_OWN_008: the element is removed from the list and handed over owned. |
 | MER_OWN_008_optional_field | Accepted counterpart of MER_OWN_008: take() empties the optional field and hands its value to the keeper. |
 | MER_OWN_008_out_parameter | Accepted counterpart of MER_OWN_008: replace gives the caller a new value and hands the old one to the keeper. |
+| MER_OWN_009 | Accepted counterpart of MER_OWN_009: the mapping function builds a new value from the element it is lent. |
+| MER_OWN_010 | Accepted counterpart of MER_OWN_010: the resource implements Cloneable, so each element is copied by its own clone. |
 | MER_PAR_001 | Correct type annotation syntax without colon |
 | MER_PAR_002 | Accepted counterpart of MER_PAR_002: Unexpected End of File does not fire. |
 | MER_PAR_003 | Accepted counterpart of MER_PAR_003: Invalid Type Declaration does not fire. |

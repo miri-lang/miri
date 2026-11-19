@@ -16,7 +16,9 @@
 use super::limits::declared_parameter_name;
 use super::{ReachedBindings, SlotVerdicts, Step};
 use crate::ast::types::{Type, TypeKind};
-use crate::type_checker::context::{class_needs_vtable, Context, MethodInfo, TypeDefinition};
+use crate::type_checker::context::{
+    class_needs_vtable, resolve_method_source, Context, MethodInfo, MethodSource, TypeDefinition,
+};
 use crate::type_checker::instantiation_limits::instantiation_argument;
 use crate::type_checker::instantiation_requirements::{
     free_function_owner, GenericBodyId, SELF_PIN,
@@ -73,6 +75,17 @@ impl ReachedCopy {
     /// The type this copy binds the parameter `parameter` to.
     pub(crate) fn bound(&self, parameter: &str) -> Option<&Type> {
         self.step.bound.get(parameter)
+    }
+
+    /// Where the program reaches the chain of bodies leading to this copy:
+    /// the site, written outside every generic body, the first of them is
+    /// reached from.
+    pub(crate) fn program_site(&self) -> crate::error::syntax::Span {
+        let mut step = self.step.as_ref();
+        while let Some(outer) = step.outer.as_deref() {
+            step = outer;
+        }
+        step.site
     }
 
     /// The bodies whose sites led to this one, nearest first, each named by
@@ -167,11 +180,16 @@ impl TypeChecker {
             }
         }
         let mut ordered: Vec<_> = (copies.into_iter())
-            .map(|copy| (copy_order(&copy), copy))
+            .map(|copy| {
+                let preference = self.body_preference(&copy);
+                (copy_order(&copy), preference, copy)
+            })
             .collect();
-        ordered.sort_by(|(lhs, _), (rhs, _)| lhs.cmp(rhs));
-        ordered.dedup_by(|(lhs, _), (rhs, _)| lhs == rhs);
-        let copies = ordered.into_iter().map(|(_, copy)| copy).collect();
+        ordered.sort_by(|(lhs, lhs_body, _), (rhs, rhs_body, _)| {
+            lhs.cmp(rhs).then_with(|| lhs_body.cmp(rhs_body))
+        });
+        ordered.dedup_by(|(lhs, _, _), (rhs, _, _)| lhs == rhs);
+        let copies = ordered.into_iter().map(|(_, _, copy)| copy).collect();
         unowned.sort();
         unowned.dedup();
         ReachedBodies {
@@ -179,6 +197,26 @@ impl TypeChecker {
             unowned,
             verdicts,
         }
+    }
+
+    /// Which of the steps reaching one copy stands for it: the step into the
+    /// declaration its owner runs, as method resolution finds it, before one
+    /// into a declaration the owner overrides or does not reach (a call to
+    /// `clone` on a list reaches both the list's own method and the trait's),
+    /// then the body by name, so the copy is the same on every run.
+    fn body_preference(&self, copy: &ReachedCopy) -> (bool, GenericBodyId) {
+        let body = copy.body();
+        let runs = match &copy.owner {
+            CopyOwner::Function(_) => true,
+            CopyOwner::Type { name, .. } => {
+                match resolve_method_source(self.type_definitions(), name, &copy.name) {
+                    Some(MethodSource::Declared { class, .. }) => class == body.0,
+                    Some(MethodSource::Default(default)) => default.trait_name == body.0,
+                    Some(MethodSource::AbstractOnly { .. }) | None => *name == body.0,
+                }
+            }
+        };
+        (!runs, body.clone())
     }
 
     /// The copy `step` reaches, under the owner it is compiled for; `None`

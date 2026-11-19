@@ -174,6 +174,13 @@ pub fn is_asked_of(
     question: ThunkQuestion,
     type_definitions: &HashMap<String, TypeDefinition>,
 ) -> bool {
+    // TODO: only a class gets a thunk. An enum with a drop hook that
+    // implements `Cloneable` has no clone thunk, because codegen emits thunks
+    // for class instances alone and an enum element may be stored as a bare
+    // discriminant; so a collection of one is refused wherever it is copied
+    // (`copy_judgement::refuses_copy_of`) instead of copying each element
+    // through its `clone`. Missing: a clone thunk for an enum, called by the
+    // container on the element's stored representation.
     let Some(TypeDefinition::Class(definition)) = type_definitions.get(class) else {
         return false;
     };

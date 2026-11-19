@@ -20,7 +20,7 @@
 //! ([`super::kept_parameters`]) refuses a body keeping its own `out`
 //! parameter or restored receiver.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::ast::common::MemberVisibility;
 use crate::ast::expression::{Expression, ExpressionKind};
@@ -36,8 +36,9 @@ use super::emptying_methods::{emptied_by, Emptied};
 use super::escape_analysis::{EscapeNextHop, EscapeSummary, FunctionId};
 use super::function_analysis::ModuleId;
 use super::optional_enum::OptionalEnum;
+use super::returned_places::{Returned, ReturnedPlaces};
 use super::use_after_move::consumed_because_chain;
-use crate::runtime_effects::RuntimeEffects;
+use crate::runtime_effects::{ParamUse, RuntimeEffects};
 
 /// A place a value handed to a keeper is borrowed from.
 #[derive(Debug, Clone)]
@@ -66,6 +67,17 @@ pub(crate) enum BorrowedPlace {
     /// The receiver of a method that replaces it, restored to the caller's
     /// place on every exit.
     RestoredReceiver,
+    /// The value the call written `call` hands back out of its receiver,
+    /// written `receiver` ([`super::returned_places`]), which the receiver's
+    /// method `taking` takes out, when its type declares one. `per_copy`
+    /// names the abstract methods the call reaches on `self`, which hand
+    /// back a place at some classes inheriting the body and not at others.
+    Returned {
+        call: String,
+        receiver: String,
+        taking: Option<String>,
+        per_copy: Option<BTreeSet<String>>,
+    },
 }
 
 impl BorrowedPlace {
@@ -87,7 +99,41 @@ impl BorrowedPlace {
             BorrowedPlace::OutParameter { .. } | BorrowedPlace::RestoredReceiver => {
                 "the caller's place, which gets it back".to_string()
             }
+            BorrowedPlace::Returned { call, receiver, .. } if call == value => {
+                format!("'{receiver}', which still holds it after the call")
+            }
+            BorrowedPlace::Returned { call, .. } => format!("'{call}'"),
         }
+    }
+
+    /// The abstract methods whose body, at the class a body compiled once
+    /// per inheriting class runs on, decides whether the value is borrowed;
+    /// `None` when it is borrowed at every class.
+    pub(crate) fn per_copy(&self) -> Option<&BTreeSet<String>> {
+        match self {
+            BorrowedPlace::Returned { per_copy, .. } => per_copy.as_ref(),
+            BorrowedPlace::Payload { of, .. } => of.per_copy(),
+            BorrowedPlace::Optional { .. }
+            | BorrowedPlace::Element { .. }
+            | BorrowedPlace::LoopElement { .. }
+            | BorrowedPlace::OutParameter { .. }
+            | BorrowedPlace::RestoredReceiver => None,
+        }
+    }
+
+    /// Whether the place the value is borrowed from is `root` or a field or
+    /// an element of it.
+    pub(crate) fn is_rooted_at(&self, root: &str) -> bool {
+        let holder = match self {
+            BorrowedPlace::Optional { holder, .. } => holder,
+            BorrowedPlace::Element { collection, .. }
+            | BorrowedPlace::LoopElement { collection, .. } => collection,
+            BorrowedPlace::Returned { receiver, .. } => receiver,
+            BorrowedPlace::Payload { of, .. } => return of.is_rooted_at(root),
+            BorrowedPlace::OutParameter { .. } | BorrowedPlace::RestoredReceiver => return false,
+        };
+        let rest = holder.strip_prefix(root);
+        rest.is_some_and(|rest| rest.is_empty() || rest.starts_with('.') || rest.starts_with('['))
     }
 
     /// The repair that compiles for a value borrowed from this place, in
@@ -114,11 +160,31 @@ impl BorrowedPlace {
                 | BorrowedPlace::LoopElement { .. }
                 | BorrowedPlace::Payload { .. }
                 | BorrowedPlace::OutParameter { .. }
-                | BorrowedPlace::RestoredReceiver => of.repair(repairs),
+                | BorrowedPlace::RestoredReceiver
+                | BorrowedPlace::Returned { .. } => of.repair(repairs),
             },
             BorrowedPlace::OutParameter { name } => repairs.replacing(Some(name)),
             BorrowedPlace::RestoredReceiver => repairs.replacing(None),
+            BorrowedPlace::Returned {
+                call,
+                receiver,
+                taking,
+                ..
+            } => Some(copying_or_taking_out(call, receiver, taking.as_deref())),
         }
+    }
+}
+
+/// The repair for a value a call hands back out of `receiver`: keep a copy
+/// of it, or take it out with the receiver's emptying method `taking`.
+fn copying_or_taking_out(call: &str, receiver: &str, taking: Option<&str>) -> String {
+    let copying = format!("keep a copy, `{call}.clone()`, when its type implements `Cloneable`");
+    match taking {
+        Some(method) => format!(
+            "take it out instead, with `{receiver}.{method}`, which hands it over owned, \
+             or {copying}"
+        ),
+        None => format!("{copying}: '{receiver}' keeps holding the value the call hands back"),
     }
 }
 
@@ -349,6 +415,25 @@ pub(crate) fn place_spelling(expr: &Expression) -> Option<String> {
     Some(name.clone())
 }
 
+/// `expr` as a refusal names it: a place as [`place_spelling`] writes it,
+/// or a method call on one, `l.element_at(i)`; `value` for any other.
+pub(crate) fn value_spelling(expr: &Expression) -> String {
+    if let Some(spelled) = place_spelling(expr) {
+        return spelled;
+    }
+    let ExpressionKind::Call(callee, args) = &expr.node else {
+        return "value".to_string();
+    };
+    let ExpressionKind::Member(receiver, method) = &callee.node else {
+        return "value".to_string();
+    };
+    let ExpressionKind::Identifier(method, _) = &method.node else {
+        return "value".to_string();
+    };
+    let args: Vec<String> = args.iter().map(index_spelling).collect();
+    format!("{}.{method}({})", value_spelling(receiver), args.join(", "))
+}
+
 /// An index as the program writes it: a literal, a binding or a field path;
 /// `i` stands for any other expression.
 pub(crate) fn index_spelling(index: &Expression) -> String {
@@ -451,6 +536,18 @@ impl PlaceBindings {
         self.undo.push((name.to_string(), borrowed, payload));
     }
 
+    /// Every binding borrowed from `root`, or a field or an element of it,
+    /// bound afresh to no place: what it was read out of no longer holds it.
+    pub(crate) fn forget_rooted_at(&mut self, root: &str) {
+        let rooted: Vec<String> = (self.borrowed.iter())
+            .filter(|(_, place)| place.is_rooted_at(root))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in rooted {
+            self.forget(&name);
+        }
+    }
+
     /// `name` bound to a value borrowed from `place`.
     pub(crate) fn bind_borrowed(&mut self, name: &str, place: BorrowedPlace) {
         self.forget(name);
@@ -489,13 +586,18 @@ pub(crate) struct PlaceFacts<'a> {
     pub types: &'a HashMap<usize, Type>,
     pub type_definitions: &'a HashMap<String, TypeDefinition>,
     pub writes: &'a ReceiverWrites,
+    /// The methods handing back a place of their receiver.
+    pub returned: &'a ReturnedPlaces,
+    /// What each runtime entry point does to its arguments.
+    pub effects: &'a RuntimeEffects,
 }
 
 impl PlaceFacts<'_> {
     /// The place `value` is borrowed from: a binding of `bindings` borrowed
-    /// from one, an optional field or element, or an element of a collection
-    /// offering a way to take it out. `None` for any other value, a plain
-    /// field among them.
+    /// from one, an optional field or element, an element of a collection
+    /// offering a way to take it out, or what a call hands back out of a
+    /// receiver still holding it. `None` for any other value, a plain field
+    /// among them.
     pub(crate) fn borrowed_place(
         &self,
         value: &Expression,
@@ -503,6 +605,12 @@ impl PlaceFacts<'_> {
     ) -> Option<BorrowedPlace> {
         if let ExpressionKind::Identifier(name, _) = &value.node {
             return bindings.borrowed.get(name).cloned();
+        }
+        if let ExpressionKind::Call(callee, args) = &value.node {
+            if let ExpressionKind::Identifier(entry, _) = &callee.node {
+                return self.element_handed_back(value, (entry, args), bindings);
+            }
+            return self.returned_place(value, callee, bindings);
         }
         if !is_place_read(value) {
             return None;
@@ -527,6 +635,63 @@ impl PlaceFacts<'_> {
             collection: place_spelling(collection)?,
             index: index_spelling(index),
             method,
+        })
+    }
+
+    /// The place the call `value`, calling `callee`, hands back: what a
+    /// method handing back a place of its receiver returns, when the
+    /// receiver is a place or a value borrowed from one, which keeps
+    /// holding it after the call.
+    fn returned_place(
+        &self,
+        value: &Expression,
+        callee: &Expression,
+        bindings: &PlaceBindings,
+    ) -> Option<BorrowedPlace> {
+        let ExpressionKind::Member(receiver, _) = &callee.node else {
+            return None;
+        };
+        let is_held =
+            place_spelling(receiver).is_some() || self.borrowed_place(receiver, bindings).is_some();
+        if !is_held {
+            return None;
+        }
+        let returned = (self.returned).of_call(value, (self.types, self.type_definitions))?;
+        Some(BorrowedPlace::Returned {
+            call: value_spelling(value),
+            receiver: value_spelling(receiver),
+            taking: self.emptying_method_of(receiver),
+            per_copy: match returned {
+                Returned::Always => None,
+                Returned::PerCopy(methods) => Some(methods),
+            },
+        })
+    }
+
+    /// The place the call `value` of the runtime entry point `entry` hands
+    /// back: an element of a collection it only reads, among `args`, which
+    /// is a place or a value borrowed from one and keeps holding the element.
+    fn element_handed_back(
+        &self,
+        value: &Expression,
+        (entry, args): (&str, &[Expression]),
+        bindings: &PlaceBindings,
+    ) -> Option<BorrowedPlace> {
+        let effect = self.effects.get(entry)?;
+        if !effect.returns_element_value() {
+            return None;
+        }
+        let held = (args.iter().enumerate())
+            .filter(|(position, _)| effect.param(*position) == ParamUse::Reads)
+            .map(|(_, arg)| arg)
+            .find(|arg| {
+                place_spelling(arg).is_some() || self.borrowed_place(arg, bindings).is_some()
+            })?;
+        Some(BorrowedPlace::Returned {
+            call: value_spelling(value),
+            receiver: value_spelling(held),
+            taking: None,
+            per_copy: None,
         })
     }
 

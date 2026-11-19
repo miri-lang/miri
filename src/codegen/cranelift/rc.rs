@@ -249,8 +249,10 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Address of the runtime clone helper for an element of `elem_kind`.
     ///
-    /// Only user classes that implement `Cloneable` produce a clone helper;
-    /// built-in collections and strings use the runtime's default IncRef path.
+    /// User classes that implement `Cloneable` produce a clone helper, and an
+    /// inner list whose elements are cloned is copied by the runtime's list
+    /// copy ([`TypeFacts::copies_inner_list`]); other built-in collections
+    /// and strings use the runtime's default IncRef path.
     /// A recorded instantiation of a generic class is cloned through the
     /// `clone` compiled for its concrete type, and one whose `clone` lowering
     /// withheld keeps the default path too: nothing that runs copies it.
@@ -261,6 +263,10 @@ impl<'a> FunctionTranslator<'a> {
         facts: &TypeFacts,
         ptr_type: cl_types::Type,
     ) -> Result<Option<Value>, CodegenError> {
+        if facts.copies_inner_list(elem_kind) {
+            let copy = crate::runtime_fns::rt::LIST_CLONE;
+            return Ok(Some(Self::clone_fn_addr(builder, ctx, copy, ptr_type)?));
+        }
         let ElementShape::UserClass(name) = Self::classify_element_shape(elem_kind) else {
             return Ok(None);
         };

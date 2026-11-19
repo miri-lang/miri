@@ -16,6 +16,7 @@ pub mod compilation_ids;
 pub mod constructors;
 pub mod context;
 pub mod control_flow;
+pub mod copy_guard;
 mod derived_hash_call;
 mod derived_operator_call;
 pub mod dispatch;

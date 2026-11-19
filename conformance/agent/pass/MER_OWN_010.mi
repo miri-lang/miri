@@ -1,0 +1,22 @@
+// summary: Accepted counterpart of MER_OWN_010: the resource implements Cloneable, so each element is copied by its own clone.
+// expect-stdout: 2
+// expect-stdout: closed 1
+// expect-stdout: closed 2
+// expect-stdout: closed 1
+// expect-stdout: closed 2
+use system.collections.list
+use system.memory
+
+class Conn implements Cloneable
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn clone() Conn
+        return Conn(self.id)
+    fn drop(self)
+        println(f"closed {self.id}")
+
+fn main()
+    let conns = List([Conn(1), Conn(2)])
+    let copy = conns.clone()
+    println(f"{copy.length()}")

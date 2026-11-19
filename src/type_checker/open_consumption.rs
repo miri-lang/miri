@@ -22,11 +22,11 @@
 //!   its reference on ([`refusals_at_copies`]), and accepted otherwise.
 //!
 //! The copies the type checker knows are the classes inheriting a default,
-//! the instantiations of a generic class the program builds, a generic
-//! body's own included at each type the program reaches it at
-//! ([`super::reached_instantiations`]), and each set of types the program
-//! reaches a function or a method declaring type parameters of its own at
-//! ([`super::reached_instantiations::ReachedCopy`]). A site some path
+//! each instantiation of a generic class's method the program reaches, and
+//! each set of types the program reaches a function or a method declaring
+//! type parameters of its own at
+//! ([`super::reached_instantiations::ReachedCopy`]): a library collection's
+//! method is judged only where the program calls it. A site some path
 //! reaches a use from still never moves at a copy the type checker does not
 //! know: such a copy keeps a funded copy rather than reading a value it
 //! moved.
@@ -38,7 +38,7 @@ use super::escape_analysis::FunctionId;
 use super::generics::generic_parameter_name;
 use super::instantiation_requirements::{free_function_owner, GenericBodyId};
 use super::reached_instantiations::{declared_parameter_name, ReachedCopy};
-use super::utils::{hands_on_a_reference, runs_drop_hook, Instantiations, ResourceTypes};
+use super::utils::{hands_on_a_reference, runs_drop_hook, ResourceTypes};
 use crate::ast::statement::FunctionDeclarationData;
 use crate::ast::types::{Type, TypeKind, SELF_TYPE_NAME};
 use crate::error::type_error::{TypeError, TypeErrorKind};
@@ -50,10 +50,11 @@ pub enum OpenBody {
     /// The default `method` of the trait `trait_name`, whose `self` is
     /// `Self`.
     Default { trait_name: String, method: String },
-    /// A method of the generic class `class`, whose own type parameters are
-    /// `parameters`, in declaration order.
+    /// The method `method` of the generic class `class`, whose own type
+    /// parameters are `parameters`, in declaration order.
     GenericClassMethod {
         class: String,
+        method: String,
         parameters: Vec<String>,
     },
     /// A function or a method declaring type parameters of its own,
@@ -68,10 +69,10 @@ pub enum OpenBody {
 }
 
 impl OpenBody {
-    /// The body a method of the type `owner` is, when the type declares
-    /// type parameters: compiled once per instantiation.
+    /// The body the method `method` of the type `owner` is, when the type
+    /// declares type parameters: compiled once per instantiation.
     pub(crate) fn of_generic_owner(
-        owner: &str,
+        (owner, method): (&str, &str),
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Option<Self> {
         let parameters: Vec<String> = (type_definitions.get(owner)?.generics()?.iter())
@@ -79,6 +80,7 @@ impl OpenBody {
             .collect();
         (!parameters.is_empty()).then(|| OpenBody::GenericClassMethod {
             class: owner.to_string(),
+            method: method.to_string(),
             parameters,
         })
     }
@@ -174,7 +176,6 @@ pub fn hands_on_at_copy(
 pub(crate) struct Copies<'a> {
     pub type_definitions: &'a HashMap<String, TypeDefinition>,
     pub resources: &'a ResourceTypes,
-    pub instantiations: &'a Instantiations,
     /// Every body the program reaches, at each set of types it is reached
     /// at.
     pub reached: &'a [ReachedCopy],
@@ -191,6 +192,7 @@ pub(crate) fn refusals_at_copies(
         .into_iter()
         .filter_map(|refusal| {
             let copy = (copy_types(&refusal.body, &refusal.parameter, copies).into_iter())
+                .map(|known| known.ty)
                 .find(|ty| hands_on_at_copy(&ty.kind, copies.type_definitions, copies.resources))?;
             reported
                 .insert(refusal.error.span)
@@ -199,12 +201,37 @@ pub(crate) fn refusals_at_copies(
         .collect()
 }
 
-/// The types the copies of `body` the type checker knows read its open
-/// parameter `parameter` at: each class inheriting the default, the
-/// argument each instantiation of the generic class binds the parameter to,
-/// or the type each reached copy of a body declaring it binds it to.
-fn copy_types(body: &OpenBody, parameter: &str, copies: &Copies<'_>) -> Vec<Type> {
+/// One copy of a body the type checker knows, and the type it reads an open
+/// parameter at.
+pub(crate) struct KnownCopy<'a> {
+    pub ty: Type,
+    /// The copy the program reaches, for a body compiled once per set of
+    /// types it is reached at; `None` for a class inheriting a default.
+    pub reached: Option<&'a ReachedCopy>,
+}
+
+/// The copies of `body` the type checker knows, each with the type it reads
+/// the open parameter `parameter` at: each class inheriting the default, or
+/// each copy of a generic class's method, or of a body declaring the
+/// parameter, the program reaches, at the type it binds the parameter to.
+pub(crate) fn copy_types<'a>(
+    body: &OpenBody,
+    parameter: &str,
+    copies: &Copies<'a>,
+) -> Vec<KnownCopy<'a>> {
     let definitions = copies.type_definitions;
+    let reached_at = |is_copy: &dyn Fn(&ReachedCopy) -> bool| {
+        (copies.reached.iter())
+            .filter(|copy| is_copy(copy))
+            .filter_map(|copy| {
+                let ty = copy.bound(parameter)?.clone();
+                Some(KnownCopy {
+                    ty,
+                    reached: Some(copy),
+                })
+            })
+            .collect()
+    };
     match body {
         OpenBody::Default { trait_name, method } => (definitions.iter())
             .filter(|(_, definition)| matches!(definition, TypeDefinition::Class(_)))
@@ -212,15 +239,13 @@ fn copy_types(body: &OpenBody, parameter: &str, copies: &Copies<'_>) -> Vec<Type
                 matches!(resolve_method_source(definitions, class, method),
                     Some(MethodSource::Default(default)) if default.trait_name == trait_name)
             })
-            .map(|(class, _)| crate::ast::factory::make_type(TypeKind::Custom(class.clone(), None)))
+            .map(|(class, _)| KnownCopy {
+                ty: crate::ast::factory::make_type(TypeKind::Custom(class.clone(), None)),
+                reached: None,
+            })
             .collect(),
-        OpenBody::GenericClassMethod { class, parameters } => {
-            let Some(index) = parameters.iter().position(|p| p == parameter) else {
-                return Vec::new();
-            };
-            (copies.instantiations.get(class).into_iter().flatten())
-                .filter_map(|arguments| arguments.get(index).cloned())
-                .collect()
+        OpenBody::GenericClassMethod { class, method, .. } => {
+            reached_at(&|copy| copy.body().0 == *class && copy.body().1 == *method)
         }
         OpenBody::OwnParameters {
             body,
@@ -230,10 +255,7 @@ fn copy_types(body: &OpenBody, parameter: &str, copies: &Copies<'_>) -> Vec<Type
             Some(owner) if !parameters.iter().any(|p| p == parameter) => {
                 copy_types(owner, parameter, copies)
             }
-            Some(_) | None => (copies.reached.iter())
-                .filter(|copy| copy.body() == body)
-                .filter_map(|copy| copy.bound(parameter).cloned())
-                .collect(),
+            Some(_) | None => reached_at(&|copy| copy.body() == body),
         },
     }
 }

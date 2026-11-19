@@ -410,6 +410,19 @@ impl MiriMap {
         }
     }
 
+    /// How a copy of each of a key and a value is made: `None` for a plain
+    /// one, whose bytes are the copy, and for one that is not one reference
+    /// word wide; else the clone function to make it with, zero for a
+    /// reference counted again. A key is never cloned; a value is by its
+    /// registered `clone`.
+    fn copied_references(&self) -> (Option<usize>, Option<usize>) {
+        let word = std::mem::size_of::<usize>();
+        let key = (self.key_drop_fn != 0 && self.key_size == word).then_some(0);
+        let is_counted = self.val_clone_fn != 0 || self.val_drop_fn != 0;
+        let value = (is_counted && self.value_size == word).then_some(self.val_clone_fn);
+        (key, value)
+    }
+
     /// Sets a key-value pair, growing the table if necessary.
     #[allow(clippy::missing_safety_doc)]
     pub unsafe fn set(&mut self, key: *const u8, value: *const u8) {
@@ -694,6 +707,43 @@ pub mod ffi {
         });
     }
 
+    /// Sets a copy of a key-value pair the caller only lends.
+    ///
+    /// Key and value are handed over by address as `miri_rt_map_set` takes
+    /// them, but the caller keeps its references: the map stores the copy of
+    /// the value its own `clone` makes when one is registered, and a
+    /// reference of its own to a shared key or value otherwise.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_set_copy(
+        ptr: *mut MiriMap,
+        key: *const u8,
+        key_payload: usize,
+        value: *const u8,
+        value_payload: usize,
+    ) {
+        guard::guard_check(ptr as *mut u8);
+        if value.is_null() {
+            return;
+        }
+        let Some((map, _held)) = key_receiver(ptr, key, key_payload) else {
+            return;
+        };
+        require_fits_slot(value_payload, map.value_size);
+        let value_size = map.value_size;
+        let (key_clone, value_clone) = map.copied_references();
+        with_slot_bytes(key, key_payload, map.key_size, |key| {
+            with_slot_bytes(value, value_payload, value_size, |value| {
+                let key_copy = key_clone.map(|clone_fn| copied_word(key, clone_fn));
+                let value_copy = value_clone.map(|clone_fn| copied_word(value, clone_fn));
+                map.set(
+                    word_or(key, key_copy.as_ref()),
+                    word_or(value, value_copy.as_ref()),
+                )
+            })
+        });
+    }
+
     /// Hands the value for a key, handed over as `miri_rt_map_set` takes it,
     /// to the caller's `out_payload`-byte storage at `out`.
     ///
@@ -879,6 +929,18 @@ pub mod ffi {
         };
         let key_size = map.key_size;
         with_slot_bytes(key, key_payload, key_size, |key| u8::from(map.remove(key)))
+    }
+
+    /// The copy of the counted key or value whose reference word is at
+    /// `slot` ([`crate::rc::copy_reference`]).
+    unsafe fn copied_word(slot: *const u8, clone_fn: usize) -> usize {
+        crate::rc::copy_reference(slot.cast::<usize>().read_unaligned(), clone_fn)
+    }
+
+    /// The bytes to store for the key or value at `slot`: the copy `copy`
+    /// holds, when one was made, else `slot`'s own.
+    fn word_or(slot: *const u8, copy: Option<&usize>) -> *const u8 {
+        copy.map_or(slot, |word| word as *const usize as *const u8)
     }
 
     /// The map a key entry point works on, or `None` when there is no map or no

@@ -48,6 +48,11 @@ public class Set<T> implements Equatable, Hashable, Iterable<T>, Cloneable
     @reads("s")
     @copies("s")
     runtime "core" fn miri_rt_set_clone(s Self) Set<T>
+    @writes("s")
+    @element("element")
+    @clones("element")
+    @matches("s")
+    runtime "core" fn miri_rt_set_add_copy(s Self, element T) bool
 
     /// Returns the number of unique elements in the set.
     public fn length() int: miri_rt_set_len(self)
@@ -88,6 +93,12 @@ public class Set<T> implements Equatable, Hashable, Iterable<T>, Cloneable
     /// Adds an element to the set if not already present.
     public fn add(element T) bool: miri_rt_set_add(self, element)
 
+    /// Adds a copy of `element`, which stays the caller's: the copy its own
+    /// `clone()` makes when its type implements `Cloneable`, else `element`
+    /// shared. A call copying a resource with no `clone` is refused where
+    /// the program reaches it.
+    fn add_copy(element T) bool: miri_rt_set_add_copy(self, element)
+
     /// Returns true if the set contains the given element.
     public fn contains(element T) bool: miri_rt_set_contains(self, element)
 
@@ -113,7 +124,7 @@ public class Set<T> implements Equatable, Hashable, Iterable<T>, Cloneable
         while i < n
             let item = self.element_at(i)
             if f(item)
-                result.add(item)
+                result.add_copy(item)
             i += 1
         return result
 
