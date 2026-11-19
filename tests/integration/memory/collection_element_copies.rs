@@ -485,6 +485,53 @@ fn filtering_a_list_of_an_enum_with_a_hook_is_refused_at_the_call() {
     assert_refused_at(&source, CODE, "let f = l.filter(");
 }
 
+/// The one repair for a copy of an element whose type cannot declare the
+/// copy trait: an enum, or a struct holding a resource.
+const HAND_OVER: &str = "hand each value over instead of copying it";
+
+/// Asserts `source` is refused with MER_OWN_010 at the line containing
+/// `call`, offering only the repair that hands each value over.
+fn assert_refused_with_hand_over(source: &str, call: &str) {
+    let diagnostic = assert_refused_at(source, CODE, call);
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some(HAND_OVER),
+        "the refusal offers only the repair that compiles: {diagnostic:#?}"
+    );
+}
+
+#[test]
+fn cloning_a_list_of_an_enum_with_a_hook_offers_only_handing_each_value_over() {
+    let source = format!(
+        "{HOOKED_ENUM}\nfn main()\n    let l = List([Res.Tag(1)])\n    let c = l.clone()\n    println(f\"{{c.length()}}\")\n"
+    );
+    assert_refused_with_hand_over(&source, "let c = l.clone()");
+}
+
+#[test]
+fn building_a_list_from_a_list_of_an_enum_with_a_hook_offers_only_handing_each_value_over() {
+    let source = format!(
+        "{HOOKED_ENUM}\nfn main()\n    let l = List([Res.Tag(1)])\n    let c = List(l)\n    println(f\"{{c.length()}}\")\n"
+    );
+    assert_refused_with_hand_over(&source, "let c = List(l)");
+}
+
+#[test]
+fn cloning_a_list_of_a_struct_holding_a_resource_offers_only_handing_each_value_over() {
+    let source = cloneable(
+        r#"
+struct Holder
+    r Res
+
+fn main()
+    let l = List([Holder(Res(1))])
+    let c = l.clone()
+    println(f"{c.length()}")
+"#,
+    );
+    assert_refused_with_hand_over(&source, "let c = l.clone()");
+}
+
 /// A list of lists, built by handing each list over, then cloned: the copy
 /// of the outer list copies each inner list, and the copy of each inner list
 /// copies each of its elements through the element's `clone`, so the copy
@@ -525,6 +572,264 @@ fn building_a_list_of_lists_of_a_resource_that_is_not_cloneable_runs() {
 #[test]
 fn cloning_a_list_of_lists_of_a_resource_that_is_not_cloneable_is_refused_at_the_clone() {
     assert_refused_at(&plain_resource(NESTED), CODE, "let c = l.clone()");
+}
+
+/// A list of sets, each set handed over, then copied by `copy`: the copy
+/// of the outer list copies each inner set, and the copy of each inner set
+/// copies each of its elements through the element's `clone`.
+fn nested_sets(copy: &str) -> String {
+    format!(
+        r#"
+fn main()
+    var inner = Set<Res>()
+    inner.add(Res(1))
+    var l = List<Set<Res>>()
+    l.push(inner)
+    let c = {copy}
+    println(f"{{c.length()}}")
+"#
+    )
+}
+
+#[test]
+fn cloning_a_list_of_sets_of_a_cloneable_resource_clones_each_inner_element() {
+    assert_heap_guard_output(
+        &cloneable(&nested_sets("l.clone()")),
+        "clone 1\n1\ndrop 11\ndrop 1",
+    );
+}
+
+#[test]
+fn building_a_list_from_a_list_of_sets_of_a_cloneable_resource_clones_each_inner_element() {
+    assert_heap_guard_output(
+        &cloneable(&nested_sets("List(l)")),
+        "clone 1\n1\ndrop 11\ndrop 1",
+    );
+}
+
+#[test]
+fn filtering_a_list_of_sets_of_a_cloneable_resource_clones_each_inner_element_kept() {
+    assert_heap_guard_output(
+        &cloneable(&nested_sets("l.filter(fn(s Set<Res>) bool: true)")),
+        "clone 1\n1\ndrop 11\ndrop 1",
+    );
+}
+
+#[test]
+fn cloning_a_list_of_sets_of_a_resource_that_is_not_cloneable_is_refused_at_the_clone() {
+    assert_refused_at(
+        &plain_resource(&nested_sets("l.clone()")),
+        CODE,
+        "let c = l.clone()",
+    );
+}
+
+#[test]
+fn cloning_a_list_of_maps_of_a_cloneable_resource_clones_each_inner_value() {
+    assert_heap_guard_output(
+        &cloneable(
+            r#"
+fn main()
+    var inner = Map<int, Res>()
+    inner.set(1, Res(1))
+    var l = List<Map<int, Res>>()
+    l.push(inner)
+    let c = l.clone()
+    println(f"{c.length()} {c[0][1].id}")
+"#,
+        ),
+        "clone 1\n1 11\ndrop 11\ndrop 1",
+    );
+}
+
+#[test]
+fn filtering_a_map_of_sets_of_a_cloneable_resource_clones_each_inner_element() {
+    assert_heap_guard_output(
+        &cloneable(
+            r#"
+fn main()
+    var inner = Set<Res>()
+    inner.add(Res(1))
+    var m = Map<int, Set<Res>>()
+    m.set(1, inner)
+    let f = m.filter(fn(k int, v Set<Res>) bool: true)
+    println(f"{f.length()}")
+"#,
+        ),
+        "clone 1\n1\ndrop 11\ndrop 1",
+    );
+}
+
+#[test]
+fn cloning_a_set_of_maps_of_a_cloneable_resource_clones_each_inner_value() {
+    assert_heap_guard_output(
+        &cloneable(
+            r#"
+fn main()
+    var inner = Map<int, Res>()
+    inner.set(1, Res(1))
+    var s = Set<Map<int, Res>>()
+    s.add(inner)
+    let c = s.clone()
+    println(f"{c.length()}")
+"#,
+        ),
+        "clone 1\n1\ndrop 11\ndrop 1",
+    );
+}
+
+#[test]
+fn cloning_a_map_of_lists_of_a_cloneable_resource_clones_each_inner_element() {
+    assert_heap_guard_output(
+        &cloneable(
+            r#"
+fn main()
+    var inner = List<Res>()
+    inner.push(Res(1))
+    var m = Map<int, List<Res>>()
+    m.set(1, inner)
+    let c = m.clone()
+    println(f"{c.length()} {c[1][0].id}")
+"#,
+        ),
+        "clone 1\n1 11\ndrop 11\ndrop 1",
+    );
+}
+
+/// Lists built inside generic bodies, each compiled at the concrete type the
+/// program reaches it at, register the element's `clone` like any other: a
+/// copy of one clones each element, one level down too.
+#[test]
+fn copying_lists_built_in_generic_bodies_clones_each_element() {
+    assert_heap_guard_output(
+        &cloneable(
+            r#"
+fn make<T>(v T) List<T>
+    var l = List<T>()
+    l.push(v)
+    return l
+
+fn nest<T>(v T) List<Set<T>>
+    var s = Set<T>()
+    s.add(v)
+    var l = List<Set<T>>()
+    l.push(s)
+    return l
+
+class Holder<T>
+    public var items List<T>
+    fn init()
+        self.items = List<T>()
+    fn put(v T)
+        self.items.push(v)
+
+fn main()
+    let l = make(Res(1))
+    let c = l.clone()
+    let n = nest(Res(2))
+    let d = n.clone()
+    var h = Holder<Res>()
+    h.put(Res(3))
+    let e = h.items.clone()
+    println(f"{c.length()} {d.length()} {e.length()}")
+"#,
+        ),
+        "clone 1\nclone 2\nclone 3\n1 1 1\ndrop 13\ndrop 3\ndrop 12\ndrop 2\ndrop 11\ndrop 1",
+    );
+}
+
+/// An element class whose `clone` fails its obligations at the instance is
+/// refused where the program builds the collection, so no copy can reach a
+/// `clone` that was not compiled and share the element instead.
+#[test]
+fn an_element_whose_clone_fails_at_its_instance_is_refused_where_the_list_is_built() {
+    let source = r#"use system.collections.list
+use system.memory
+
+class Res
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"drop {self.id}")
+
+class Box<T> implements Cloneable
+    public var v T
+    fn init(v T)
+        self.v = v
+    fn clone() Box<T>
+        if self.v < self.v
+            println("less")
+        return Box<T>(self.v)
+
+fn main()
+    let l = List([Box<Res>(Res(1))])
+    let c = l.clone()
+    println(f"{c.length()}")
+"#;
+    assert_refused_at(source, "MER_TYP_075", "let l = List([Box<Res>(Res(1))])");
+}
+
+#[test]
+fn cloning_a_list_of_an_optional_resource_offers_only_handing_each_value_over() {
+    let source = cloneable(
+        r#"
+fn main()
+    var l = List<Res?>()
+    l.push(Res(1))
+    let c = l.clone()
+    println(f"{c.length()}")
+"#,
+    );
+    assert_refused_with_hand_over(&source, "let c = l.clone()");
+}
+
+#[test]
+fn cloning_a_list_of_a_class_that_is_not_cloneable_names_the_copy_trait_in_its_help() {
+    let source = plain_resource(
+        "\nfn main()\n    let l = List([Res(1)])\n    let c = l.clone()\n    println(f\"{c.length()}\")\n",
+    );
+    let diagnostic = assert_refused_at(&source, CODE, "let c = l.clone()");
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some(
+            "implement `Cloneable` on `Res` so each copy is its own value, or hand each value over instead of copying it"
+        ),
+        "{diagnostic:#?}"
+    );
+}
+
+/// A key of a map is never cloned, so a copy of a map keyed by a resource
+/// is refused even where the resource implements `Cloneable`, whether the
+/// map is copied itself or as an element of a list.
+#[test]
+fn cloning_a_map_keyed_by_a_cloneable_resource_is_refused_at_the_clone() {
+    let source = cloneable(
+        r#"
+fn main()
+    var m = Map<Res, int>()
+    m.set(Res(1), 1)
+    let c = m.clone()
+    println(f"{c.length()}")
+"#,
+    );
+    assert_refused_at(&source, CODE, "let c = m.clone()");
+}
+
+#[test]
+fn cloning_a_list_of_maps_keyed_by_a_cloneable_resource_is_refused_at_the_clone() {
+    let source = cloneable(
+        r#"
+fn main()
+    var inner = Map<Res, int>()
+    inner.set(Res(1), 1)
+    var l = List<Map<Res, int>>()
+    l.push(inner)
+    let c = l.clone()
+    println(f"{c.length()}")
+"#,
+    );
+    assert_refused_at(&source, CODE, "let c = l.clone()");
 }
 
 /// A generic function copying a list of its own type parameter.

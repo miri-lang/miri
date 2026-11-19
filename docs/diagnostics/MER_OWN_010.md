@@ -1,6 +1,6 @@
 ## Rule
 
-A collection operation that copies its elements, `clone`, `filter`, `resize`, `push_copy` and their kin, copies each element with the element's own `clone` when its type implements `Cloneable`, so every copy is a separate value with its own `drop` hook. An element of a resource type that does not implement `Cloneable` cannot be copied: two holders of one resource would run its hook once, where the later of them ends. Such a call is refused where the program makes it, with a note naming the line of the operation that copies. A resource that has no `clone` the collection can call, a struct or an enum with a hook or a collection of resources, is refused even when it implements `Cloneable`. An element of a plain type that does not implement `Cloneable` is shared, as copy-on-write keeps it safe.
+A collection operation that copies its elements, `clone`, `filter`, `resize`, `push_copy` and their kin, copies each element with the element's own `clone` when its type implements `Cloneable`, so every copy is a separate value with its own `drop` hook. An element of a resource type that does not implement `Cloneable` cannot be copied: two holders of one resource would run its hook once, where the later of them ends. Such a call is refused where the program makes it, with a note naming the line of the operation that copies. An enum with a hook, or a struct holding a resource, declares no traits, so it has no `clone` a collection can call and is always refused; its only repair is to hand each value over. A collection of resources is copied with the elements it holds, and refused where one of them is. An element of a plain type that does not implement `Cloneable` is shared, as copy-on-write keeps it safe.
 
 ## Messages
 
@@ -10,6 +10,7 @@ A collection operation that copies its elements, `clone`, `filter`, `resize`, `p
 ## Help
 
 - `` implement `{copy_trait}` on `{element}` so each copy is its own value, or hand each value over instead of copying it ``
+- `` hand each value over instead of copying it ``
 
 ## Before
 

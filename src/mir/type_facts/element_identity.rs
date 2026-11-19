@@ -19,6 +19,7 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, STRING_TYPE_NAME}
 use crate::mir::dispatch::ELEMENT_METHOD_NAMES;
 use crate::mir::option_layout::LayoutScope;
 use crate::mir::symbol::{Symbol, ThunkKind};
+use crate::type_checker::copy_judgement::ElementCopy;
 use crate::type_checker::thunk_methods::{thunk_body, ThunkQuestion};
 use std::collections::HashSet;
 
@@ -167,31 +168,19 @@ impl TypeFacts {
         thunk_body(type_name, question.thunk_question(), self.definitions()).is_some()
     }
 
-    /// Whether a `type_name` element is copied through its own `clone`: the
-    /// class, or a class it extends, implements the copy trait, directly or
-    /// through a trait that extends it.
+    /// Whether the class `type_name`, or a class it extends, implements the
+    /// copy trait, directly or through a trait that extends it. How a
+    /// container copies an element is [`Self::element_copy`]'s answer.
     pub fn is_cloneable(&self, type_name: &str) -> bool {
         crate::type_checker::context::implements_copy_trait(type_name, self.definitions())
     }
 
-    /// Whether a copy of a list holding lists of `kind` copies each inner
-    /// list through the runtime's list copy, rather than sharing it: an
-    /// inner list whose own elements are copied through their `clone`, so
-    /// the copy holds values of its own all the way down.
-    ///
-    /// TODO: an inner array, set or map is still shared by the two copies
-    /// even where its elements are `Cloneable`; their runtime copies take
-    /// other arguments than the one clone callback a container calls.
-    pub fn copies_inner_list(&self, kind: &TypeKind) -> bool {
-        let Some(element) = list_element(kind) else {
-            return false;
-        };
-        if let TypeKind::Custom(name, _) = &element.kind {
-            if BuiltinCollectionKind::from_name(name).is_none() {
-                return self.has_clone_thunk(name);
-            }
-        }
-        self.copies_inner_list(&element.kind)
+    /// How a container copies an element of `kind`: through a class's clone
+    /// thunk, through the runtime's copy of an inner collection, or shared
+    /// ([`crate::type_checker::copy_judgement::element_copy`], the answer the
+    /// copy judgement refuses a shared resource by).
+    pub fn element_copy<'k>(&self, kind: &'k TypeKind) -> ElementCopy<'k> {
+        crate::type_checker::copy_judgement::element_copy(kind, self.definitions())
     }
 
     /// Whether a clone thunk is emitted for `type_name`: a thunk copies its
@@ -340,17 +329,4 @@ fn is_matched_by_bytes(kind: &TypeKind) -> bool {
             | TypeKind::Identifier
             | TypeKind::RawPtr
     )
-}
-
-/// The element type of a list of `kind`; `None` when `kind` is no list.
-fn list_element(kind: &TypeKind) -> Option<&Type> {
-    let argument = if let TypeKind::List(argument) = kind {
-        Some(&**argument)
-    } else if let TypeKind::Custom(name, Some(arguments)) = kind {
-        let is_list = BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::List);
-        arguments.first().filter(|_| is_list)
-    } else {
-        None
-    };
-    argument.and_then(crate::ast::type_arguments::argument_type)
 }

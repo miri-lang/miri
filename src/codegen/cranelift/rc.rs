@@ -36,9 +36,9 @@ use std::sync::Arc;
 
 pub(crate) use crate::mir::type_facts::Release;
 use crate::mir::type_facts::{
-    release_plan, releases_slot, CaptureHeld, ClosureEnv, CountedSlot, DropPlan, DropThunk,
-    DropThunkRefusal, DroppedMembers, ElementIdentity, ElementQuestion, EnvLayout, FloatWidth,
-    ReleasePlan, UnresolvedArgument,
+    release_plan, releases_slot, CaptureHeld, ClosureEnv, CopiedCollection, CountedSlot, DropPlan,
+    DropThunk, DropThunkRefusal, DroppedMembers, ElementCopy, ElementIdentity, ElementQuestion,
+    EnvLayout, FloatWidth, ReleasePlan, UnresolvedArgument,
 };
 
 /// How deep a release nests native frames before the rest is queued on the
@@ -247,12 +247,11 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Address of the runtime clone helper for an element of `elem_kind`.
+    /// Address of the runtime clone helper for an element of `elem_kind`, as
+    /// [`TypeFacts::element_copy`] plans it: a class's clone thunk, the
+    /// runtime's copy of an inner list, set or map, or none, so the runtime
+    /// shares the element.
     ///
-    /// User classes that implement the copy trait produce a clone helper, and an
-    /// inner list whose elements are cloned is copied by the runtime's list
-    /// copy ([`TypeFacts::copies_inner_list`]); other built-in collections
-    /// and strings use the runtime's default IncRef path.
     /// A recorded instantiation of a generic class is cloned through the
     /// `clone` compiled for its concrete type, and one whose `clone` lowering
     /// withheld keeps the default path too: nothing that runs copies it.
@@ -263,17 +262,21 @@ impl<'a> FunctionTranslator<'a> {
         facts: &TypeFacts,
         ptr_type: cl_types::Type,
     ) -> Result<Option<Value>, CodegenError> {
-        if facts.copies_inner_list(elem_kind) {
-            let copy = crate::runtime_fns::rt::LIST_CLONE;
-            return Ok(Some(Self::clone_fn_addr(builder, ctx, copy, ptr_type)?));
-        }
-        let ElementShape::UserClass(name) = Self::classify_element_shape(elem_kind) else {
-            return Ok(None);
+        let name = match facts.element_copy(elem_kind) {
+            ElementCopy::Shared => return Ok(None),
+            ElementCopy::Collection(collection) => {
+                let copy = Self::runtime_collection_copy(collection);
+                return Ok(Some(Self::clone_fn_addr(builder, ctx, copy, ptr_type)?));
+            }
+            ElementCopy::Class(name) => name,
         };
-        if !facts.is_cloneable(name) {
-            return Ok(None);
-        }
         let recorded = facts.element_method_instantiation(name, Self::custom_type_args(elem_kind));
+        // Invariant: a withheld `clone` is never one a reached copy calls.
+        // The type checker pins an element class's `clone` wherever the
+        // program builds a collection of it or copies one, so a `clone` whose
+        // obligations fail at the instance is refused there, and the copy
+        // judgement (`copy_judgement::element_copy`) has already accepted
+        // only what the thunk below copies.
         if facts.is_withheld(&Self::clone_method_symbol(name, recorded.as_deref(), facts)) {
             return Ok(None);
         }
@@ -281,6 +284,17 @@ impl<'a> FunctionTranslator<'a> {
         Ok(Some(Self::get_custom_clone_thunk_addr(
             builder, ctx, &thunk, ptr_type,
         )?))
+    }
+
+    /// The runtime entry point copying a `collection` held as an element,
+    /// which copies each of its own elements through the callback it was
+    /// built with.
+    fn runtime_collection_copy(collection: CopiedCollection) -> &'static str {
+        match collection {
+            CopiedCollection::List => rt::LIST_CLONE,
+            CopiedCollection::Map => rt::MAP_CLONE,
+            CopiedCollection::Set => rt::SET_CLONE,
+        }
     }
 
     /// The `clone` body a clone of a `type_name` element at `inst_args` calls:
@@ -511,6 +525,11 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cranelift_codegen::ir::Type,
         facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
+        // Invariant: an unresolved element is never one a reached copy
+        // copies. A generic body is compiled once per copy the program
+        // reaches, at concrete types, and the copy judgement
+        // (`copy_judgement::element_copy`) judges each of those copies; an
+        // element still written against a parameter is in a body no copy runs.
         if crate::mir::type_facts::is_unresolved_element(elem_kind, facts.definitions()) {
             return Ok(());
         }
@@ -570,6 +589,11 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cranelift_codegen::ir::Type,
         facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
+        // Invariant: an unresolved element is never one a reached copy
+        // copies. A generic body is compiled once per copy the program
+        // reaches, at concrete types, and the copy judgement
+        // (`copy_judgement::element_copy`) judges each of those copies; an
+        // element still written against a parameter is in a body no copy runs.
         if crate::mir::type_facts::is_unresolved_element(elem_kind, facts.definitions()) {
             return Ok(());
         }

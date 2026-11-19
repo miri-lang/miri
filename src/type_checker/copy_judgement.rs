@@ -9,14 +9,14 @@
 //! makes where the collection registered one, the element shared otherwise.
 //! Sharing is sound for a value that is no resource, which copy-on-write
 //! keeps apart, and unsound for a resource, whose hook would run once for two
-//! holders. So a copy is refused at an element type that is a resource with
-//! no `clone` thunk ([`refuses_copy_of`], reading
-//! [`thunk_methods::is_asked_of`], the one answer to whether a container
-//! clones a class's elements): a class that does not implement the copy
-//! trait (the trait declared `@copy_trait`),
-//! an abstract one, and any resource that is not a class (a struct or an
-//! enum with a hook, a collection of resources). A key of a map is never
-//! cloned, so a resource key is refused too.
+//! holders. So a copy is refused at an element type that is a resource the
+//! collection shares ([`refuses_copy_of`], reading [`element_copy`], the one
+//! answer to how a container copies an element): a class that does not
+//! implement the copy trait (the trait declared `@copy_trait`), an abstract
+//! one, any resource that is neither a class nor a collection (a struct or an
+//! enum with a hook), and a list, set or map holding a resource refused so.
+//! A key of a map is never cloned, so a resource key is refused too, in a
+//! map copied itself or held by another collection.
 //!
 //! A copy made in a body compiled once per copy, of a value of the body's
 //! open type parameter ([`OpenCopy`]), is judged at every copy of the body
@@ -28,8 +28,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::type_arguments::argument_type_marked;
-use crate::ast::types::TypeKind;
+use crate::ast::type_arguments::{argument_type_marked, TypeArgument};
+use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::RelatedNote;
 use crate::error::syntax::{find_line_info, Span};
@@ -38,7 +38,7 @@ use crate::runtime_effects::ElementRole;
 
 use super::context::{self, TypeDefinition};
 use super::open_consumption::{copy_types, Copies, OpenBody};
-use super::thunk_methods::{is_asked_of, ThunkQuestion};
+use super::thunk_methods::{thunk_body, ThunkQuestion};
 use super::utils::ResourceTypes;
 
 /// A copy a body compiled once per copy makes of a value of its open type
@@ -57,10 +57,76 @@ pub struct OpenCopy {
     pub file: Option<String>,
 }
 
+/// How a collection copies one of its elements: the one answer read by the
+/// copy judgement here and by the code registering each collection's clone
+/// callback (`TypeFacts::element_copy`), so a copy is refused exactly where
+/// no callback copies the element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElementCopy<'k> {
+    /// The copy shares the element: sound for a value that is no resource,
+    /// which copy-on-write keeps apart.
+    Shared,
+    /// Through the clone thunk of this class, which calls its `clone`
+    /// ([`thunk_body`]).
+    Class(&'k str),
+    /// Through the runtime's copy of this built-in collection, which copies
+    /// each element it holds through the callback the collection was built
+    /// with, and shares each key.
+    Collection(CopiedCollection),
+}
+
+/// A built-in collection the runtime copies when it is held as an element.
+/// An array is not one: an inner array is shared ([`element_copy`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopiedCollection {
+    List,
+    Map,
+    Set,
+}
+
+/// How a collection copies an element of `kind`: a class through its clone
+/// thunk, a list, set or map one of whose elements or values is copied so
+/// through the runtime's copy of it, anything else shared.
+///
+/// TODO: an inner array is shared even where its elements are copied
+/// through their `clone`, and an array holding a resource is not judged a
+/// resource ([`ResourceTypes::holds`]), so a copy of a list of arrays of a
+/// resource shares each resource unrefused. Missing: an array of resources
+/// judged a resource, and the runtime's array copy registered as an
+/// element's callback.
+pub fn element_copy<'k>(
+    kind: &'k TypeKind,
+    definitions: &HashMap<String, TypeDefinition>,
+) -> ElementCopy<'k> {
+    let Some(collection) = kind.as_builtin_collection() else {
+        if let TypeKind::Custom(name, _) = kind {
+            if thunk_body(name, ThunkQuestion::Clone, definitions).is_some() {
+                return ElementCopy::Class(name);
+            }
+        }
+        return ElementCopy::Shared;
+    };
+    let copies_an_element = (copied_element_kinds(kind, definitions).iter()).any(|(kind, role)| {
+        *role != ElementRole::Key && element_copy(kind, definitions) != ElementCopy::Shared
+    });
+    let copied = match collection {
+        BuiltinCollectionKind::List => CopiedCollection::List,
+        BuiltinCollectionKind::Map => CopiedCollection::Map,
+        BuiltinCollectionKind::Set => CopiedCollection::Set,
+        BuiltinCollectionKind::Array => return ElementCopy::Shared,
+    };
+    if copies_an_element {
+        ElementCopy::Collection(copied)
+    } else {
+        ElementCopy::Shared
+    }
+}
+
 /// Whether a collection refuses to copy an element of `kind` stored as
-/// `role`: a resource it has no `clone` to copy with. An inner collection is
-/// copied by the runtime with the elements it holds, so it is refused where
-/// one of those is.
+/// `role`: a resource it shares rather than copies ([`element_copy`]), or
+/// one of a key, which is never copied. An inner collection is copied by the
+/// runtime with the elements it holds, so it is refused where one of those
+/// is.
 pub fn refuses_copy_of(
     kind: &TypeKind,
     role: ElementRole,
@@ -70,50 +136,101 @@ pub fn refuses_copy_of(
     if !resources.holds(kind) {
         return false;
     }
-    if kind.as_builtin_collection().is_some() {
-        let elements = copied_element_kinds(kind, definitions);
-        return (elements.iter())
-            .any(|element| refuses_copy_of(element, role, definitions, resources));
-    }
-    let is_cloned_class = matches!(kind, TypeKind::Custom(class, _)
-        if is_asked_of(class, ThunkQuestion::Clone, definitions));
     match role {
-        ElementRole::Element | ElementRole::Value | ElementRole::Parameter => !is_cloned_class,
         ElementRole::Key => true,
+        ElementRole::Element | ElementRole::Value | ElementRole::Parameter => {
+            match element_copy(kind, definitions) {
+                ElementCopy::Shared => true,
+                ElementCopy::Class(_) => false,
+                ElementCopy::Collection(_) => (copied_element_kinds(kind, definitions).iter())
+                    .any(|(element, role)| refuses_copy_of(element, *role, definitions, resources)),
+            }
+        }
     }
 }
 
-/// The element types a copy of a collection of `kind` copies a value of:
-/// each type it is an instance at, or each of its type's parameters where it
-/// names none.
+/// The values a copy of a collection of `kind` copies, each with what it is
+/// to the collection: each type it is an instance at, or each of its type's
+/// parameters where it names none. A map's first is its key.
 pub fn copied_element_kinds(
     kind: &TypeKind,
     definitions: &HashMap<String, TypeDefinition>,
-) -> Vec<TypeKind> {
-    let TypeKind::Custom(name, arguments) = kind else {
-        return Vec::new();
-    };
-    match arguments {
-        Some(arguments) => (arguments.iter())
+) -> Vec<(TypeKind, ElementRole)> {
+    let kinds: Vec<TypeKind> = if let Some(arguments) = written_arguments(kind) {
+        (arguments.into_iter())
             .filter_map(argument_type_marked)
             .map(|ty| ty.kind)
-            .collect(),
-        None => (definitions.get(name))
+            .collect()
+    } else if let TypeKind::Custom(name, None) = kind {
+        (definitions.get(name))
             .and_then(TypeDefinition::generics)
             .unwrap_or_default()
             .iter()
             .map(|generic| TypeKind::Custom(generic.name.clone(), None))
-            .collect(),
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let collection = kind.as_builtin_collection();
+    (kinds.into_iter().enumerate())
+        .map(|(position, kind)| (kind, argument_role(collection, position)))
+        .collect()
+}
+
+/// The type arguments `kind` is written with, in either spelling of a
+/// built-in collection; `None` where it names none.
+fn written_arguments(kind: &TypeKind) -> Option<Vec<&TypeArgument>> {
+    if let TypeKind::Custom(_, arguments) = kind {
+        arguments
+            .as_ref()
+            .map(|arguments| arguments.iter().collect())
+    } else if let TypeKind::List(element) | TypeKind::Set(element) = kind {
+        Some(vec![&**element])
+    } else if let TypeKind::Map(first, second) | TypeKind::Array(first, second) = kind {
+        Some(vec![&**first, &**second])
+    } else {
+        None
+    }
+}
+
+/// What the type argument at `position` of `collection` is to it: a map's
+/// key, then its value; any other collection's element.
+fn argument_role(collection: Option<BuiltinCollectionKind>, position: usize) -> ElementRole {
+    match collection {
+        Some(BuiltinCollectionKind::Map) if position == 0 => ElementRole::Key,
+        Some(BuiltinCollectionKind::Map) => ElementRole::Value,
+        Some(
+            BuiltinCollectionKind::Array | BuiltinCollectionKind::List | BuiltinCollectionKind::Set,
+        )
+        | None => ElementRole::Element,
     }
 }
 
 /// A copy refused at an element type, and the copy trait its repair names.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RefusedCopy<'a> {
+pub struct RefusedCopy<'a> {
     /// The element type: a resource with no `clone`.
     pub element: &'a TypeKind,
     /// The copy trait, where a module declares one.
     pub copy_trait: Option<&'a str>,
+}
+
+impl<'a> RefusedCopy<'a> {
+    /// The refusal of a copy of `element`. Its repair names the copy trait
+    /// only where the element's type can declare it, which a class can and
+    /// an enum, a struct or an optional cannot; for those, handing each
+    /// value over is the one repair that compiles.
+    pub fn of(element: &'a TypeKind, definitions: &'a HashMap<String, TypeDefinition>) -> Self {
+        let can_declare = matches!(element, TypeKind::Custom(name, _)
+            if matches!(definitions.get(name), Some(TypeDefinition::Class(_))));
+        let copy_trait = can_declare
+            .then(|| context::copy_trait(definitions))
+            .flatten();
+        RefusedCopy {
+            element,
+            copy_trait,
+        }
+    }
 }
 
 /// The refusal of `refused`, placed at `span`. `copier` names the method the
@@ -171,7 +288,6 @@ pub(crate) fn refusals_at_known_copies<'s>(
 ) -> Vec<TypeError> {
     let mut reported = HashSet::new();
     let mut refusals = Vec::new();
-    let copy_trait = context::copy_trait(known.type_definitions);
     for copy in copies {
         for at in copy_types(&copy.body, &copy.parameter, known) {
             let element = &at.ty.kind;
@@ -182,10 +298,7 @@ pub(crate) fn refusals_at_known_copies<'s>(
                 .reached
                 .map_or(copy.span, |reached| reached.program_site());
             if reported.insert((site, element.clone())) {
-                let refused = RefusedCopy {
-                    element,
-                    copy_trait,
-                };
+                let refused = RefusedCopy::of(element, known.type_definitions);
                 refusals.push(refusal_at(copy, refused, at.reached, &source_of));
             }
         }

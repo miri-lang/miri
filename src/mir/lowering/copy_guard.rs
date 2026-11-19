@@ -141,12 +141,7 @@ fn copied_kinds(
     }
     if let ResultUse::Copies(position) = effect.result {
         if let Handed::Value(collection) = argument_kind(body, args, position).ok_or(position)? {
-            let elements = copied_element_kinds(&collection, tc.type_definitions());
-            copied.extend(
-                elements
-                    .into_iter()
-                    .map(|kind| (kind, ElementRole::Element)),
-            );
+            copied.extend(copied_element_kinds(&collection, tc.type_definitions()));
         }
     }
     Ok(copied)

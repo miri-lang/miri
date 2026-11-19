@@ -34,6 +34,7 @@ pub use crate::type_checker::context::{
     ClassDefinition, EnumDefinition, FieldInfo, GenericDefinition, MethodInfo, StructDefinition,
     TypeDefinition,
 };
+pub use crate::type_checker::copy_judgement::{CopiedCollection, ElementCopy};
 pub use crate::type_checker::value_class::{
     held_value_layout, value_class, FieldRepr, LayoutShape, ScalarKind, ValueClass, ValueField,
     ValueLayout,

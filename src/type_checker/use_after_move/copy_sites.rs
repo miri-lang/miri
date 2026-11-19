@@ -52,8 +52,8 @@ impl UseAfterMoveChecker<'_> {
         let Some(ty) = types.get(&collection.id) else {
             return;
         };
-        for element in copied_element_kinds(&ty.kind, self.type_definitions) {
-            self.record_copy_at(&element, ElementRole::Element, collection.span);
+        for (element, role) in copied_element_kinds(&ty.kind, self.type_definitions) {
+            self.record_copy_at(&element, role, collection.span);
         }
     }
 
@@ -75,10 +75,7 @@ impl UseAfterMoveChecker<'_> {
             }
         }
         if refuses_copy_of(kind, role, self.type_definitions, self.resources) {
-            let refused = RefusedCopy {
-                element: kind,
-                copy_trait: crate::type_checker::context::copy_trait(self.type_definitions),
-            };
+            let refused = RefusedCopy::of(kind, self.type_definitions);
             self.errors
                 .push(copy_refusal(refused, None, span, Vec::new()));
         }
