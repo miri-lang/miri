@@ -27,12 +27,14 @@ use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::ast::{
     Attribute, ALLOCATES_ATTRIBUTE, CLONES_ATTRIBUTE, CLOSURE_ATTRIBUTE, COPIES_ATTRIBUTE,
     DIVERGES_ATTRIBUTE, ELEMENT_ATTRIBUTE, KEY_ATTRIBUTE, MATCHES_ATTRIBUTE, ORDERS_ATTRIBUTE,
-    READS_ATTRIBUTE, RETURNS_ELEMENT_ATTRIBUTE, STORES_ATTRIBUTE, VALUE_ATTRIBUTE,
-    WRITES_ATTRIBUTE,
+    READS_ATTRIBUTE, REMOVES_ATTRIBUTE, RETURNS_ELEMENT_ATTRIBUTE, STORES_ATTRIBUTE,
+    VALUE_ATTRIBUTE, WRITES_ATTRIBUTE,
 };
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
-use crate::runtime_effects::{ClosureContract, ElementRole, ParamUse, ResultUse, RuntimeEffect};
+use crate::runtime_effects::{
+    ClosureContract, ElementRole, ParamUse, Removal, ResultUse, RuntimeEffect,
+};
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::instantiation_requirements::spells_a_type;
 use crate::type_checker::value_class::{class_reads_open_parameter, LayoutScope};
@@ -62,6 +64,7 @@ enum Stated {
     Clones,
     Closure,
     Orders,
+    Removes,
     Matches,
     Copies,
     ReturnsElement,
@@ -70,7 +73,7 @@ enum Stated {
 }
 
 impl Stated {
-    const ALL: [(&'static str, Stated); 14] = [
+    const ALL: [(&'static str, Stated); 15] = [
         (READS_ATTRIBUTE, Stated::Reads),
         (WRITES_ATTRIBUTE, Stated::Writes),
         (ELEMENT_ATTRIBUTE, Stated::Element(ElementRole::Element)),
@@ -80,6 +83,7 @@ impl Stated {
         (CLONES_ATTRIBUTE, Stated::Clones),
         (CLOSURE_ATTRIBUTE, Stated::Closure),
         (ORDERS_ATTRIBUTE, Stated::Orders),
+        (REMOVES_ATTRIBUTE, Stated::Removes),
         (MATCHES_ATTRIBUTE, Stated::Matches),
         (COPIES_ATTRIBUTE, Stated::Copies),
         (RETURNS_ELEMENT_ATTRIBUTE, Stated::ReturnsElement),
@@ -184,6 +188,7 @@ fn stated_effect(
     effect.result = statements.result(definitions);
     effect.diverges = statements.diverges;
     effect.orders = statements.orders;
+    effect.removes = statements.removes;
     effect.matches = statements.matches;
     effect.clones = statements.cloned(&effect.params);
     effect.typed_by = (declaration.params.iter())
@@ -212,6 +217,7 @@ struct Statements<'a> {
     results: Vec<(&'static str, ResultUse)>,
     diverges: bool,
     orders: Option<usize>,
+    removes: Option<Removal>,
     matches: Option<usize>,
     refusals: Vec<Refusal>,
 }
@@ -234,6 +240,7 @@ impl<'a> Statements<'a> {
             results: Vec::new(),
             diverges: false,
             orders: None,
+            removes: None,
             matches: None,
             refusals: Vec::new(),
         }
@@ -260,6 +267,7 @@ impl<'a> Statements<'a> {
             }
             Stated::Closure => self.state_closure(argument, span),
             Stated::Orders => self.orders = self.position(argument, span),
+            Stated::Removes => self.removes = self.removal(argument, span),
             Stated::Matches => self.matches = self.position(argument, span),
             Stated::Copies => {
                 if let Some(position) = self.position(argument, span) {
@@ -395,6 +403,32 @@ impl<'a> Statements<'a> {
             span,
             ParamUse::Closure(contract),
         );
+    }
+
+    /// `@removes("l")` or `@removes("l, index")`: the container the entry
+    /// point takes elements out of, and the parameter carrying the index or
+    /// key of the one element it takes out, if it takes out one.
+    fn removal(&mut self, argument: &str, span: Span) -> Option<Removal> {
+        let names: Vec<&str> = argument.split(',').map(str::trim).collect();
+        let (container, index) = match names.as_slice() {
+            [container] if !container.is_empty() => (*container, None),
+            [container, index] if !container.is_empty() && !index.is_empty() => {
+                (*container, Some(*index))
+            }
+            [] | [_] | [_, _] | [_, _, _, ..] => {
+                let message = format!(
+                    "`@removes` takes a container and, at most, its index, not `{argument}`"
+                );
+                self.refuse(message, span);
+                return None;
+            }
+        };
+        let container = self.position(container, span)?;
+        let index = match index {
+            Some(index) => Some(self.position(index, span)?),
+            None => None,
+        };
+        Some(Removal { container, index })
     }
 
     fn positions(&mut self, argument: &str, span: Span) -> Vec<usize> {

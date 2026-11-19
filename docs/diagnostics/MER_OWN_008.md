@@ -7,11 +7,11 @@ The places are an `out` parameter and the receiver of a method that replaces it,
 - an `out` parameter: `replace(c, <new value>)` gives the caller a new value and returns the old one; a receiver the method restores: `return replace(self, <new value>)`;
 - an optional: `h.slot.take()` leaves `None` behind, so `match h.slot.take()` binds a payload the arm owns;
 - a list element: `match l.remove_at(i)`; a loop over a list: a `while` loop removing the elements one at a time;
-- what a getter hands back: the receiver's emptying method, when its type declares one, or a copy, `pool.get(0).clone()`, when the element's type implements `Cloneable`.
+- what a getter hands back: the receiver's emptying method, when its type has one, or a copy, `pool.get(0).clone()`, when the element's type implements `Cloneable`.
 
 Handing an `out` parameter to a keeper and then assigning it a new value, `keep(c)` followed by `c = Conn(2)`, is refused as well: the check does not follow the assignment that would give the caller its place back, so `keep(replace(c, Conn(2)))` is the spelling that hands the old value over.
 
-A generic body is refused at each instantiation reading the place as a resource, and runs at one that does not. Each repair names what the program's declarations provide: the help names the optional's emptying method and the replacing function with the module to load it from, and leaves a repair out when nothing provides it.
+A generic body is refused at each instantiation reading the place as a resource, and runs at one that does not. Each repair names what the program's declarations provide: the help names the optional's emptying method and the replacing function with the module to load it from, and leaves a repair out when nothing provides it. A method is an emptying method when the value it returns is taken out of `self`: by `replace`, by a runtime operation that removes the element the method read, or by another emptying method called on a place of `self`. The compiler reads this from the method's body, so a collection of the program's own whose `pull(i int) T?` returns `self.items.remove_at(i)` is named in the repair exactly as `remove_at` is.
 
 A `match` on a value the scope owns — a local, a parameter, a call's result — hands its payload over instead: keeping the payload consumes the value matched, which ends there, and a later use of it is refused (`MER_OWN_003`). A plain, non-optional resource field is still handed to a keeper as a copy, its holder keeping its own.
 

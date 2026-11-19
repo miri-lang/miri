@@ -48,8 +48,10 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Indexed<T>, C
     @stores("item")
     runtime "core" fn miri_rt_list_insert(l Self, index int, item T) bool
     @writes("l")
+    @removes("l, index")
     runtime "core" fn miri_rt_list_remove(l Self, index int) bool
     @writes("l")
+    @removes("l")
     runtime "core" fn miri_rt_list_clear(l Self)
     @writes("l")
     runtime "core" fn miri_rt_list_reserve(l Self, capacity int)
@@ -120,8 +122,9 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Indexed<T>, C
     public fn pop() T?
         let len = self.length()
         if len == 0: return None
-        let item = self[len - 1]
-        miri_rt_list_remove(self, len - 1)
+        let last = len - 1
+        let item = self[last]
+        miri_rt_list_remove(self, last)
         return item
 
     /// Returns the element at the given index.
@@ -144,7 +147,6 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Indexed<T>, C
     /// Reading the element out takes a reference of its own, so the list
     /// releases the one it held as the element leaves it.
     @index_bounds_check("index")
-    @empties("index")
     public fn remove_at(index int) T?
         if index < 0: return None
         if index >= self.length(): return None

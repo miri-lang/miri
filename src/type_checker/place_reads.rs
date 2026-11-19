@@ -24,15 +24,14 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::ast::common::MemberVisibility;
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::statement::{Statement, StatementKind};
+use crate::ast::statement::{FunctionDeclarationData, Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
-use super::body_writes::ReceiverWrites;
 use super::context::TypeDefinition;
-use super::emptying_methods::{emptied_by, Emptied};
+use super::emptying_methods::{emptied_by, Emptied, EmptyingMethods};
 use super::escape_analysis::{EscapeNextHop, EscapeSummary, FunctionId};
 use super::function_analysis::ModuleId;
 use super::optional_enum::OptionalEnum;
@@ -132,8 +131,7 @@ impl BorrowedPlace {
             BorrowedPlace::Payload { of, .. } => return of.is_rooted_at(root),
             BorrowedPlace::OutParameter { .. } | BorrowedPlace::RestoredReceiver => return false,
         };
-        let rest = holder.strip_prefix(root);
-        rest.is_some_and(|rest| rest.is_empty() || rest.starts_with('.') || rest.starts_with('['))
+        is_spelled_under(holder, root)
     }
 
     /// The repair that compiles for a value borrowed from this place, in
@@ -282,15 +280,15 @@ impl PlaceRepairs {
     /// and each function's module among `declaring`.
     pub(crate) fn declared<'s>(
         modules: impl IntoIterator<Item = &'s [Statement]>,
-        (optional, type_definitions, writes): (
+        (optional, type_definitions, emptying): (
             Option<&OptionalEnum>,
             &HashMap<String, TypeDefinition>,
-            &ReceiverWrites,
+            &EmptyingMethods,
         ),
         (effects, declaring): (&RuntimeEffects, &HashMap<usize, ModuleId>),
     ) -> Self {
         let emptying_optional = optional.and_then(|optional| {
-            let method = optional_emptying_method(optional, type_definitions, writes)?;
+            let method = optional_emptying_method(optional, type_definitions, emptying)?;
             Some((method.to_string(), optional.clone()))
         });
         PlaceRepairs {
@@ -302,19 +300,19 @@ impl PlaceRepairs {
     }
 }
 
-/// The method of `optional` marked as emptying it whole and handing back
-/// what it held ([`emptied_by`]).
+/// The method of `optional` that empties it whole and hands back what it
+/// held ([`emptied_by`]).
 fn optional_emptying_method<'d>(
     optional: &OptionalEnum,
     type_definitions: &'d HashMap<String, TypeDefinition>,
-    writes: &ReceiverWrites,
+    emptying: &EmptyingMethods,
 ) -> Option<&'d str> {
     let Some(TypeDefinition::Enum(definition)) = type_definitions.get(&optional.name) else {
         return None;
     };
     (definition.methods.iter())
         .find(|(method, info)| {
-            emptied_by((&optional.name, method), info, writes) == Some(Emptied::Receiver)
+            emptied_by(emptying, (&optional.name, method), info) == Some(&Emptied::Receiver)
         })
         .map(|(method, _)| method.as_str())
 }
@@ -325,6 +323,42 @@ fn replacing_function(
     effects: &RuntimeEffects,
     declaring: &HashMap<usize, ModuleId>,
 ) -> Option<ReplacingFunction> {
+    let (statement, decl, _) = replacing_functions(module, effects).next()?;
+    Some(ReplacingFunction {
+        name: decl.name.clone(),
+        module: (declaring.get(&statement.id)).map_or_else(Vec::new, |m| m.path().to_vec()),
+    })
+}
+
+/// Each function a call hands back the value of a place through, putting a
+/// new one in it, by name, with the position of the argument naming the
+/// place: every runtime entry point among `effects` that overwrites an `out`
+/// place, and every [`ReplacingFunction`] among `modules`, each a module's
+/// top-level statements.
+pub(crate) fn replacing_calls<'s>(
+    modules: impl IntoIterator<Item = &'s [Statement]>,
+    effects: &RuntimeEffects,
+) -> HashMap<String, usize> {
+    let entry_points = effects.iter().filter_map(|(name, effect)| {
+        let position = (0..effect.params.len()).find(|&at| effect.overwrites(at))?;
+        Some((name.clone(), position))
+    });
+    let declared: Vec<(String, usize)> = (modules.into_iter())
+        .flat_map(|module| {
+            replacing_functions(module, effects).map(|(_, decl, at)| (decl.name.clone(), at))
+        })
+        .collect();
+    entry_points.chain(declared).collect()
+}
+
+/// Each public function among the top-level statements of one module that
+/// takes the parameters of a runtime entry point overwriting an `out` place,
+/// its own one `out` parameter where the entry point takes the place, with
+/// its statement and the position of that parameter.
+fn replacing_functions<'m>(
+    module: &'m [Statement],
+    effects: &RuntimeEffects,
+) -> impl Iterator<Item = (&'m Statement, &'m FunctionDeclarationData, usize)> {
     let statements = || {
         module.iter().flat_map(|statement| {
             if let StatementKind::Block(inner) = &statement.node {
@@ -345,10 +379,7 @@ fn replacing_function(
             Some((params.len(), position))
         })
         .collect();
-    if overwriting.is_empty() {
-        return None;
-    }
-    statements().find_map(|statement| {
+    statements().filter_map(move |statement| {
         let StatementKind::FunctionDeclaration(decl) = &statement.node else {
             return None;
         };
@@ -357,10 +388,11 @@ fn replacing_function(
         let takes_the_entry_points_parameters =
             outs.next().is_none() && overwriting.contains(&(decl.params.len(), position));
         let is_public = decl.properties.visibility == MemberVisibility::Public;
-        (takes_the_entry_points_parameters && is_public).then(|| ReplacingFunction {
-            name: decl.name.clone(),
-            module: (declaring.get(&statement.id)).map_or_else(Vec::new, |m| m.path().to_vec()),
-        })
+        (takes_the_entry_points_parameters && is_public).then_some((
+            statement,
+            decl.as_ref(),
+            position,
+        ))
     })
 }
 
@@ -388,6 +420,13 @@ pub(crate) fn handed_out_of_a_place(
         repair: None,
         related: Vec::new(),
     }
+}
+
+/// Whether the place spelled `spelled` is `root` or a field or an element
+/// of it.
+pub(crate) fn is_spelled_under(spelled: &str, root: &str) -> bool {
+    let rest = spelled.strip_prefix(root);
+    rest.is_some_and(|rest| rest.is_empty() || rest.starts_with('.') || rest.starts_with('['))
 }
 
 /// `expr` as the program writes it, when it is a binding, a field path or
@@ -443,13 +482,13 @@ pub(crate) fn index_spelling(index: &Expression) -> String {
     place_spelling(index).unwrap_or_else(|| "i".to_string())
 }
 
-/// The method of the collection type `collection` marked as taking an
-/// element out by its index and handing it back ([`emptied_by`]). `None`
-/// when the type marks none, so no repair taking an element out compiles.
+/// The method of the collection type `collection` that takes an element
+/// out by its index and hands it back ([`emptied_by`]). `None` when the type
+/// has none, so no repair taking an element out compiles.
 pub(crate) fn emptying_method<'d>(
     collection: &TypeKind,
     type_definitions: &'d HashMap<String, TypeDefinition>,
-    writes: &ReceiverWrites,
+    emptying: &EmptyingMethods,
 ) -> Option<&'d str> {
     let TypeKind::Custom(name, _) = collection else {
         return None;
@@ -460,7 +499,7 @@ pub(crate) fn emptying_method<'d>(
     (class.methods.iter())
         .find(|(method, info)| {
             matches!(
-                emptied_by((name, method), info, writes),
+                emptied_by(emptying, (name, method), info),
                 Some(Emptied::Element { .. })
             )
         })
@@ -585,7 +624,8 @@ impl PlaceBindings {
 pub(crate) struct PlaceFacts<'a> {
     pub types: &'a HashMap<usize, Type>,
     pub type_definitions: &'a HashMap<String, TypeDefinition>,
-    pub writes: &'a ReceiverWrites,
+    /// The methods taking a value out of their receiver.
+    pub emptying: &'a EmptyingMethods,
     /// The methods handing back a place of their receiver.
     pub returned: &'a ReturnedPlaces,
     /// What each runtime entry point does to its arguments.
@@ -750,7 +790,7 @@ impl PlaceFacts<'_> {
     /// [`emptying_method`] of the type `collection` is read at.
     fn emptying_method_of(&self, collection: &Expression) -> Option<String> {
         let ty = self.types.get(&collection.id)?;
-        emptying_method(&ty.kind, self.type_definitions, self.writes).map(str::to_string)
+        emptying_method(&ty.kind, self.type_definitions, self.emptying).map(str::to_string)
     }
 }
 

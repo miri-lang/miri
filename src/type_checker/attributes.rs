@@ -10,11 +10,11 @@
 use crate::ast::{
     Attribute, AttributeTarget, ALLOCATES_ATTRIBUTE, CLONES_ATTRIBUTE, CLOSURE_ATTRIBUTE,
     COPIES_ATTRIBUTE, DEPRECATED_ATTRIBUTE, DIVERGES_ATTRIBUTE, ELEMENT_ATTRIBUTE,
-    EMPTIES_ATTRIBUTE, IGNORE_ATTRIBUTE, INDEX_BOUNDS_CHECK_ATTRIBUTE, INDEX_RANGE_CHECK_ATTRIBUTE,
-    KEY_ATTRIBUTE, MATCHES_ATTRIBUTE, MUST_USE_ATTRIBUTE, NON_EXHAUSTIVE_ATTRIBUTE,
-    OPTIONAL_ATTRIBUTE, ORDERS_ATTRIBUTE, PATTERN_LITERAL_ATTRIBUTE, PATTERN_MATCH_ATTRIBUTE,
-    READS_ATTRIBUTE, RETURNS_ELEMENT_ATTRIBUTE, STORES_ATTRIBUTE, TEST_ATTRIBUTE, VALUE_ATTRIBUTE,
-    WRITES_ATTRIBUTE, XFAIL_ATTRIBUTE,
+    IGNORE_ATTRIBUTE, INDEX_BOUNDS_CHECK_ATTRIBUTE, INDEX_RANGE_CHECK_ATTRIBUTE, KEY_ATTRIBUTE,
+    MATCHES_ATTRIBUTE, MUST_USE_ATTRIBUTE, NON_EXHAUSTIVE_ATTRIBUTE, OPTIONAL_ATTRIBUTE,
+    ORDERS_ATTRIBUTE, PATTERN_LITERAL_ATTRIBUTE, PATTERN_MATCH_ATTRIBUTE, READS_ATTRIBUTE,
+    REMOVES_ATTRIBUTE, RETURNS_ELEMENT_ATTRIBUTE, STORES_ATTRIBUTE, TEST_ATTRIBUTE,
+    VALUE_ATTRIBUTE, WRITES_ATTRIBUTE, XFAIL_ATTRIBUTE,
 };
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
@@ -73,8 +73,6 @@ pub(crate) enum ArgumentRule {
     Refused,
     /// The attribute is written with its argument.
     Required,
-    /// The attribute is written either way.
-    Optional,
 }
 
 /// An attribute stating what a runtime entry point does, valid on a `runtime`
@@ -154,12 +152,6 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
         requires: &[],
     },
     AttributeSpec {
-        name: EMPTIES_ATTRIBUTE,
-        valid_on: &[AttributeTarget::Function],
-        argument: ArgumentRule::Optional,
-        requires: &[],
-    },
-    AttributeSpec {
         name: PATTERN_LITERAL_ATTRIBUTE,
         valid_on: &[AttributeTarget::Function],
         argument: ArgumentRule::Refused,
@@ -180,6 +172,10 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
     runtime_effect(VALUE_ATTRIBUTE, true),
     runtime_effect(CLOSURE_ATTRIBUTE, true),
     runtime_effect(ORDERS_ATTRIBUTE, true),
+    AttributeSpec {
+        requires: &[WRITES_ATTRIBUTE],
+        ..runtime_effect(REMOVES_ATTRIBUTE, true)
+    },
     runtime_effect(MATCHES_ATTRIBUTE, true),
     runtime_effect(COPIES_ATTRIBUTE, true),
     runtime_effect(RETURNS_ELEMENT_ATTRIBUTE, false),
@@ -266,9 +262,7 @@ fn validate_attribute(
                 attribute.span,
             ))
         }
-        (ArgumentRule::Required, true)
-        | (ArgumentRule::Refused, false)
-        | (ArgumentRule::Optional, _) => {}
+        (ArgumentRule::Required, true) | (ArgumentRule::Refused, false) => {}
     }
 
     // Check companion requirements

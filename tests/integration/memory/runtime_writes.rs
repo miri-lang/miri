@@ -62,6 +62,7 @@ use system.io
 use system.collections.list
 
 @writes("l")
+@removes("l")
 runtime "core" fn miri_rt_list_clear(l [int])
 
 fn main()
@@ -84,6 +85,7 @@ use system.collections.list
 use system.collections.map
 
 @writes("l")
+@removes("l")
 runtime "core" fn miri_rt_list_clear(l [int])
 
 struct S

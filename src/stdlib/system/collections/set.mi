@@ -39,8 +39,10 @@ public class Set<T> implements Equatable, Hashable, Iterable<T>, Cloneable
     @writes("s")
     @element("element")
     @matches("s")
+    @removes("s, element")
     runtime "core" fn miri_rt_set_remove(s Self, element T) bool
     @writes("s")
+    @removes("s")
     runtime "core" fn miri_rt_set_clear(s Self)
     @reads("s")
     @returns_element

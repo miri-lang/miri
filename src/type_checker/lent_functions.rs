@@ -21,13 +21,18 @@
 //! declaration — an abstract one, a trait's default, a base class's —
 //! lends only where that declaration lends, since a caller holding the
 //! declared type is checked against the declaration.
+//!
+//! The same walk of each body works out whether the method hands back a
+//! place of its receiver ([`super::returned_places`]) and whether it takes a
+//! value out of it ([`super::emptying_methods`]), all three to one fixpoint.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::ast::expression::{Expression, ExpressionKind, LambdaData};
 use crate::ast::pattern::MatchBranch;
 use crate::ast::statement::{
-    FunctionDeclarationData, Statement, StatementKind, RECEIVER_PARAM_NAME,
+    FunctionDeclarationData, Statement, StatementKind, VariableDeclaration,
+    VariableDeclarationType, RECEIVER_PARAM_NAME,
 };
 use crate::ast::types::TypeKind;
 use crate::runtime_effects::RuntimeEffects;
@@ -36,8 +41,13 @@ use super::context::{
     class_ancestry, inherited_trait_requirement, resolve_method_source, trait_lineage,
     MethodSource, TypeDefinition,
 };
+use super::emptying_methods::{
+    emptied_at, emptied_by, is_rooted_at_receiver, parameter_named, Emptied, EmptyingMethods,
+};
 use super::escape_analysis::{collect_pattern_bindings, returned_tails, FunctionId};
-use super::place_reads::{place_spelling, BorrowedPlace, PlaceBindings, PlaceFacts};
+use super::place_reads::{
+    is_spelled_under, place_spelling, BorrowedPlace, PlaceBindings, PlaceFacts,
+};
 use super::returned_places::{receiver_type_name, Handed, Returned, ReturnedPlaces};
 use super::type_identities::DeclaredNames;
 use super::use_after_move::walked_value;
@@ -77,7 +87,18 @@ pub(crate) struct LendingFacts<'a> {
     pub place: PlaceFacts<'a>,
     pub effects: &'a RuntimeEffects,
     pub names: DeclaredNames<'a>,
+    /// The functions handing back the value of a place they put a new one
+    /// in, with the position of the place ([`super::place_reads::replacing_calls`]).
+    pub replacing: &'a HashMap<String, usize>,
+    /// The identity of the enum `T?` spells, whose methods a value of
+    /// optional type reaches.
+    pub optional: Option<&'a str>,
 }
+
+/// What inferring lending works out: the methods handing back a place of
+/// their receiver, those taking a value out of it, and the lending
+/// parameters.
+pub(crate) type Inferred = (ReturnedPlaces, EmptyingMethods, LendingMethods);
 
 /// One lending parameter of a method, as a call site reads it.
 pub(crate) struct LendingParameter<'m> {
@@ -89,38 +110,40 @@ pub(crate) struct LendingParameter<'m> {
 }
 
 impl LendingMethods {
-    /// The methods handing back a place of their receiver, and the lending
+    /// The methods handing back a place of their receiver, those taking a
+    /// value out of it ([`super::emptying_methods`]), and the lending
     /// parameters, of the method bodies among `statements`, the program's
     /// and every module's top level, worked out together to a fixpoint: one
-    /// walk of each body reads both tables as the previous round left them.
+    /// walk of each body reads the tables as the previous round left them.
     pub(crate) fn infer<'s>(
         statements: impl Iterator<Item = &'s Statement> + Clone,
         facts: &LendingFacts<'_>,
-    ) -> (ReturnedPlaces, Self) {
-        let mut returned = ReturnedPlaces::default();
-        let mut table = LendingMethods::default();
+    ) -> Inferred {
+        let mut inferred = Inferred::default();
         loop {
+            let (returned, emptying, table) = &inferred;
             let round = LendingFacts {
                 place: PlaceFacts {
-                    returned: &returned,
+                    returned,
+                    emptying,
                     ..facts.place
                 },
-                effects: facts.effects,
-                names: facts.names,
+                ..*facts
             };
-            let mut next = (ReturnedPlaces::default(), LendingMethods::default());
+            let mut next = Inferred::default();
             for statement in statements.clone() {
                 table.collect_declared(statement, &round, &mut next);
             }
-            if next.0 == returned && next.1 == table {
+            if next == inferred {
                 break;
             }
-            (returned, table) = next;
+            inferred = next;
         }
+        let (returned, emptying, mut table) = inferred;
         let definitions = facts.place.type_definitions;
         table.cap_implementations(definitions);
         table.in_body = table.settled_in_bodies(definitions, &returned);
-        (returned, table)
+        (returned, emptying, table)
     }
 
     /// The positions each lending parameter of the method `function` lends,
@@ -213,7 +236,7 @@ impl LendingMethods {
         &self,
         statement: &Statement,
         facts: &LendingFacts<'_>,
-        next: &mut (ReturnedPlaces, LendingMethods),
+        next: &mut Inferred,
     ) {
         let (name, methods) = match &statement.node {
             StatementKind::Class(class) => (class.name.as_ref(), class.body.as_slice()),
@@ -251,12 +274,15 @@ impl LendingMethods {
             let StatementKind::FunctionDeclaration(decl) = &member.node else {
                 continue;
             };
-            let (lent, handed) = BodyWalk::walk(decl.as_ref(), facts, self);
-            if let Some(handed) = handed {
+            let walked = BodyWalk::walk(decl.as_ref(), facts, self);
+            if let Some(handed) = walked.handed {
                 next.0.insert((owner, &decl.name), handed);
             }
-            if !lent.is_empty() {
-                (next.1.methods).insert(FunctionId::method(owner, &decl.name), lent);
+            if let Some(emptied) = walked.emptied {
+                next.1.insert((owner, &decl.name), emptied);
+            }
+            if !walked.lent.is_empty() {
+                (next.2.methods).insert(FunctionId::method(owner, &decl.name), walked.lent);
             }
         }
     }
@@ -421,8 +447,39 @@ fn classes_running<'d>(
         .map(|(class, _)| class.as_str())
 }
 
-/// The walk of one method body inferring its lending parameters and
-/// whether it hands back a place of its receiver.
+/// What the walk of one method body infers.
+struct Walked {
+    lent: LentParameters,
+    /// When a value the body returns is borrowed from a place of `self`.
+    handed: Option<Handed>,
+    /// What a value the body returns is taken out of `self` as.
+    emptied: Option<Emptied>,
+}
+
+/// A binding read out of an element of a place, at an index or key a
+/// binding no write reaches carries: a parameter or a `let`.
+#[derive(Debug, Clone)]
+struct ElementRead {
+    /// The place whose element it is, as the program writes it.
+    container: String,
+    /// The binding carrying the index or key.
+    index: String,
+    /// What taking the element out takes out of the receiver, when the
+    /// place is one of `self` and the index a parameter.
+    emptied: Option<Emptied>,
+    /// Whether a runtime entry point has since taken the element out.
+    taken: bool,
+}
+
+/// Whether the places spelled `a` and `b` overlap: one is the other, or a
+/// field or an element of it.
+fn overlaps(a: &str, b: &str) -> bool {
+    is_spelled_under(a, b) || is_spelled_under(b, a)
+}
+
+/// The walk of one method body inferring its lending parameters, whether
+/// it hands back a place of its receiver, and whether it takes a value out
+/// of it.
 struct BodyWalk<'w> {
     facts: &'w LendingFacts<'w>,
     table: &'w LendingMethods,
@@ -437,20 +494,43 @@ struct BodyWalk<'w> {
     tails: HashSet<usize>,
     /// When a value the body returns is borrowed from a place of `self`.
     handed: Option<Handed>,
+    /// The method's parameters no binding of the scope walked shadows,
+    /// which an element taken out may be indexed by.
+    params: HashSet<String>,
+    /// The parameters and `let` bindings no binding of the scope walked
+    /// shadows: an index one of them carries names the same element at
+    /// every point of the body.
+    fixed: HashSet<String>,
+    /// The bindings of the scope walked read out of an element of a place.
+    element_reads: HashMap<String, ElementRead>,
+    /// Every place the body assigns, in the order walked, with the place
+    /// the value assigned to a binding is borrowed from.
+    assigned: Vec<(String, Option<BorrowedPlace>)>,
+    /// What the values the body returns are taken out of `self` as: `None`
+    /// when none is, `Some(None)` when two return paths disagree.
+    emptied: Option<Option<Emptied>>,
 }
 
 impl<'w> BodyWalk<'w> {
     /// The lending parameters of the method `decl`, reading `table` for the
-    /// methods its body hands one on to, and when the body hands back a
-    /// place of its receiver.
+    /// methods its body hands one on to, when the body hands back a place of
+    /// its receiver, and what it takes out of it.
     fn walk(
         decl: &FunctionDeclarationData,
         facts: &'w LendingFacts<'w>,
         table: &'w LendingMethods,
-    ) -> (LentParameters, Option<Handed>) {
+    ) -> Walked {
         let Some(body) = decl.body.as_deref() else {
-            return (LentParameters::new(), None);
+            return Walked {
+                lent: LentParameters::new(),
+                handed: None,
+                emptied: None,
+            };
         };
+        let params: HashSet<String> = (decl.params.iter())
+            .filter(|param| !param.is_out)
+            .map(|param| param.name.clone())
+            .collect();
         let lendable = (decl.params.iter())
             .filter(|param| !param.is_out)
             .filter_map(|param| Some((param.name.clone(), function_arity(&param.typ)?)))
@@ -466,15 +546,31 @@ impl<'w> BodyWalk<'w> {
             found: LentParameters::new(),
             tails,
             handed: None,
+            fixed: params.clone(),
+            params,
+            element_reads: HashMap::new(),
+            assigned: Vec::new(),
+            emptied: None,
         };
         walk.statement(body);
-        (walk.found, walk.handed)
+        Walked {
+            lent: walk.found,
+            handed: walk.handed,
+            emptied: walk.emptied.flatten(),
+        }
     }
 
     /// Records the body returning `value`: a value borrowed from a place of
     /// `self` hands that place back, at every class or at those the place
     /// depends on.
     fn returns(&mut self, value: &Expression) {
+        if let Some(emptied) = self.taken_out(value) {
+            self.emptied = match self.emptied.take() {
+                None => Some(Some(emptied)),
+                Some(Some(before)) if before == emptied => Some(Some(before)),
+                Some(_) => Some(None),
+            };
+        }
         let Some(place) = self.facts.place.borrowed_place(value, &self.bindings) else {
             return;
         };
@@ -509,21 +605,93 @@ impl<'w> BodyWalk<'w> {
 
     /// Runs `walk` in a scope of its own: what it binds and shadows ends
     /// with it.
+    ///
+    /// An assignment the scope makes to a binding of an enclosing scope
+    /// outlives it: what the binding was read out of is no longer known to
+    /// be what it holds, and a place assigned to it stays one it may hold.
     fn scoped(&mut self, walk: impl FnOnce(&mut Self)) {
         let mark = self.bindings.mark();
         let lendable = self.lendable.clone();
+        let params = self.params.clone();
+        let fixed = self.fixed.clone();
+        let element_reads = self.element_reads.clone();
+        let assigned_before = self.assigned.len();
         walk(self);
         self.lendable = lendable;
+        self.params = params;
+        self.fixed = fixed;
+        self.element_reads = element_reads;
         self.bindings.restore(mark);
+        let assigned = self.assigned.split_off(assigned_before);
+        for (written, place) in &assigned {
+            self.forget_reads_of(written);
+            if let Some(place) = place {
+                self.bindings.bind_borrowed(written, place.clone());
+            }
+        }
+        self.assigned.extend(assigned);
+    }
+
+    /// Records the body assigning `value` to `target`: a binding assigned
+    /// holds `value`, borrowed when `value` is, and no element read before
+    /// is known to be where it was.
+    fn assigns(&mut self, target: &Expression, value: &Expression) {
+        let Some(written) = place_spelling(target) else {
+            return;
+        };
+        self.forget_reads_of(&written);
+        let place = if let ExpressionKind::Identifier(name, _) = &target.node {
+            let place = self.facts.place.borrowed_place(value, &self.bindings);
+            match &place {
+                Some(place) => self.bindings.bind_borrowed(name, place.clone()),
+                None => self.bindings.forget(name),
+            }
+            place
+        } else {
+            None
+        };
+        self.assigned.push((written, place));
+    }
+
+    /// Forgets every element read the write of the place spelled `written`
+    /// reaches: the binding written, and a read of a place it overlaps.
+    fn forget_reads_of(&mut self, written: &str) {
+        self.element_reads.retain(|name, read| {
+            name != written && read.index != written && !overlaps(&read.container, written)
+        });
     }
 
     /// `name` bound afresh in the scope walked: to `place` when it is read
     /// out of one, and never a lending parameter.
     fn bind(&mut self, name: &str, place: Option<BorrowedPlace>) {
         self.lendable.remove(name);
+        self.params.remove(name);
+        self.fixed.remove(name);
+        self.element_reads.remove(name);
         match place {
             Some(place) => self.bindings.bind_borrowed(name, place),
             None => self.bindings.forget(name),
+        }
+    }
+
+    /// Walks the declaration `decl`, binding its name to what its
+    /// initializer is read out of.
+    fn declare(&mut self, decl: &VariableDeclaration) {
+        let initializer = decl.initializer.as_deref();
+        initializer
+            .into_iter()
+            .for_each(|value| self.expression(value));
+        let place =
+            initializer.and_then(|value| self.facts.place.borrowed_place(value, &self.bindings));
+        self.bind(&decl.name, place);
+        if matches!(
+            decl.declaration_type,
+            VariableDeclarationType::Immutable | VariableDeclarationType::Constant
+        ) {
+            self.fixed.insert(decl.name.clone());
+        }
+        if let Some(read) = initializer.and_then(|value| self.element_read(value)) {
+            self.element_reads.insert(decl.name.clone(), read);
         }
     }
 
@@ -537,17 +705,7 @@ impl<'w> BodyWalk<'w> {
             StatementKind::Block(inner) => {
                 self.scoped(|walk| inner.iter().for_each(|s| walk.statement(s)))
             }
-            StatementKind::Variable(decls, _) => {
-                for decl in decls {
-                    let initializer = decl.initializer.as_deref();
-                    initializer
-                        .into_iter()
-                        .for_each(|value| self.expression(value));
-                    let place = initializer
-                        .and_then(|value| self.facts.place.borrowed_place(value, &self.bindings));
-                    self.bind(&decl.name, place);
-                }
-            }
+            StatementKind::Variable(decls, _) => decls.iter().for_each(|decl| self.declare(decl)),
             StatementKind::If(condition, then, else_, _) => {
                 self.expression(condition);
                 self.scoped(|walk| walk.statement(then));
@@ -630,6 +788,7 @@ impl<'w> BodyWalk<'w> {
             ExpressionKind::Assignment(target, _, value) => {
                 self.expression(target.expression());
                 self.expression(value);
+                self.assigns(target.expression(), value);
             }
             ExpressionKind::Conditional(condition, then, else_, _) => {
                 self.expression(condition);
@@ -723,34 +882,114 @@ impl<'w> BodyWalk<'w> {
         }
     }
 
-    /// Forgets the bindings read out of a collection the runtime entry point
-    /// `entry`, called with `args`, writes while storing nothing: it takes
-    /// elements out, so a binding read out of it before holds its own.
-    ///
-    /// TODO: an entry point writing a collection and storing nothing may also
-    /// keep every element (a sort, a reverse); the declaration does not say
-    /// which, so a binding read before such a call is read as owned after it.
-    /// A mark stating that an entry point takes elements out would settle it.
+    /// Records the runtime entry point `entry`, called with `args`, taking
+    /// elements out of a collection ([`crate::runtime_effects::Removal`]):
+    /// every element when it names none, else the one its index or key
+    /// selects. A binding read out of an element taken out holds its own
+    /// and is taken out of the collection. An index or key is the same as
+    /// the one a binding was read at only when it is the same parameter or
+    /// `let`; any other expression may select another element, so a binding
+    /// read before stays borrowed. An entry point writing a collection and
+    /// taking nothing out (a sort, a reverse) leaves every element where it
+    /// was.
     fn forget_taken_out(&mut self, entry: &str, args: &[Expression]) {
-        let Some(effect) = self.facts.effects.get(entry) else {
+        let Some(removal) = (self.facts.effects.get(entry)).and_then(|effect| effect.removes)
+        else {
             return;
         };
-        let stores = (0..args.len()).any(|position| {
-            matches!(
-                effect.param(position),
-                crate::runtime_effects::ParamUse::Stores(_)
-            )
-        });
-        if stores {
+        let argument = |at: usize| args.get(at).map(argument_value);
+        let Some(container) = argument(removal.container).and_then(place_spelling) else {
             return;
-        }
-        let written = (args.iter().enumerate())
-            .filter(|(position, _)| {
-                effect.param(*position) == crate::runtime_effects::ParamUse::Writes
+        };
+        let Some(selector) = removal.index else {
+            self.bindings.forget_rooted_at(&container);
+            let reads = self.element_reads.values_mut();
+            reads
+                .filter(|read| read.container == container)
+                .for_each(|read| read.taken = true);
+            return;
+        };
+        let Some(index) = argument(selector).and_then(|arg| parameter_named(arg, &self.fixed))
+        else {
+            return;
+        };
+        let taken: Vec<String> = (self.element_reads.iter_mut())
+            .filter(|(_, read)| read.container == container && read.index == index)
+            .map(|(name, read)| {
+                read.taken = true;
+                name.clone()
             })
-            .filter_map(|(_, arg)| place_spelling(argument_value(arg)));
-        for root in written.collect::<Vec<_>>() {
-            self.bindings.forget_rooted_at(&root);
+            .collect();
+        for name in taken {
+            self.bindings.forget(&name);
+        }
+    }
+
+    /// What reading `value` into a binding reads out of a place: an element
+    /// at an index a parameter or a `let` carries.
+    fn element_read(&self, value: &Expression) -> Option<ElementRead> {
+        let ExpressionKind::Index(container, index) = &value.node else {
+            return None;
+        };
+        Some(ElementRead {
+            container: place_spelling(container)?,
+            index: parameter_named(index, &self.fixed)?.to_string(),
+            emptied: emptied_at(value, &self.params),
+            taken: false,
+        })
+    }
+
+    /// What the body returning `value` takes out of `self`: a binding read
+    /// out of an element of it a runtime entry point has taken out, what a
+    /// replacing call hands back of a place of it, or what an emptying
+    /// method called on a place of it hands back.
+    fn taken_out(&self, value: &Expression) -> Option<Emptied> {
+        if let ExpressionKind::Identifier(name, _) = &value.node {
+            let read = self.element_reads.get(name)?;
+            return read.emptied.clone().filter(|_| read.taken);
+        }
+        let ExpressionKind::Call(callee, args) = &value.node else {
+            return None;
+        };
+        if let ExpressionKind::Identifier(function, _) = &callee.node {
+            let at = *self.facts.replacing.get(function)?;
+            return emptied_at(argument_value(args.get(at)?), &self.params);
+        }
+        let ExpressionKind::Member(receiver, method) = &callee.node else {
+            return None;
+        };
+        let ExpressionKind::Identifier(method, _) = &method.node else {
+            return None;
+        };
+        self.emptied_through(receiver, method, args)
+    }
+
+    /// What the call of `method` on `receiver` with `args` takes out of
+    /// `self`, when the method empties its receiver and `receiver` is a
+    /// place of `self`.
+    fn emptied_through(
+        &self,
+        receiver: &Expression,
+        method: &str,
+        args: &[Expression],
+    ) -> Option<Emptied> {
+        let place = &self.facts.place;
+        let ty = place.types.get(&receiver.id)?;
+        let type_name = if let TypeKind::Option(_) = ty.kind {
+            self.facts.optional
+        } else {
+            receiver_type_name(ty)
+        }?;
+        let (owner, info) = declaration_reached(place.type_definitions, type_name, method)?;
+        match emptied_by(place.emptying, (owner, method), info)? {
+            Emptied::Receiver => emptied_at(receiver, &self.params),
+            Emptied::Element { index } => {
+                let at = (info.params.iter()).position(|(name, _)| name == index)?;
+                let index = parameter_named(argument_value(args.get(at)?), &self.params)?;
+                is_rooted_at_receiver(receiver).then(|| Emptied::Element {
+                    index: index.to_string(),
+                })
+            }
         }
     }
 

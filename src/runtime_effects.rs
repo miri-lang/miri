@@ -94,6 +94,18 @@ pub enum ParamUse {
     CountOf,
 }
 
+/// The elements an entry point takes out of a container it is handed: the
+/// caller's reads of them hold their own, so none is still in the container
+/// after the call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Removal {
+    /// The position of the container.
+    pub container: usize,
+    /// The position of the index, or the key, selecting the one element
+    /// taken out; `None` when it takes out every element.
+    pub index: Option<usize>,
+}
+
 /// What an entry point hands back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultUse {
@@ -128,6 +140,8 @@ pub struct RuntimeEffect {
     /// Orders the elements of the container at this position, reading each
     /// element's bytes as a number.
     pub orders: Option<usize>,
+    /// Takes elements out of a container, as [`Removal`] states.
+    pub removes: Option<Removal>,
     /// Matches values against the elements, or keys, of the container at
     /// this position, by the rule the compiler registered for their type.
     pub matches: Option<usize>,
@@ -162,6 +176,7 @@ impl RuntimeEffect {
             result: ResultUse::Owned,
             diverges: false,
             orders: None,
+            removes: None,
             matches: None,
             clones: Vec::new(),
             leaves_headers: false,

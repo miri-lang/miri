@@ -153,6 +153,74 @@ fn main()
 }
 
 #[test]
+fn removes_naming_more_than_a_container_and_its_index_is_refused() {
+    type_checker_error_test(
+        r#"
+class Bag<T>
+    var n int
+    @writes("l")
+    @removes("l, index, count")
+    runtime "core" fn miri_rt_x(l Self, index int, count int)
+
+fn main()
+    return
+"#,
+        "`@removes` takes a container and, at most, its index, not `l, index, count`",
+    );
+}
+
+#[test]
+fn removes_naming_no_parameter_is_refused() {
+    type_checker_error_test(
+        r#"
+class Bag<T>
+    var n int
+    @writes("l")
+    @removes("l, at")
+    runtime "core" fn miri_rt_x(l Self, index int)
+
+fn main()
+    return
+"#,
+        "`miri_rt_x` has no parameter `at`",
+    );
+}
+
+#[test]
+fn removes_naming_an_empty_parameter_is_refused() {
+    type_checker_error_test(
+        r#"
+class Bag<T>
+    var n int
+    @writes("l")
+    @removes("l,")
+    runtime "core" fn miri_rt_x(l Self)
+
+fn main()
+    return
+"#,
+        "`@removes` takes a container and, at most, its index, not `l,`",
+    );
+}
+
+#[test]
+fn removes_without_writes_is_refused() {
+    type_checker_error_test(
+        r#"
+class Bag<T>
+    var n int
+    @reads("l")
+    @removes("l")
+    runtime "core" fn miri_rt_x(l Self)
+
+fn main()
+    return
+"#,
+        "Attribute @removes requires @writes to be present on the same declaration",
+    );
+}
+
+#[test]
 fn an_attribute_naming_no_parameter_is_refused() {
     type_checker_error_test(
         r#"

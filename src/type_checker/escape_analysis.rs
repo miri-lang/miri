@@ -1871,6 +1871,8 @@ pub(crate) struct ProgramFacts<'a> {
     pub(crate) names: DeclaredNames<'a>,
     /// The methods handing back a place of their receiver.
     pub(crate) returned: &'a ReturnedPlaces,
+    /// The methods taking a value out of their receiver.
+    pub(crate) emptying: &'a super::emptying_methods::EmptyingMethods,
     /// The function-typed parameters each method lends its arguments
     /// through.
     pub(crate) lending: &'a LendingMethods,

@@ -35,13 +35,6 @@ pub const INDEX_BOUNDS_CHECK_ATTRIBUTE: &str = "index_bounds_check";
 /// argument names both parameters (e.g., `@index_range_check("start, end")`).
 pub const INDEX_RANGE_CHECK_ATTRIBUTE: &str = "index_range_check";
 
-/// Marks the instance method that takes a value out of its receiver, writing
-/// the receiver, and hands it back as an optional: the whole receiver when
-/// the attribute names no parameter (`@empties`), the element at the index
-/// its one `int` parameter carries when it names that parameter
-/// (`@empties("index")`).
-pub const EMPTIES_ATTRIBUTE: &str = "empties";
-
 /// Marks the static method a regex literal (`re"pattern"`) is built by. It
 /// takes the pattern, already validated by the compiler, as its one `String`
 /// argument, and its class is the type of every regex literal.
@@ -83,6 +76,12 @@ pub const CLOSURE_ATTRIBUTE: &str = "closure";
 /// Names the container parameter whose elements a `runtime` declaration's
 /// entry point orders.
 pub const ORDERS_ATTRIBUTE: &str = "orders";
+
+/// Names the container parameter a `runtime` declaration's entry point takes
+/// elements out of, and the parameter carrying the index or key of the one
+/// element it takes out when it takes out one (e.g. `@removes("l, index")`);
+/// naming the container alone states it takes out every element.
+pub const REMOVES_ATTRIBUTE: &str = "removes";
 
 /// Names the container parameter whose elements, or keys, a `runtime`
 /// declaration's entry point matches values against.

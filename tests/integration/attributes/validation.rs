@@ -114,6 +114,22 @@ trait Drawable
 }
 
 #[test]
+fn test_attribute_before_enum_variant_is_rejected() {
+    assert_compiler_error(
+        r#"
+enum Cell
+    @must_use
+    Empty
+    Full(int)
+
+fn main()
+    println("x")
+"#,
+        "Unsupported Attribute Target",
+    );
+}
+
+#[test]
 fn test_attribute_argument_mismatch_e0114() {
     assert_compiler_error(
         r#"

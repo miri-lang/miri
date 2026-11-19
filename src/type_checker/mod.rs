@@ -206,6 +206,9 @@ pub struct TypeChecker {
     /// The methods handing back a place of their receiver; see
     /// [`returned_places`].
     pub(crate) returned_places: returned_places::ReturnedPlaces,
+    /// The methods taking a value out of their receiver; see
+    /// [`emptying_methods`].
+    pub(crate) emptying_methods: emptying_methods::EmptyingMethods,
     /// The function-typed parameters each method lends its arguments
     /// through; see [`lent_functions`].
     pub(crate) lending_methods: lent_functions::LendingMethods,
@@ -428,6 +431,7 @@ impl TypeChecker {
             protocol_loops: Vec::new(),
             receiver_writes: body_writes::ReceiverWrites::default(),
             returned_places: returned_places::ReturnedPlaces::default(),
+            emptying_methods: emptying_methods::EmptyingMethods::default(),
             lending_methods: lent_functions::LendingMethods::default(),
             parameter_writes: body_writes::ParameterWrites::default(),
             captured_mentions: body_writes::CapturedMentions::default(),
@@ -1031,7 +1035,6 @@ impl TypeChecker {
             },
         );
         self.report_unrestorable_replacements();
-        self.report_misused_emptying_marks(top_level_statements(program));
         self.infer_lending(program);
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_kept_parameters(program, &context);
@@ -1108,25 +1111,32 @@ impl TypeChecker {
     }
 
     /// Works out which methods hand back a place of their receiver
-    /// ([`returned_places`]), then which function-typed parameters each
+    /// ([`returned_places`]), which take a value out of it
+    /// ([`emptying_methods`]), and which function-typed parameters each
     /// method lends its arguments through ([`lent_functions`]), over the
     /// program's declarations and every module's.
     fn infer_lending(&mut self, program: &Program) {
         let statements = || top_level_statements(program).chain(&self.imported_statements);
-        let empty = returned_places::ReturnedPlaces::default();
+        let (returned, emptying) = Default::default();
+        let replacing =
+            place_reads::replacing_calls(self.module_bodies(program), &self.runtime_effects);
         let facts = lent_functions::LendingFacts {
             place: place_reads::PlaceFacts {
                 types: &self.type_table.types,
                 type_definitions: &self.type_table.global_type_definitions,
-                writes: &self.receiver_writes,
-                returned: &empty,
+                emptying: &emptying,
+                returned: &returned,
                 effects: &self.runtime_effects,
             },
             effects: &self.runtime_effects,
             names: self.declared_names(),
+            replacing: &replacing,
+            optional: self.optional_enum().map(|optional| optional.name.as_str()),
         };
-        let (returned, lending) = lent_functions::LendingMethods::infer(statements(), &facts);
+        let (returned, emptying, lending) =
+            lent_functions::LendingMethods::infer(statements(), &facts);
         self.returned_places = returned;
+        self.emptying_methods = emptying;
         self.lending_methods = lending;
     }
 
@@ -1153,6 +1163,7 @@ impl TypeChecker {
             modules: &self.fn_analysis.declaring_modules,
             names: self.declared_names(),
             returned: &self.returned_places,
+            emptying: &self.emptying_methods,
             lending: &self.lending_methods,
         }
     }
@@ -1228,17 +1239,23 @@ impl TypeChecker {
     /// repair in, found among the declarations of `program` and of every
     /// module it loads ([`place_reads::PlaceRepairs::declared`]).
     fn place_repairs(&self, program: &Program) -> place_reads::PlaceRepairs {
-        let imported = (self.modules.imported_bodies.iter())
-            .filter_map(|(_, statements)| self.imported_statements.get(statements.clone()));
         place_reads::PlaceRepairs::declared(
-            std::iter::once(program.body.as_slice()).chain(imported),
+            self.module_bodies(program),
             (
                 self.optional_enum(),
                 &self.type_table.global_type_definitions,
-                &self.receiver_writes,
+                &self.emptying_methods,
             ),
             (&self.runtime_effects, &self.fn_analysis.declaring_modules),
         )
+    }
+
+    /// The top-level statements of `program` and of every module it loads,
+    /// one slice per module.
+    fn module_bodies<'s>(&'s self, program: &'s Program) -> impl Iterator<Item = &'s [Statement]> {
+        let imported = (self.modules.imported_bodies.iter())
+            .filter_map(|(_, statements)| self.imported_statements.get(statements.clone()));
+        std::iter::once(program.body.as_slice()).chain(imported)
     }
 
     /// The consumption check over the checked program's facts.

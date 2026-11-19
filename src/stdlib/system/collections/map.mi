@@ -52,8 +52,10 @@ public class Map<K, V> implements Equatable, Hashable, Iterable<K>, Cloneable
     @writes("m")
     @key("key")
     @matches("m")
+    @removes("m, key")
     runtime "core" fn miri_rt_map_remove(m Self, key K) bool
     @writes("m")
+    @removes("m")
     runtime "core" fn miri_rt_map_clear(m Self)
     @reads("m")
     @returns_element

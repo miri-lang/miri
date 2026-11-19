@@ -1993,7 +1993,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         PlaceFacts {
             types: self.types,
             type_definitions: self.type_definitions,
-            writes: self.vtable_calls.restored,
+            emptying: self.facts.emptying,
             returned: self.facts.returned,
             effects: self.runtime_effects,
         }

@@ -15,6 +15,7 @@ pub mod deep_release;
 pub mod drop_call;
 pub mod edge_cases;
 pub mod element_call_arguments;
+pub mod emptying_methods;
 pub mod enums;
 pub mod escape_analysis;
 pub mod field_index_write;
