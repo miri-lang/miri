@@ -1,0 +1,4200 @@
+{
+ "aggregates": [
+  {
+   "coverage": 8,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "memory_coverage": 8,
+   "mode": "cold",
+   "size": "s",
+   "tag": "all",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "memory_coverage": 2,
+   "mode": "cold",
+   "size": "s",
+   "tag": "alloc",
+   "variant": "default"
+  },
+  {
+   "coverage": 5,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "memory_coverage": 5,
+   "mode": "cold",
+   "size": "s",
+   "tag": "array-index",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "memory_coverage": 2,
+   "mode": "cold",
+   "size": "s",
+   "tag": "call",
+   "variant": "default"
+  },
+  {
+   "coverage": 4,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "memory_coverage": 4,
+   "mode": "cold",
+   "size": "s",
+   "tag": "float",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "memory_coverage": 2,
+   "mode": "cold",
+   "size": "s",
+   "tag": "int",
+   "variant": "default"
+  },
+  {
+   "coverage": 6,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "memory_coverage": 6,
+   "mode": "cold",
+   "size": "s",
+   "tag": "loop",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "map",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "rc",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "sort",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "string",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "struct-field",
+   "variant": "default"
+  },
+  {
+   "coverage": 8,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "mode": "hot",
+   "size": "s",
+   "tag": "all",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "mode": "hot",
+   "size": "s",
+   "tag": "alloc",
+   "variant": "default"
+  },
+  {
+   "coverage": 5,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "mode": "hot",
+   "size": "s",
+   "tag": "array-index",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "mode": "hot",
+   "size": "s",
+   "tag": "call",
+   "variant": "default"
+  },
+  {
+   "coverage": 4,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "mode": "hot",
+   "size": "s",
+   "tag": "float",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "mode": "hot",
+   "size": "s",
+   "tag": "int",
+   "variant": "default"
+  },
+  {
+   "coverage": 6,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "mode": "hot",
+   "size": "s",
+   "tag": "loop",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "mode": "hot",
+   "size": "s",
+   "tag": "map",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "mode": "hot",
+   "size": "s",
+   "tag": "rc",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "mode": "hot",
+   "size": "s",
+   "tag": "sort",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "mode": "hot",
+   "size": "s",
+   "tag": "string",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 1.0,
+   "language": "c",
+   "mode": "hot",
+   "size": "s",
+   "tag": "struct-field",
+   "variant": "default"
+  },
+  {
+   "coverage": 8,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.6430052824153,
+   "language": "miri",
+   "memory_coverage": 8,
+   "mode": "cold",
+   "size": "s",
+   "tag": "all",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 2.1067695105309947,
+   "language": "miri",
+   "memory_coverage": 2,
+   "mode": "cold",
+   "size": "s",
+   "tag": "alloc",
+   "variant": "default"
+  },
+  {
+   "coverage": 5,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.5765118689075188,
+   "language": "miri",
+   "memory_coverage": 5,
+   "mode": "cold",
+   "size": "s",
+   "tag": "array-index",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.6607982381381992,
+   "language": "miri",
+   "memory_coverage": 2,
+   "mode": "cold",
+   "size": "s",
+   "tag": "call",
+   "variant": "default"
+  },
+  {
+   "coverage": 4,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.5352833782639488,
+   "language": "miri",
+   "memory_coverage": 4,
+   "mode": "cold",
+   "size": "s",
+   "tag": "float",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.467444612914343,
+   "language": "miri",
+   "memory_coverage": 2,
+   "mode": "cold",
+   "size": "s",
+   "tag": "int",
+   "variant": "default"
+  },
+  {
+   "coverage": 6,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.5123289697458835,
+   "language": "miri",
+   "memory_coverage": 6,
+   "mode": "cold",
+   "size": "s",
+   "tag": "loop",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 4.272378559107901,
+   "language": "miri",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "map",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0388774564559626,
+   "language": "miri",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "rc",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 4.272378559107901,
+   "language": "miri",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "sort",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 4.272378559107901,
+   "language": "miri",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "string",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.3799250064583197,
+   "language": "miri",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "struct-field",
+   "variant": "default"
+  },
+  {
+   "coverage": 8,
+   "geomean_vs_c": 1.7599304313525432,
+   "language": "miri",
+   "mode": "hot",
+   "size": "s",
+   "tag": "all",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_vs_c": 2.2664424757458828,
+   "language": "miri",
+   "mode": "hot",
+   "size": "s",
+   "tag": "alloc",
+   "variant": "default"
+  },
+  {
+   "coverage": 5,
+   "geomean_vs_c": 1.7041040873593287,
+   "language": "miri",
+   "mode": "hot",
+   "size": "s",
+   "tag": "array-index",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_vs_c": 1.679919406706756,
+   "language": "miri",
+   "mode": "hot",
+   "size": "s",
+   "tag": "call",
+   "variant": "default"
+  },
+  {
+   "coverage": 4,
+   "geomean_vs_c": 1.6770965255350185,
+   "language": "miri",
+   "mode": "hot",
+   "size": "s",
+   "tag": "float",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_vs_c": 1.504946925850468,
+   "language": "miri",
+   "mode": "hot",
+   "size": "s",
+   "tag": "int",
+   "variant": "default"
+  },
+  {
+   "coverage": 6,
+   "geomean_vs_c": 1.6176296583195473,
+   "language": "miri",
+   "mode": "hot",
+   "size": "s",
+   "tag": "loop",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 5.035581049056565,
+   "language": "miri",
+   "mode": "hot",
+   "size": "s",
+   "tag": "map",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 1.0200931026276534,
+   "language": "miri",
+   "mode": "hot",
+   "size": "s",
+   "tag": "rc",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 5.035581049056565,
+   "language": "miri",
+   "mode": "hot",
+   "size": "s",
+   "tag": "sort",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 5.035581049056565,
+   "language": "miri",
+   "mode": "hot",
+   "size": "s",
+   "tag": "string",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 1.3590404697164915,
+   "language": "miri",
+   "mode": "hot",
+   "size": "s",
+   "tag": "struct-field",
+   "variant": "default"
+  },
+  {
+   "coverage": 8,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.1085387991454538,
+   "language": "rust",
+   "memory_coverage": 8,
+   "mode": "cold",
+   "size": "s",
+   "tag": "all",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.2561442558095375,
+   "language": "rust",
+   "memory_coverage": 2,
+   "mode": "cold",
+   "size": "s",
+   "tag": "alloc",
+   "variant": "default"
+  },
+  {
+   "coverage": 5,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0900710141500638,
+   "language": "rust",
+   "memory_coverage": 5,
+   "mode": "cold",
+   "size": "s",
+   "tag": "array-index",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 0.9757441693800283,
+   "language": "rust",
+   "memory_coverage": 2,
+   "mode": "cold",
+   "size": "s",
+   "tag": "call",
+   "variant": "default"
+  },
+  {
+   "coverage": 4,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0758451478448783,
+   "language": "rust",
+   "memory_coverage": 4,
+   "mode": "cold",
+   "size": "s",
+   "tag": "float",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.0386388060122598,
+   "language": "rust",
+   "memory_coverage": 2,
+   "mode": "cold",
+   "size": "s",
+   "tag": "int",
+   "variant": "default"
+  },
+  {
+   "coverage": 6,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.063297253130057,
+   "language": "rust",
+   "memory_coverage": 6,
+   "mode": "cold",
+   "size": "s",
+   "tag": "loop",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.3639915465406682,
+   "language": "rust",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "map",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.1568241719716923,
+   "language": "rust",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "rc",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.3639915465406682,
+   "language": "rust",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "sort",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.3639915465406682,
+   "language": "rust",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "string",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_max_rss_vs_c": 1.0,
+   "geomean_vs_c": 1.115582321520542,
+   "language": "rust",
+   "memory_coverage": 1,
+   "mode": "cold",
+   "size": "s",
+   "tag": "struct-field",
+   "variant": "default"
+  },
+  {
+   "coverage": 8,
+   "geomean_vs_c": 1.1165398444833967,
+   "language": "rust",
+   "mode": "hot",
+   "size": "s",
+   "tag": "all",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_vs_c": 1.295636449441949,
+   "language": "rust",
+   "mode": "hot",
+   "size": "s",
+   "tag": "alloc",
+   "variant": "default"
+  },
+  {
+   "coverage": 5,
+   "geomean_vs_c": 1.087986843742182,
+   "language": "rust",
+   "mode": "hot",
+   "size": "s",
+   "tag": "array-index",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_vs_c": 0.973026365409751,
+   "language": "rust",
+   "mode": "hot",
+   "size": "s",
+   "tag": "call",
+   "variant": "default"
+  },
+  {
+   "coverage": 4,
+   "geomean_vs_c": 1.0719778108448252,
+   "language": "rust",
+   "mode": "hot",
+   "size": "s",
+   "tag": "float",
+   "variant": "default"
+  },
+  {
+   "coverage": 2,
+   "geomean_vs_c": 1.0438597549477637,
+   "language": "rust",
+   "mode": "hot",
+   "size": "s",
+   "tag": "int",
+   "variant": "default"
+  },
+  {
+   "coverage": 6,
+   "geomean_vs_c": 1.0625219613360628,
+   "language": "rust",
+   "mode": "hot",
+   "size": "s",
+   "tag": "loop",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 1.4476911389095977,
+   "language": "rust",
+   "mode": "hot",
+   "size": "s",
+   "tag": "map",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 1.1595524514897,
+   "language": "rust",
+   "mode": "hot",
+   "size": "s",
+   "tag": "rc",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 1.4476911389095977,
+   "language": "rust",
+   "mode": "hot",
+   "size": "s",
+   "tag": "sort",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 1.4476911389095977,
+   "language": "rust",
+   "mode": "hot",
+   "size": "s",
+   "tag": "string",
+   "variant": "default"
+  },
+  {
+   "coverage": 1,
+   "geomean_vs_c": 1.1166194345267288,
+   "language": "rust",
+   "mode": "hot",
+   "size": "s",
+   "tag": "struct-field",
+   "variant": "default"
+  }
+ ],
+ "cells": [
+  {
+   "attempts": 1,
+   "binary_bytes": 16856,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.005841344690293316,
+     "mad": 23577,
+     "median": 43009218,
+     "min": 42440688,
+     "n": 5,
+     "p_high": 43032795
+    },
+    "sys_ns": {
+     "cv": 1.03498642890173,
+     "mad": 955999,
+     "median": 1013000,
+     "min": 0,
+     "n": 5,
+     "p_high": 1968999
+    },
+    "user_ns": {
+     "cv": 0.022443178651183365,
+     "mad": 600000,
+     "median": 41655000,
+     "min": 40382999,
+     "n": 5,
+     "p_high": 42910000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.008260908883508873,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.037793912051650454,
+     "value": 0.9625774375848047
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.013706661060770292,
+     "value": 0.8644356024265979
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "binary-trees"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 16856,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.004801637858518158,
+     "mad": 156202,
+     "median": 41347920,
+     "min": 41124446,
+     "n": 5,
+     "p_high": 41608760
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.006790541381120483,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.017456264291307828,
+     "value": 0.9803026776909916
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.0116848586175566,
+     "value": 0.8624016953396805
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "binary-trees"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4661960,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.03733977075956776,
+     "mad": 528580,
+     "median": 44681307,
+     "min": 43807802,
+     "n": 5,
+     "p_high": 48040681
+    },
+    "sys_ns": {
+     "cv": 0.37640587268264125,
+     "mad": 7001,
+     "median": 1006000,
+     "min": 998000,
+     "n": 5,
+     "p_high": 2017999
+    },
+    "user_ns": {
+     "cv": 0.027141223579695204,
+     "mad": 564001,
+     "median": 43386999,
+     "min": 42261000,
+     "n": 5,
+     "p_high": 45408000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.037793912051650454,
+     "value": 1.0388774564559626
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.05280641022408305,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.03934475479680983,
+     "value": 0.8980426599189216
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "binary-trees"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4661960,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.01678289119560852,
+     "mad": 308087,
+     "median": 42178728,
+     "min": 41581714,
+     "n": 5,
+     "p_high": 43441906
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.017456264291307828,
+     "value": 1.0200931026276534
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.02373459234466158,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.01987827033903015,
+     "value": 0.879730021110403
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "binary-trees"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4519504,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.01239964715804521,
+     "mad": 80139,
+     "median": 49754103,
+     "min": 49148958,
+     "n": 5,
+     "p_high": 50855297
+    },
+    "sys_ns": {
+     "cv": 0.9995569582182655,
+     "mad": 1010999,
+     "median": 1013000,
+     "min": 0,
+     "n": 5,
+     "p_high": 2023999
+    },
+    "user_ns": {
+     "cv": 0.023654739039787195,
+     "mad": 1067000,
+     "median": 48636000,
+     "min": 47455000,
+     "n": 5,
+     "p_high": 50248000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.013706661060770292,
+     "value": 1.1568241719716923
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.03934475479680983,
+     "value": 1.113532847192675
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.017535749179548542,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "binary-trees"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4519504,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.010652708331120867,
+     "mad": 105141,
+     "median": 47945082,
+     "min": 47744370,
+     "n": 5,
+     "p_high": 49024094
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.0116848586175566,
+     "value": 1.1595524514897
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.01987827033903015,
+     "value": 1.1367123731185065
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.01506520459787599,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "binary-trees"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 16864,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.0014768313902411363,
+     "mad": 15839,
+     "median": 17124815,
+     "min": 17092897,
+     "n": 5,
+     "p_high": 17160186
+    },
+    "sys_ns": {
+     "cv": 2.23606797749979,
+     "mad": 0,
+     "median": 0,
+     "min": 0,
+     "n": 5,
+     "p_high": 982999
+    },
+    "user_ns": {
+     "cv": 0.026145614628961623,
+     "mad": 3001,
+     "median": 16704999,
+     "min": 15737000,
+     "n": 5,
+     "p_high": 16708000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.002088554981417328,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.02460823751298604,
+     "value": 0.640186150573484
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.0019975782979487836,
+     "value": 0.9674250212087278
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "fannkuch-redux"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 16864,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.001957997692834594,
+     "mad": 22102,
+     "median": 16150353,
+     "min": 16128251,
+     "n": 5,
+     "p_high": 16209160
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.002769026892301912,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.010520717676034274,
+     "value": 0.6223149958644894
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.0036782389125047657,
+     "value": 0.951253029070953
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "fannkuch-redux"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4661944,
+   "diagnose": true,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.024563882480999045,
+     "mad": 558080,
+     "median": 26749743,
+     "min": 26191663,
+     "n": 5,
+     "p_high": 27911833
+    },
+    "sys_ns": {
+     "cv": 0.9129353883429472,
+     "mad": 17999,
+     "median": 976000,
+     "min": 0,
+     "n": 5,
+     "p_high": 993999
+    },
+    "user_ns": {
+     "cv": 0.03654409301587071,
+     "mad": 656001,
+     "median": 25686999,
+     "min": 24873000,
+     "n": 5,
+     "p_high": 27325000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.02460823751298604,
+     "value": 1.5620456629750452
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.03473857574916772,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.02460068313363607,
+     "value": 1.5111620586326344
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "fannkuch-redux"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4661944,
+   "diagnose": true,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.010336911794809629,
+     "mad": 175228,
+     "median": 25952055,
+     "min": 25475646,
+     "n": 5,
+     "p_high": 26133472
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.010520717676034274,
+     "value": 1.6069032670679086
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.014618600853274188,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.010795713593181003,
+     "value": 1.5285716002223586
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "fannkuch-redux"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4520312,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.0013450978035943672,
+     "mad": 13644,
+     "median": 17701439,
+     "min": 17660658,
+     "n": 5,
+     "p_high": 17721904
+    },
+    "sys_ns": {
+     "cv": 0.5599960905348649,
+     "mad": 50999,
+     "median": 966000,
+     "min": 0,
+     "n": 5,
+     "p_high": 1018999
+    },
+    "user_ns": {
+     "cv": 0.02566408124944361,
+     "mad": 92001,
+     "median": 16405000,
+     "min": 16275999,
+     "n": 5,
+     "p_high": 17296000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.0019975782979487836,
+     "value": 1.0336718382067194
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.02460068313363607,
+     "value": 0.6617423950577768
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.0019022555565614157,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "fannkuch-redux"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4520312,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.0031137897379750366,
+     "mad": 45729,
+     "median": 16977978,
+     "min": 16892031,
+     "n": 5,
+     "p_high": 17027890
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.0036782389125047657,
+     "value": 1.051245009938792
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.010795713593181003,
+     "value": 0.6542055340126244
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.004403563677822462,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "fannkuch-redux"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 16608,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.0018813042092179898,
+     "mad": 11219,
+     "median": 36795200,
+     "min": 36650097,
+     "n": 5,
+     "p_high": 36819777
+    },
+    "sys_ns": {
+     "cv": 0.995488821079261,
+     "mad": 960001,
+     "median": 1003999,
+     "min": 0,
+     "n": 5,
+     "p_high": 1964000
+    },
+    "user_ns": {
+     "cv": 0.027321451584852233,
+     "mad": 814999,
+     "median": 35158999,
+     "min": 34344000,
+     "n": 5,
+     "p_high": 36347000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.0026605659276256717,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.005872204792277021,
+     "value": 0.8139703677020084
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.007436384731704261,
+     "value": 1.0649906775109983
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "mandelbrot"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 16608,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.0027298407166415598,
+     "mad": 67447,
+     "median": 35816328,
+     "min": 35748881,
+     "n": 5,
+     "p_high": 35971133
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.0038605777645927828,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.003769488412080118,
+     "value": 0.8020583886710335
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.004341778512267883,
+     "value": 1.0594750339816643
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "mandelbrot"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4661768,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.005562686724490233,
+     "mad": 56159,
+     "median": 45204594,
+     "min": 45142727,
+     "n": 5,
+     "p_high": 45755847
+    },
+    "sys_ns": {
+     "cv": 2.23606797749979,
+     "mad": 0,
+     "median": 0,
+     "min": 0,
+     "n": 5,
+     "p_high": 1008000
+    },
+    "user_ns": {
+     "cv": 0.007025034325108822,
+     "mad": 23000,
+     "median": 45068000,
+     "min": 44363000,
+     "n": 5,
+     "p_high": 45091000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.005872204792277021,
+     "value": 1.2285459516458668
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.007866827009006856,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.009094173736251293,
+     "value": 1.3083899853967258
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "mandelbrot"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4661768,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.0025994254270073195,
+     "mad": 81398,
+     "median": 44655512,
+     "min": 44487307,
+     "n": 5,
+     "p_high": 44736910
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.003769488412080118,
+     "value": 1.246792021784031
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.003676142693251225,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.004260988484134778,
+     "value": 1.3209450196477042
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "mandelbrot"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4520832,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.007194477906721441,
+     "mad": 12829,
+     "median": 34549786,
+     "min": 34536957,
+     "n": 5,
+     "p_high": 35111948
+    },
+    "sys_ns": {
+     "cv": 1.369486307173435,
+     "mad": 0,
+     "median": 0,
+     "min": 0,
+     "n": 5,
+     "p_high": 1008000
+    },
+    "user_ns": {
+     "cv": 0.015566061004073593,
+     "mad": 134000,
+     "median": 34270000,
+     "min": 33292999,
+     "n": 5,
+     "p_high": 34404000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.007436384731704261,
+     "value": 0.9389753554811497
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.009094173736251293,
+     "value": 0.7642981153641154
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.010174528229879057,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "mandelbrot"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4520832,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.003376242039806537,
+     "mad": 89658,
+     "median": 33805731,
+     "min": 33700732,
+     "n": 5,
+     "p_high": 33987580
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.004341778512267883,
+     "value": 0.9438636758073022
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.004260988484134778,
+     "value": 0.7570337789431235
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.004774727282548608,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "mandelbrot"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 16704,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.012359860498904295,
+     "mad": 28807,
+     "median": 17132572,
+     "min": 17053025,
+     "n": 5,
+     "p_high": 17578761
+    },
+    "sys_ns": {
+     "cv": 0.9136002529396575,
+     "mad": 61999,
+     "median": 970000,
+     "min": 0,
+     "n": 5,
+     "p_high": 1031999
+    },
+    "user_ns": {
+     "cv": 0.03401555779807968,
+     "mad": 528000,
+     "median": 16051000,
+     "min": 15493000,
+     "n": 5,
+     "p_high": 16622999
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.017479482346589942,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.012661040975470304,
+     "value": 0.6850701479693319
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.019145397167916477,
+     "value": 0.7928198060617964
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "matmul"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 16704,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.010058057768002454,
+     "mad": 18222,
+     "median": 15932224,
+     "min": 15871303,
+     "n": 5,
+     "p_high": 16268068
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.014224241706641131,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.011294572438584125,
+     "value": 0.48481611480303666
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.010773309328602668,
+     "value": 0.8005919432900238
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "matmul"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4666496,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.0027451424425998933,
+     "mad": 21150,
+     "median": 25008493,
+     "min": 24987343,
+     "n": 5,
+     "p_high": 25154862
+    },
+    "sys_ns": {
+     "cv": 0.5596908405515489,
+     "mad": 34000,
+     "median": 987000,
+     "min": 0,
+     "n": 5,
+     "p_high": 1034999
+    },
+    "user_ns": {
+     "cv": 0.01736614063298966,
+     "mad": 107001,
+     "median": 23708999,
+     "min": 23483999,
+     "n": 5,
+     "p_high": 24537999
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.012661040975470304,
+     "value": 1.4597045323959532
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.0038822176729707745,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.014876689423223599,
+     "value": 1.1572826642816847
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "matmul"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4666496,
+   "diagnose": true,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.005138369440391536,
+     "mad": 148799,
+     "median": 32862406,
+     "min": 32640602,
+     "n": 5,
+     "p_high": 33028288
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.011294572438584125,
+     "value": 2.0626377083324963
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.007266751751085161,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.006426702757342399,
+     "value": 1.6513311312171948
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "matmul"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4520712,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.014621220235154437,
+     "mad": 21830,
+     "median": 21609667,
+     "min": 21020738,
+     "n": 5,
+     "p_high": 21631497
+    },
+    "sys_ns": {
+     "cv": 0.5590597759856334,
+     "mad": 4999,
+     "median": 997000,
+     "min": 0,
+     "n": 5,
+     "p_high": 1010000
+    },
+    "user_ns": {
+     "cv": 0.02520005838266752,
+     "mad": 122000,
+     "median": 20058000,
+     "min": 19936000,
+     "n": 5,
+     "p_high": 21151000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.019145397167916477,
+     "value": 1.261320658684522
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.014876689423223599,
+     "value": 0.8640931302817807
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.020677527954999338,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "matmul"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4520712,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.003860008785648391,
+     "mad": 3254,
+     "median": 19900555,
+     "min": 19897301,
+     "n": 5,
+     "p_high": 20068656
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.010773309328602668,
+     "value": 1.2490757724721921
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.006426702757342399,
+     "value": 0.60557206310457
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.005458876775543255,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "matmul"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 20728,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.005862994774155334,
+     "mad": 77944,
+     "median": 53353661,
+     "min": 53264868,
+     "n": 5,
+     "p_high": 54025853
+    },
+    "sys_ns": {
+     "cv": 2.23606797749979,
+     "mad": 0,
+     "median": 0,
+     "min": 0,
+     "n": 5,
+     "p_high": 1001999
+    },
+    "user_ns": {
+     "cv": 0.009251023182700395,
+     "mad": 148999,
+     "median": 53100999,
+     "min": 52154000,
+     "n": 5,
+     "p_high": 53478000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.008291526725733056,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.04410634163805164,
+     "value": 0.7246770623909299
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.007336601058259385,
+     "value": 0.8963928351221961
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "nbody"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 20728,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.0013778479386136275,
+     "mad": 44320,
+     "median": 52239852,
+     "min": 52195532,
+     "n": 5,
+     "p_high": 52358663
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.0019485712416752038,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.011937720720056373,
+     "value": 0.735813261108118
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.0014025545873205157,
+     "value": 0.895560267965283
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "nbody"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4668576,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.04371492496814738,
+     "mad": 1654507,
+     "median": 73624051,
+     "min": 71842686,
+     "n": 5,
+     "p_high": 79794304
+    },
+    "sys_ns": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 0,
+     "min": 0,
+     "n": 5,
+     "p_high": 0
+    },
+    "user_ns": {
+     "cv": 0.044477096254559444,
+     "mad": 1186001,
+     "median": 72975000,
+     "min": 71208000,
+     "n": 5,
+     "p_high": 79432000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.04410634163805164,
+     "value": 1.3799250064583197
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.06182223976807626,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.04393683730466993,
+     "value": 1.236954888795188
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "nbody"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4668576,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.011857938735215384,
+     "mad": 203248,
+     "median": 70996073,
+     "min": 70792825,
+     "n": 5,
+     "p_high": 72853278
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.011937720720056373,
+     "value": 1.3590404697164915
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.01676965778113086,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.011860834940112497,
+     "value": 1.2171026472349653
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "nbody"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4524896,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.004410329621046478,
+     "mad": 62309,
+     "median": 59520401,
+     "min": 59386541,
+     "n": 5,
+     "p_high": 60053249
+    },
+    "sys_ns": {
+     "cv": 1.3693895722206506,
+     "mad": 0,
+     "median": 0,
+     "min": 0,
+     "n": 5,
+     "p_high": 1003999
+    },
+    "user_ns": {
+     "cv": 0.009525056848559539,
+     "mad": 271000,
+     "median": 59157999,
+     "min": 58261999,
+     "n": 5,
+     "p_high": 59428999
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.007336601058259385,
+     "value": 1.115582321520542
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.04393683730466993,
+     "value": 0.8084369196147602
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.006237147964619722,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "nbody"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4524896,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.0002620962198735402,
+     "mad": 16127,
+     "median": 58332034,
+     "min": 58310347,
+     "n": 5,
+     "p_high": 58348593
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.0014025545873205157,
+     "value": 1.1166194345267288
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.011860834940112497,
+     "value": 0.8216233875358149
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.00037066002879188124,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "nbody"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 16672,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.013972400916901974,
+     "mad": 563827,
+     "median": 63844486,
+     "min": 62701994,
+     "n": 5,
+     "p_high": 64968837
+    },
+    "sys_ns": {
+     "cv": 0.18220550342936112,
+     "mad": 20000,
+     "median": 3986000,
+     "min": 2977999,
+     "n": 5,
+     "p_high": 5037000
+    },
+    "user_ns": {
+     "cv": 0.007774794857647499,
+     "mad": 123000,
+     "median": 59563000,
+     "min": 58803999,
+     "n": 5,
+     "p_high": 60092000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.01975995887559704,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.01568108239765803,
+     "value": 0.725387869760624
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.02150409137049153,
+     "value": 0.9581943256249235
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "sieve"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 16672,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.0013080950318482693,
+     "mad": 42101,
+     "median": 59034917,
+     "min": 58992816,
+     "n": 5,
+     "p_high": 59186948
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.001849925734912688,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.00326636488157369,
+     "value": 0.7094917754302202
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.012339679515163763,
+     "value": 0.9647607781302192
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "sieve"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4666408,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.007118170957450898,
+     "mad": 496576,
+     "median": 88014273,
+     "min": 87517697,
+     "n": 5,
+     "p_high": 89130234
+    },
+    "sys_ns": {
+     "cv": 0.3017130715984607,
+     "mad": 987000,
+     "median": 4005000,
+     "min": 3009000,
+     "n": 5,
+     "p_high": 5973000
+    },
+    "user_ns": {
+     "cv": 0.012918872730749174,
+     "mad": 753000,
+     "median": 83382000,
+     "min": 82629000,
+     "n": 5,
+     "p_high": 85266000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.01568108239765803,
+     "value": 1.3785728183323458
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.01006661390731734,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.01782880579476098,
+     "value": 1.3209406519868123
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "sieve"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4666408,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.002992996312599095,
+     "mad": 135389,
+     "median": 83207331,
+     "min": 82816671,
+     "n": 5,
+     "p_high": 83492433
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.00326636488157369,
+     "value": 1.4094596084551114
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.004232735977410303,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.012629909138700796,
+     "value": 1.3597913485962674
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "sieve"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4519440,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.01634619094125005,
+     "mad": 492698,
+     "median": 66629998,
+     "min": 65039789,
+     "n": 5,
+     "p_high": 68051868
+    },
+    "sys_ns": {
+     "cv": 0.5298110347010851,
+     "mad": 1001001,
+     "median": 3009999,
+     "min": 1008000,
+     "n": 5,
+     "p_high": 5958000
+    },
+    "user_ns": {
+     "cv": 0.04048067695694304,
+     "mad": 1050001,
+     "median": 62174999,
+     "min": 59585000,
+     "n": 5,
+     "p_high": 66563000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.02150409137049153,
+     "value": 1.0436296409371986
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.01782880579476098,
+     "value": 0.7570362820584793
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.02311700492225605,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "sieve"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4519440,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.012270149873762997,
+     "mad": 140577,
+     "median": 61191249,
+     "min": 61050672,
+     "n": 5,
+     "p_high": 62534680
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.012339679515163763,
+     "value": 1.0365263831911544
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.012629909138700796,
+     "value": 0.7354069438905569
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.01735261236382615,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "sieve"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 16760,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.00672981309426584,
+     "mad": 26796,
+     "median": 42475869,
+     "min": 42443921,
+     "n": 5,
+     "p_high": 43106960
+    },
+    "sys_ns": {
+     "cv": 2.23606797749979,
+     "mad": 0,
+     "median": 0,
+     "min": 0,
+     "n": 5,
+     "p_high": 1967000
+    },
+    "user_ns": {
+     "cv": 0.021814266406285015,
+     "mad": 182000,
+     "median": 42316000,
+     "min": 40334999,
+     "n": 5,
+     "p_high": 42603999
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.009517392950146796,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.007601631914833652,
+     "value": 0.4454076319232927
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.0069885537478521845,
+     "value": 0.9862392086508834
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "spectral-norm"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 16760,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.002406440417453865,
+     "mad": 41210,
+     "median": 41747533,
+     "min": 41644661,
+     "n": 5,
+     "p_high": 41919363
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.0034032206754060286,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.0037209533684596646,
+     "value": 0.44179126031065485
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.002493756854062424,
+     "value": 0.9969194205337466
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "spectral-norm"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4664184,
+   "diagnose": true,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.0035347451796226515,
+     "mad": 44834,
+     "median": 95364035,
+     "min": 95319201,
+     "n": 5,
+     "p_high": 95972686
+    },
+    "sys_ns": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 0,
+     "min": 0,
+     "n": 5,
+     "p_high": 0
+    },
+    "user_ns": {
+     "cv": 0.002953862938993024,
+     "mad": 78000,
+     "median": 95061000,
+     "min": 94983000,
+     "n": 5,
+     "p_high": 95614999
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.007601631914833652,
+     "value": 2.245134407962319
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.004998884572555276,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.004005486573155929,
+     "value": 2.2142395818236267
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "spectral-norm"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4664184,
+   "diagnose": true,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.002838051882453137,
+     "mad": 183786,
+     "median": 94496059,
+     "min": 94099513,
+     "n": 5,
+     "p_high": 94679845
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.0037209533684596646,
+     "value": 2.2635124092242767
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.0040136114628837195,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.0029124570815590705,
+     "value": 2.2565394793748106
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "spectral-norm"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4520520,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 23572480,
+     "min": 23572480,
+     "n": 5,
+     "p_high": 23572480
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 131072
+    },
+    "process_wall_ns": {
+     "cv": 0.0018840114656941069,
+     "mad": 53608,
+     "median": 43068526,
+     "min": 42996116,
+     "n": 5,
+     "p_high": 43208118
+    },
+    "sys_ns": {
+     "cv": 1.3693075498398697,
+     "mad": 0,
+     "median": 0,
+     "min": 0,
+     "n": 5,
+     "p_high": 993999
+    },
+    "user_ns": {
+     "cv": 0.012144375944103064,
+     "mad": 341000,
+     "median": 42446000,
+     "min": 41691000,
+     "n": 5,
+     "p_high": 42787000
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.0069885537478521845,
+     "value": 1.013952792819848
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.004005486573155929,
+     "value": 0.4516223123318974
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.002664394566451019,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "spectral-norm"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4520520,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.0006541160175594112,
+     "mad": 17178,
+     "median": 41876537,
+     "min": 41831227,
+     "n": 5,
+     "p_high": 41905974
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.002493756854062424,
+     "value": 1.0030900987610454
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.0029124570815590705,
+     "value": 0.44315643893678147
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.0009250597433979969,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "spectral-norm"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 17096,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 38776832,
+     "min": 38776832,
+     "n": 5,
+     "p_high": 38776832
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 15335424
+    },
+    "process_wall_ns": {
+     "cv": 0.005422301145448657,
+     "mad": 8188,
+     "median": 49815819,
+     "min": 49210816,
+     "n": 5,
+     "p_high": 49824007
+    },
+    "sys_ns": {
+     "cv": 0.12619323799690843,
+     "mad": 984000,
+     "median": 8009000,
+     "min": 6901000,
+     "n": 5,
+     "p_high": 9049000
+    },
+    "user_ns": {
+     "cv": 0.0235622406704468,
+     "mad": 830999,
+     "median": 41049999,
+     "min": 40219000,
+     "n": 5,
+     "p_high": 42395999
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.007668291819164659,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.005661488179495472,
+     "value": 0.2340616558586995
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.007545825918440675,
+     "value": 0.7331423735991494
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "wordfreq"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 17096,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "c",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.0012224517952778402,
+     "mad": 23625,
+     "median": 40578708,
+     "min": 40488856,
+     "n": 5,
+     "p_high": 40616566
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 698981,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.0017288079082292598,
+     "value": 1.0
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.001461783867044021,
+     "value": 0.19858681456181781
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.002873235833520204,
+     "value": 0.6907550741473771
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "wordfreq"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4679744,
+   "diagnose": true,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 38776832,
+     "min": 38776832,
+     "n": 5,
+     "p_high": 38776832
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 15335424
+    },
+    "process_wall_ns": {
+     "cv": 0.0016282194860132177,
+     "mad": 145371,
+     "median": 212832037,
+     "min": 212518323,
+     "n": 5,
+     "p_high": 213437022
+    },
+    "sys_ns": {
+     "cv": 0.13650138419071878,
+     "mad": 998001,
+     "median": 9006000,
+     "min": 7981000,
+     "n": 5,
+     "p_high": 11005000
+    },
+    "user_ns": {
+     "cv": 0.0046853719638997645,
+     "mad": 719999,
+     "median": 203499000,
+     "min": 202103999,
+     "n": 5,
+     "p_high": 204520999
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.005661488179495472,
+     "value": 4.272378559107901
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.0023026500796400422,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.005494473384602968,
+     "value": 3.13226175773848
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "wordfreq"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4679744,
+   "diagnose": true,
+   "floor_rss_bytes": 23441408,
+   "language": "miri",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.0008015133699272631,
+     "mad": 81168,
+     "median": 204337373,
+     "min": 204256085,
+     "n": 5,
+     "p_high": 204679533
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 692535,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.001461783867044021,
+     "value": 5.035581049056565
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.001133511078174499,
+     "value": 1.0
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.002720940911783768,
+     "value": 3.4783531609161944
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "wordfreq"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4552064,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "max_rss_bytes": {
+     "cv": 0.0,
+     "mad": 0,
+     "median": 38776832,
+     "min": 38776832,
+     "n": 5,
+     "p_high": 38776832
+    },
+    "net_rss_bytes": {
+     "at_or_below_floor": false,
+     "value": 15335424
+    },
+    "process_wall_ns": {
+     "cv": 0.005247679399456225,
+     "mad": 69026,
+     "median": 67948356,
+     "min": 67237832,
+     "n": 5,
+     "p_high": 68149718
+    },
+    "sys_ns": {
+     "cv": 0.07133886637882118,
+     "mad": 101000,
+     "median": 7951999,
+     "min": 6991000,
+     "n": 5,
+     "p_high": 8052999
+    },
+    "user_ns": {
+     "cv": 0.013407859700524615,
+     "mad": 552001,
+     "median": 59643999,
+     "min": 58823000,
+     "n": 5,
+     "p_high": 60927999
+    }
+   },
+   "mode": "cold",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "time": {
+     "cv": 0.007545825918440675,
+     "value": 1.3639915465406682
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.005494473384602968,
+     "value": 0.3192581199605772
+    }
+   },
+   "vs_rust": {
+    "max_rss": {
+     "cv": 0.0,
+     "value": 1.0
+    },
+    "net_rss": 1.0,
+    "time": {
+     "cv": 0.007421339377696892,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "wordfreq"
+  },
+  {
+   "attempts": 1,
+   "binary_bytes": 4552064,
+   "diagnose": false,
+   "floor_rss_bytes": 23441408,
+   "language": "rust",
+   "metrics": {
+    "hot_ns": {
+     "cv": 0.0026002107151626244,
+     "mad": 104100,
+     "median": 58745436,
+     "min": 58496231,
+     "n": 5,
+     "p_high": 58887346
+    }
+   },
+   "mode": "hot",
+   "size": "s",
+   "startup_ns": 710046,
+   "status": "ok",
+   "variant": "default",
+   "vs_c": {
+    "time": {
+     "cv": 0.002873235833520204,
+     "value": 1.4476911389095977
+    }
+   },
+   "vs_cpp": {
+    "time": null
+   },
+   "vs_miri": {
+    "time": {
+     "cv": 0.002720940911783768,
+     "value": 0.28749237174542713
+    }
+   },
+   "vs_rust": {
+    "time": {
+     "cv": 0.003677253258410828,
+     "value": 1.0
+    }
+   },
+   "vs_rust_checked": {
+    "time": null
+   },
+   "workload": "wordfreq"
+  }
+ ],
+ "charter_hash": "dd8ab7b741d0b6b0de39b5c3e85d62a2ab47c5ee2bb2f422f9b81e4a80c8b94c",
+ "charter_version": 6,
+ "compile": {
+  "binary-trees": {
+   "opt0": {
+    "max_rss_bytes": 71311360,
+    "runs": 3,
+    "wall_ns": 141691834
+   },
+   "opt3": {
+    "max_rss_bytes": 71401472,
+    "runs": 3,
+    "wall_ns": 150785326
+   }
+  },
+  "fannkuch-redux": {
+   "opt0": {
+    "max_rss_bytes": 71417856,
+    "runs": 3,
+    "wall_ns": 144447957
+   },
+   "opt3": {
+    "max_rss_bytes": 71483392,
+    "runs": 3,
+    "wall_ns": 152282462
+   }
+  },
+  "mandelbrot": {
+   "opt0": {
+    "max_rss_bytes": 71446528,
+    "runs": 3,
+    "wall_ns": 138261391
+   },
+   "opt3": {
+    "max_rss_bytes": 71352320,
+    "runs": 3,
+    "wall_ns": 149157741
+   }
+  },
+  "matmul": {
+   "opt0": {
+    "max_rss_bytes": 71426048,
+    "runs": 3,
+    "wall_ns": 149141732
+   },
+   "opt3": {
+    "max_rss_bytes": 71467008,
+    "runs": 3,
+    "wall_ns": 157569465
+   }
+  },
+  "nbody": {
+   "opt0": {
+    "max_rss_bytes": 72192000,
+    "runs": 3,
+    "wall_ns": 156397410
+   },
+   "opt3": {
+    "max_rss_bytes": 72216576,
+    "runs": 3,
+    "wall_ns": 166090118
+   }
+  },
+  "sieve": {
+   "opt0": {
+    "max_rss_bytes": 71401472,
+    "runs": 3,
+    "wall_ns": 143977288
+   },
+   "opt3": {
+    "max_rss_bytes": 71348224,
+    "runs": 3,
+    "wall_ns": 153082941
+   }
+  },
+  "spectral-norm": {
+   "opt0": {
+    "max_rss_bytes": 72146944,
+    "runs": 3,
+    "wall_ns": 149461055
+   },
+   "opt3": {
+    "max_rss_bytes": 72257536,
+    "runs": 3,
+    "wall_ns": 159863894
+   }
+  },
+  "wordfreq": {
+   "opt0": {
+    "max_rss_bytes": 71520256,
+    "runs": 3,
+    "wall_ns": 151708927
+   },
+   "opt3": {
+    "max_rss_bytes": 71479296,
+    "runs": 3,
+    "wall_ns": 159134913
+   }
+  }
+ },
+ "coverage": {
+  "c": {
+   "measured": [
+    "binary-trees",
+    "fannkuch-redux",
+    "mandelbrot",
+    "matmul",
+    "nbody",
+    "sieve",
+    "spectral-norm",
+    "wordfreq"
+   ],
+   "unmeasured": []
+  },
+  "miri": {
+   "measured": [
+    "binary-trees",
+    "fannkuch-redux",
+    "mandelbrot",
+    "matmul",
+    "nbody",
+    "sieve",
+    "spectral-norm",
+    "wordfreq"
+   ],
+   "unmeasured": []
+  },
+  "rust": {
+   "measured": [
+    "binary-trees",
+    "fannkuch-redux",
+    "mandelbrot",
+    "matmul",
+    "nbody",
+    "sieve",
+    "spectral-norm",
+    "wordfreq"
+   ],
+   "unmeasured": []
+  }
+ },
+ "explanations": {
+  "binary-trees": {
+   "c": "One malloc and one free per node through the C library.",
+   "miri": "One reference-counted allocation per node from the runtime's block cache, close to Rust in time; each node carries a reference-count header C does not, so peak memory is higher.",
+   "rust": "One Box allocation and one drop per node on the system allocator, close to C."
+  },
+  "fannkuch-redux": {
+   "c": "Integer loops over a small array, unchecked.",
+   "miri": "Every array access keeps a bounds check the optimiser cannot hoist because the loop bound is a parameter, and the counters are overflow-checked.",
+   "rust": "The same loops with bounds checks the optimiser mostly removes."
+  },
+  "mandelbrot": {
+   "c": "A scalar floating-point loop with no allocation.",
+   "miri": "At parity: the same scalar loop with no allocation.",
+   "rust": "The same scalar loop as C."
+  },
+  "matmul": {
+   "c": "A strict floating-point inner product over row pointers, with unchecked reads.",
+   "miri": "A bounds check per read like Rust, plus the inner row's header reloaded on every read and a check the optimiser cannot hoist because the bound is a parameter.",
+   "rust": "The same loop with a bounds check on every read; measured, this is Rust's whole distance from C here, since Rust with unchecked indexing runs at C's speed and C gains nothing from its vectorisers."
+  },
+  "nbody": {
+   "c": "Straight-line floating-point code over an array of structs; clang's straight-line vectoriser contributes part of its speed (measured by turning it off).",
+   "miri": "Close to C: the remaining distance is a reference-count increment and decrement per step and floating-point values spilled around calls.",
+   "rust": "The same code with bounds checks the optimiser removes."
+  },
+  "sieve": {
+   "c": "One flag per byte, written with unchecked strided stores.",
+   "miri": "A bounds check on every strided write, like Rust; memory matches C.",
+   "rust": "The same flags with a bounds check on every strided write."
+  },
+  "spectral-norm": {
+   "c": "A serial floating-point reduction; clang's vectorisers add nothing here (measured by turning them off).",
+   "miri": "Not yet explained at the current size: vectorisation is ruled out, and whether a call or a spill remains in the inner loop has still to be read from the disassembly.",
+   "rust": "The same reduction with bounds checks."
+  },
+  "wordfreq": {
+   "c": "Counts with the suite's shared chained hash table (see the port notes), keyed by views into the input.",
+   "miri": "Reads lines lazily and holds the input once, but every word is an owned string, hashed through the generic identity path, and every update probes the map twice.",
+   "rust": "A HashMap keyed by borrowed slices, hashed with SipHash."
+  }
+ },
+ "label": null,
+ "machine_profile": "ci-smoke",
+ "max_steal_share": null,
+ "port_notes": {
+  "fannkuch-redux": [
+   "At size S the cold time is mostly process start-up ; read the hot time for this workload at size S.",
+   "C and C++ index without bounds checks by language; Miri, Rust, Go, Python and TypeScript check every index, and the ratio includes that cost (charter section 4)."
+  ],
+  "matmul": [
+   "C's lead over Rust here is bounds checking, not vectorisation: on x86-64 the C port runs as fast with clang's vectorisers off, and the Rust port with unchecked indexing runs at C's speed. C and C++ index without bounds checks by language; Miri, Rust, Go, Python and TypeScript check every index, and the ratio includes that cost (charter section 4)."
+  ],
+  "sieve": [
+   "C and C++ index without bounds checks by language; Miri, Rust, Go, Python and TypeScript check every index, and the ratio includes that cost (charter section 4)."
+  ],
+  "spectral-norm": [
+   "C's lead over Rust here is not vectorisation: on x86-64 the C port runs as fast with clang's vectorisers off. C and C++ index without bounds checks by language; Miri, Rust, Go, Python and TypeScript check every index, and the ratio includes that cost (charter section 4)."
+  ],
+  "wordfreq": [
+   "The C port counts with the suite's shared chained hash table (bench/c/table.h), hashed with FNV-1a, the cheapest hash on the chart; every other port uses its standard map and that map's hash (Rust's is SipHash, slower per key and resistant to collision attacks)."
+  ]
+ },
+ "provenance": {
+  "charter_hash": "dd8ab7b741d0b6b0de39b5c3e85d62a2ab47c5ee2bb2f422f9b81e4a80c8b94c",
+  "charter_version": 6,
+  "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+  "governor": null,
+  "image_digest": null,
+  "kernel": "#14~24.04.1-Ubuntu SMP PREEMPT Fri Sep 18 21:24:59 UTC 2026",
+  "machine_profile": "ci-smoke",
+  "miri_runtime_profile": {
+   "codegen-units": 1,
+   "lto": "fat",
+   "name": "release",
+   "opt-level": 3,
+   "panic": "abort"
+  },
+  "miri_sha": "caf34fe4113d88a224bdf23adb1d393208fb50fa",
+  "miri_version": "miri 0.7.0-beta.5 (linux/x86_64)",
+  "opt_level_reaches_codegen": true,
+  "os": "Linux 7.0.0-1014-aws",
+  "pinned_core": null,
+  "publishable": false,
+  "python_runner": "3.12.3",
+  "run_id": "20261119T140338Z",
+  "runner_commit": "caf34fe4113d88a224bdf23adb1d393208fb50fa",
+  "schema_version": 1,
+  "toolchain_versions": {
+   "c": "Ubuntu clang version 21.1.8 (++20251221032922+2078da43e25a-1~exp1~20251221153059.70)",
+   "miri": "miri 0.7.0-beta.5 (linux/x86_64)",
+   "rust": "rustc 1.97.0 (2d8144b78 2026-07-07)"
+  },
+  "turbo": null
+ },
+ "run_id": "20261119T140338Z",
+ "schema_version": 1,
+ "scoreboard": [
+  {
+   "at_parity": 1,
+   "floor": 1.5,
+   "geomean_vs_rust": 1.482136018767998,
+   "mode": "cold",
+   "of": 8,
+   "parity": 1.05,
+   "size": "s",
+   "variant": "default",
+   "within_floor": 5,
+   "workloads": {
+    "binary-trees": {
+     "vs_cpp": null,
+     "vs_rust": 0.8980426599189216
+    },
+    "fannkuch-redux": {
+     "vs_cpp": null,
+     "vs_rust": 1.5111620586326344
+    },
+    "mandelbrot": {
+     "vs_cpp": null,
+     "vs_rust": 1.3083899853967258
+    },
+    "matmul": {
+     "vs_cpp": null,
+     "vs_rust": 1.1572826642816847
+    },
+    "nbody": {
+     "vs_cpp": null,
+     "vs_rust": 1.236954888795188
+    },
+    "sieve": {
+     "vs_cpp": null,
+     "vs_rust": 1.3209406519868123
+    },
+    "spectral-norm": {
+     "vs_cpp": null,
+     "vs_rust": 2.2142395818236267
+    },
+    "wordfreq": {
+     "vs_cpp": null,
+     "vs_rust": 3.13226175773848
+    }
+   }
+  },
+  {
+   "at_parity": 1,
+   "floor": 1.5,
+   "geomean_vs_rust": 1.5762361191568868,
+   "mode": "hot",
+   "of": 8,
+   "parity": 1.05,
+   "size": "s",
+   "variant": "default",
+   "within_floor": 4,
+   "workloads": {
+    "binary-trees": {
+     "vs_cpp": null,
+     "vs_rust": 0.879730021110403
+    },
+    "fannkuch-redux": {
+     "vs_cpp": null,
+     "vs_rust": 1.5285716002223586
+    },
+    "mandelbrot": {
+     "vs_cpp": null,
+     "vs_rust": 1.3209450196477042
+    },
+    "matmul": {
+     "vs_cpp": null,
+     "vs_rust": 1.6513311312171948
+    },
+    "nbody": {
+     "vs_cpp": null,
+     "vs_rust": 1.2171026472349653
+    },
+    "sieve": {
+     "vs_cpp": null,
+     "vs_rust": 1.3597913485962674
+    },
+    "spectral-norm": {
+     "vs_cpp": null,
+     "vs_rust": 2.2565394793748106
+    },
+    "wordfreq": {
+     "vs_cpp": null,
+     "vs_rust": 3.4783531609161944
+    }
+   }
+  }
+ ]
+}
