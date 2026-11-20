@@ -1183,3 +1183,117 @@ fn main()
         "1 ab",
     );
 }
+
+/// Every way a program copies a set runs under the heap guard, the leak check
+/// and a scribbling allocator, at both optimization levels, so a key released
+/// once too often is a guard report or a crash rather than a quiet reuse.
+fn assert_set_copies_print(code: &str, expected: &str) {
+    for level in ["0", "3"] {
+        super::lent_field_arguments::assert_output_at(code, level, expected);
+    }
+}
+
+/// A set of counted strings copied by `clone`, by a write to a second
+/// binding, by `filter`, by `map`, by a literal and by walking it: each copy
+/// holds its own count on each key. The copies are released when the helper
+/// making them returns, and the original's keys are read after that, so a key
+/// a copy released once too often is a use after free the guard reports.
+#[test]
+fn copying_a_set_of_strings_releases_each_key_once() {
+    assert_set_copies_print(
+        r#"use system.collections.set
+
+fn key(n int) String
+    return f"key-{n}"
+
+fn copies_of(s Set<String>) String
+    let c = s.clone()
+    var w = s
+    w.add(key(3))
+    w.add(key(1))
+    let f = s.filter(fn(e String) bool: true)
+    let m = s.map(fn(e String) String: e)
+    let same = s.map(fn(e String) String: "same")
+    var walked = 0
+    var it = c.iterator()
+    while true
+        match it.next()
+            Some(e): walked += e.length()
+            None: break
+    return f"{c.length()} {w.length()} {f.length()} {m.length()} {same.length()} {walked} {c == s}"
+
+fn joined(s Set<String>) String
+    var all = ""
+    for e in s
+        all = all + e
+    return all
+
+fn main()
+    var s = Set<String>()
+    s.add(key(1))
+    s.add(key(2))
+    s.add(key(1))
+    var lit = {key(4), key(5), key(4)}
+    println(copies_of(s))
+    println(copies_of(lit))
+    println(f"{joined(s).length()} {joined(lit).length()} {s.contains(key(3))}")
+"#,
+        "2 3 2 2 1 10 true\n2 4 2 2 1 10 true\n10 10 false",
+    );
+}
+
+/// A set of a cloneable resource copied by `clone`, by a write to a second
+/// binding, by `filter` and by `map`: each copy is the element's own clone,
+/// an element the set already holds is released on the add that finds it,
+/// and every value's hook runs exactly once.
+#[test]
+fn copying_a_set_of_a_cloneable_resource_drops_each_value_once() {
+    assert_set_copies_print(
+        &cloneable(
+            r#"
+fn main()
+    var s = Set<Res>()
+    s.add(Res(1))
+    s.add(Res(2))
+    let c = s.clone()
+    println(f"{c.length()}")
+    var w = s
+    w.add(Res(3))
+    w.add(Res(3))
+    let f = s.filter(fn(r Res) bool: r.id == 1)
+    let m = s.map(fn(r Res) Res: Res(5))
+    w.remove(Res(3))
+    w.clear()
+    println(f"{w.length()} {s.length()} {f.length()} {m.length()}")
+"#,
+        ),
+        "clone 2\nclone 1\n2\nclone 2\nclone 1\ndrop 3\nclone 1\ndrop 5\ndrop 3\ndrop 3\n\
+         drop 12\ndrop 11\n0 2 1 1\ndrop 5\ndrop 11\ndrop 12\ndrop 11\ndrop 2\ndrop 1",
+    );
+}
+
+/// A set of a cloneable resource held in a list and in a set, the outer
+/// collection cloned: each inner set is copied through its own clone, which
+/// clones each resource once, and every value's hook runs exactly once.
+#[test]
+fn cloning_a_collection_of_sets_of_a_cloneable_resource_drops_each_value_once() {
+    assert_set_copies_print(
+        &cloneable(
+            r#"
+fn main()
+    var a = Set<Res>()
+    a.add(Res(1))
+    var l = List<Set<Res>>()
+    l.push(a)
+    let lc = l.clone()
+    var b = Set<Res>()
+    b.add(Res(2))
+    var ss = Set<Set<Res>>()
+    ss.add(b)
+    let sc = ss.clone()
+    println(f"{lc.length()} {sc.length()}")
+"#,
+        ),
+        "clone 1\nclone 2\n1 1\ndrop 12\ndrop 2\ndrop 11\ndrop 1",
+    );
+}
