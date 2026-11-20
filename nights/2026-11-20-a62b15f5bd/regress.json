@@ -1,0 +1,99 @@
+{
+ "run_id": "20261120T134602Z",
+ "suspect": [
+  {
+   "cell": "fannkuch-redux/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.1040846342711625,
+   "baseline": 1.2040870224502254,
+   "tonight": 1.3294139798126101
+  },
+  {
+   "cell": "fannkuch-redux/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.0951881317943202,
+   "baseline": 1.1980644943097518,
+   "tonight": 1.312106015292204
+  },
+  {
+   "cell": "matmul/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.1391149076276976,
+   "baseline": 1.5562337830324888,
+   "tonight": 1.772729102006156
+  },
+  {
+   "cell": "nbody/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.1979622084700245,
+   "baseline": 1.4015503982668134,
+   "tonight": 1.6790044103897543
+  },
+  {
+   "cell": "nbody/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.2204875141883804,
+   "baseline": 1.3998347406764586,
+   "tonight": 1.7084808229227473
+  },
+  {
+   "cell": "sieve/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 3.0726193151730703,
+   "baseline": 1.8520888105610323,
+   "tonight": 5.690763852745746
+  },
+  {
+   "cell": "sieve/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 3.421504182627524,
+   "baseline": 2.1128751058828565,
+   "tonight": 7.229211012147766
+  },
+  {
+   "cell": "spectral-norm/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.0893678516462135,
+   "baseline": 1.9645684303890507,
+   "tonight": 2.140137690424894
+  },
+  {
+   "cell": "spectral-norm/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.0939296663305647,
+   "baseline": 1.9785452218978679,
+   "tonight": 2.1643893144106676
+  }
+ ],
+ "regressed": [
+  {
+   "cell": "fannkuch-redux/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.1040846342711625,
+   "baseline": 1.2040870224502254,
+   "tonight": 1.3294139798126101
+  },
+  {
+   "cell": "fannkuch-redux/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.0951881317943202,
+   "baseline": 1.1980644943097518,
+   "tonight": 1.312106015292204
+  },
+  {
+   "cell": "spectral-norm/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.0893678516462135,
+   "baseline": 1.9645684303890507,
+   "tonight": 2.140137690424894
+  },
+  {
+   "cell": "spectral-norm/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.0939296663305647,
+   "baseline": 1.9785452218978679,
+   "tonight": 2.1643893144106676
+  }
+ ],
+ "recovered": []
+}
