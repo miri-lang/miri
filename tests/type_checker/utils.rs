@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri::ast::factory::make_type;
-use miri::ast::type_arguments::type_argument;
+use miri::ast::type_arguments::{type_argument, value_argument};
 use miri::ast::types::Type;
 use miri::ast::types::{TypeDeclarationKind, TypeKind};
 use miri::ast::{Statement, StatementKind};
@@ -525,6 +525,44 @@ fn a_class_extending_a_generic_base_at_a_resource_is_a_resource() {
     defs.insert("Sub".to_string(), TypeDefinition::Class(sub));
     let resources = ResourceTypes::of(&defs, &Instantiations::new());
     assert!(resources.holds(&TypeKind::Custom("Sub".to_string(), None)));
+}
+
+/// A tuple is a resource when a slot holds one, and an array, in either
+/// spelling, when its element does; a list of one is not yet.
+#[test]
+fn a_tuple_or_an_array_holding_a_resource_is_a_resource() {
+    let defs = generic_wrapper();
+    let resources = ResourceTypes::of(&defs, &Instantiations::new());
+    let tuple_of = |slot: Type| {
+        TypeKind::Tuple(vec![
+            type_argument(slot),
+            type_argument(make_type(TypeKind::Int)),
+        ])
+    };
+    let array_of = |element: Type| {
+        TypeKind::Array(
+            Box::new(type_argument(element)),
+            Box::new(value_argument(1)),
+        )
+    };
+    let spelled_array_of = |element: Type| {
+        TypeKind::Custom(
+            "Array".to_string(),
+            Some(vec![type_argument(element), value_argument(1)]),
+        )
+    };
+    for (is_resource, element) in [(true, named("Handle")), (false, make_type(TypeKind::Int))] {
+        assert_eq!(resources.holds(&tuple_of(element.clone())), is_resource);
+        assert_eq!(resources.holds(&array_of(element.clone())), is_resource);
+        assert_eq!(
+            resources.holds(&spelled_array_of(element.clone())),
+            is_resource
+        );
+        let nested = make_type(tuple_of(make_type(array_of(element))));
+        assert_eq!(resources.holds(&array_of(nested)), is_resource);
+    }
+    let list_of_handle = TypeKind::List(Box::new(type_argument(named("Handle"))));
+    assert!(!resources.holds(&list_of_handle));
 }
 
 #[test]

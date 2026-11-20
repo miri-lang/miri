@@ -13,8 +13,9 @@
 //! collection shares ([`refuses_copy_of`], reading [`element_copy`], the one
 //! answer to how a container copies an element): a class that does not
 //! implement the copy trait (the trait declared `@copy_trait`), an abstract
-//! one, any resource that is neither a class nor a collection (a struct or an
-//! enum with a hook), and a list, set or map holding a resource refused so.
+//! one, any resource that is neither a class nor a list, set or map (a
+//! struct, an enum with a hook, a tuple or an array holding a resource), and
+//! a list, set or map holding a resource refused so.
 //! A key of a map is never cloned, so a resource key is refused too, in a
 //! map copied itself or held by another collection.
 //!
@@ -86,14 +87,9 @@ pub enum CopiedCollection {
 
 /// How a collection copies an element of `kind`: a class through its clone
 /// thunk, a list, set or map one of whose elements or values is copied so
-/// through the runtime's copy of it, anything else shared.
-///
-/// TODO: an inner array is shared even where its elements are copied
-/// through their `clone`, and an array holding a resource is not judged a
-/// resource ([`ResourceTypes::holds`]), so a copy of a list of arrays of a
-/// resource shares each resource unrefused. Missing: an array of resources
-/// judged a resource, and the runtime's array copy registered as an
-/// element's callback.
+/// through the runtime's copy of it, anything else shared. An inner array
+/// or tuple is shared, so one holding a resource ([`ResourceTypes::holds`])
+/// is refused by [`refuses_copy_of`].
 pub fn element_copy<'k>(
     kind: &'k TypeKind,
     definitions: &HashMap<String, TypeDefinition>,
@@ -217,12 +213,14 @@ pub struct RefusedCopy<'a> {
 
 impl<'a> RefusedCopy<'a> {
     /// The refusal of a copy of `element`. Its repair names the copy trait
-    /// only where the element's type can declare it, which a class can and
-    /// an enum, a struct or an optional cannot; for those, handing each
-    /// value over is the one repair that compiles.
+    /// only where the element's type can declare it, which a program's class
+    /// can and an enum, a struct, an optional, a tuple or a built-in
+    /// collection cannot; for those, handing each value over is the one
+    /// repair that compiles.
     pub fn of(element: &'a TypeKind, definitions: &'a HashMap<String, TypeDefinition>) -> Self {
-        let can_declare = matches!(element, TypeKind::Custom(name, _)
-            if matches!(definitions.get(name), Some(TypeDefinition::Class(_))));
+        let can_declare = element.as_builtin_collection().is_none()
+            && matches!(element, TypeKind::Custom(name, _)
+                if matches!(definitions.get(name), Some(TypeDefinition::Class(_))));
         let copy_trait = can_declare
             .then(|| context::copy_trait(definitions))
             .flatten();

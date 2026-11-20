@@ -47,8 +47,7 @@ fn keep(c Conn) Conn?
 
 fn main()
     let conns = List([Conn(1), Conn(2)])
-    let kept = keep(conns[0])
-    println(f"{kept.is_some()}")
+    println(f"{keep(conns[0]).is_some()}")
 ```
 
 ## After
@@ -70,8 +69,7 @@ fn main()
     let conns = List([Conn(1), Conn(2)])
     match conns.remove_at(0)
         Some(c):
-            let kept = keep(c)
-            println(f"{kept.is_some()}")
+            println(f"{keep(c).is_some()}")
         None: println("empty")
 ```
 

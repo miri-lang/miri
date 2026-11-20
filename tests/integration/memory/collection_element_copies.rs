@@ -491,13 +491,17 @@ const HAND_OVER: &str = "hand each value over instead of copying it";
 
 /// Asserts `source` is refused with MER_OWN_010 at the line containing
 /// `call`, offering only the repair that hands each value over.
-fn assert_refused_with_hand_over(source: &str, call: &str) {
+fn assert_refused_with_hand_over(
+    source: &str,
+    call: &str,
+) -> miri::diagnostics::json::JsonDiagnostic {
     let diagnostic = assert_refused_at(source, CODE, call);
     assert_eq!(
         diagnostic.help.as_deref(),
         Some(HAND_OVER),
         "the refusal offers only the repair that compiles: {diagnostic:#?}"
     );
+    diagnostic
 }
 
 #[test]
@@ -1116,5 +1120,66 @@ fn main()
     println(f"{l.length()} {c.length()} {c[0].name} {c[1].name} {c[2].n}")
 "#,
         "0 3 ab cd 3",
+    );
+}
+
+/// A list of tuples holding a cloneable resource, cloned: the copy would
+/// share each tuple and so each resource, and a tuple cannot declare the
+/// copy trait, so the clone is refused with handing each value over as the
+/// one repair.
+#[test]
+fn cloning_a_list_of_tuples_of_a_resource_offers_only_handing_each_value_over() {
+    let source = cloneable(
+        r#"
+fn main()
+    var l = List<(Res, int)>()
+    l.push((Res(1), 2))
+    let c = l.clone()
+    println(f"{c.length()}")
+"#,
+    );
+    let diagnostic = assert_refused_with_hand_over(&source, "let c = l.clone()");
+    assert_eq!(
+        diagnostic.message,
+        "`List.clone` copies elements of `Tuple(Res, int)`, a resource with no `clone` to copy it with"
+    );
+}
+
+/// A list of arrays holding a cloneable resource, cloned: the copy would
+/// share each array and so each resource, and an array cannot declare the
+/// copy trait, so the clone is refused with handing each value over as the
+/// one repair.
+#[test]
+fn cloning_a_list_of_arrays_of_a_resource_offers_only_handing_each_value_over() {
+    let source = cloneable(
+        r#"
+fn main()
+    var l = List<[Res; 1]>()
+    l.push([Res(1)])
+    let c = l.clone()
+    println(f"{c.length()}")
+"#,
+    );
+    let diagnostic = assert_refused_with_hand_over(&source, "let c = l.clone()");
+    assert_eq!(
+        diagnostic.message,
+        "`List.clone` copies elements of `Array(Res, 1)`, a resource with no `clone` to copy it with"
+    );
+}
+
+/// A list of tuples of plain values is copied as before.
+#[test]
+fn cloning_a_list_of_tuples_of_plain_values_shares_them_as_before() {
+    assert_heap_guard_output(
+        r#"use system.collections.list
+use system.memory
+
+fn main()
+    var l = List<(int, String)>()
+    l.push((1, "a" + "b"))
+    let c = l.clone()
+    println(f"{c.length()} {c[0].1}")
+"#,
+        "1 ab",
     );
 }

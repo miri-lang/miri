@@ -6,13 +6,13 @@
 //!
 //! A class or an enum declaring the hook is one. A struct or a class holding
 //! a resource in a field is one, and an enum holding one in a variant's
-//! payload — the optional `T?` among them, one exactly when `T` is. A member
-//! is read at the type its owner's instantiation gives it: `Wrap<Handle>`
-//! holds a resource where `Wrap<int>` holds none, and `Slot<Handle>` where
-//! `Slot<int>` does not, so a generic definition is decided per
-//! instantiation. A class
-//! is also one when the base it extends is one at the arguments its `extends`
-//! clause binds.
+//! payload — the optional `T?` among them, one exactly when `T` is. A tuple
+//! is one when a slot holds a resource, and an array when its element does.
+//! A member is read at the type its owner's instantiation gives it:
+//! `Wrap<Handle>` holds a resource where `Wrap<int>` holds none, and
+//! `Slot<Handle>` where `Slot<int>` does not, so a generic definition is
+//! decided per instantiation. A class is also one when the base it extends
+//! is one at the arguments its `extends` clause binds.
 //!
 //! A value held at a trait, or at a class another class extends, may be any
 //! class below it, so that type is a resource when some class below it is one:
@@ -28,8 +28,9 @@ use super::context::{class_implements_trait, ClassDefinition, GenericDefinition,
 use super::generics::generic_parameter_name;
 use super::utils::{has_drop_hook, trait_declares_drop_hook};
 use crate::ast::type_arguments::{TypeArgKind, TypeArgument};
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use std::collections::{BTreeSet, HashMap};
+use std::slice;
 
 /// The program's generic class instantiations: the argument tuples each
 /// generic class is built at, by class name.
@@ -146,10 +147,14 @@ impl ResourceTypes {
         decided
     }
 
-    /// Whether a value of `kind` is a resource. A named type is one at the
-    /// arguments it is written with; a generic parameter is one when a bound
-    /// it declares is, and an unbounded one is not.
+    /// Whether a value of `kind` is a resource. A tuple or an array is one
+    /// when a part it holds is: a tuple's slot, an array's element. A named
+    /// type is one at the arguments it is written with; a generic parameter
+    /// is one when a bound it declares is, and an unbounded one is not.
     pub fn holds(&self, kind: &TypeKind) -> bool {
+        if let Some(mut parts) = held_parts(kind) {
+            return parts.any(|part| self.holds(part));
+        }
         if let TypeKind::Custom(name, args) = kind {
             let args = args.as_deref().unwrap_or_default();
             return self.holds_named(name, |at| args.get(at).and_then(argument_kind));
@@ -314,6 +319,11 @@ impl ResourceTypes {
         if let TypeKind::Option(payload) = kind {
             return self.condition_in(&payload.kind, scope);
         }
+        if let Some(parts) = held_parts(kind) {
+            return parts.fold(Condition::default(), |reached, part| {
+                reached.or(self.condition_in(part, scope))
+            });
+        }
         if let TypeKind::Custom(name, args) = kind {
             let Some(condition) = self.conditions.get(name) else {
                 return Condition::default();
@@ -350,6 +360,64 @@ impl ResourceTypes {
             Condition::default()
         }
     }
+}
+
+/// The parts a value of `kind` holds by its structure rather than through
+/// declared fields: each slot of a tuple, and an array's element in either
+/// spelling. `None` for any other type.
+///
+/// An array's size is read beside its element as the written `Array<T, N>`
+/// lists it; being a value, it names no type and adds no part.
+///
+/// TODO: a list, set or map holding a resource is not yet one. Counting it
+/// makes every method that hands back an element of its receiver (`pop`,
+/// `remove_at`, and `resize` through `pop`) consume the receiver, because
+/// the escape summary of such a body reads returning an element as keeping
+/// the receiver; a call through a function value consumes it too. Missing:
+/// a summary that tells a returned element from the receiver it was taken
+/// out of, so a list of a resource still serves more than one removal.
+fn held_parts(kind: &TypeKind) -> Option<impl Iterator<Item = &TypeKind>> {
+    let (arguments, size): (&[TypeArgument], &[TypeArgument]) = match kind {
+        TypeKind::Tuple(slots) => (slots, &[]),
+        TypeKind::Array(element, size) => (slice::from_ref(element), slice::from_ref(size)),
+        TypeKind::Custom(_, args)
+            if kind.as_builtin_collection() == Some(BuiltinCollectionKind::Array) =>
+        {
+            (args.as_deref().unwrap_or_default(), &[])
+        }
+        TypeKind::List(_) | TypeKind::Set(_) | TypeKind::Map(_, _) => return None,
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _)
+        | TypeKind::Custom(_, _)
+        | TypeKind::Meta(_)
+        | TypeKind::Option(_)
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Linear(_)
+        | TypeKind::OneOf(_) => return None,
+    };
+    Some(arguments.iter().chain(size).filter_map(argument_kind))
 }
 
 /// The type a type argument names, as far as being a resource goes. A

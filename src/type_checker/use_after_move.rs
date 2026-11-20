@@ -43,6 +43,7 @@ use super::escape_analysis::{
     FunctionId, MethodCall, ProgramFacts,
 };
 use super::function_analysis::DeclaredFunction;
+use super::instantiation_limits::spelled_type;
 use super::iteration_plan::{IterationPlan, IterationPlans};
 use super::lent_functions::some_class_hands_back;
 use super::open_consumption::{OpenBody, OpenRefusal};
@@ -65,6 +66,10 @@ pub(crate) const BORROWED_DROP_MESSAGE: &str = "drop() can only release a value 
 /// How to release a value whose drop hook was called on a borrowed receiver.
 pub(crate) const BORROWED_DROP_HELP: &str =
     "call drop() on the local variable that owns the value, or let its owner release it";
+
+/// How many type constructors deep a warning spells a type: all of them, so
+/// the type is shown as written, never elided.
+const WHOLE_TYPE: usize = usize::MAX;
 
 /// Whether `callee` names a GPU atomic built-in (`atomic_add`, …), which the
 /// compiler lowers itself rather than calling a declared function.
@@ -1149,7 +1154,8 @@ impl<'a> UseAfterMoveChecker<'a> {
         restore_shadowed(consumed, shadowed);
     }
 
-    /// The resources `decls` declare, each with its type's name and `span`.
+    /// The resources `decls` declare, each with its type as Miri spells it
+    /// (`Conn`, `T`, `(Conn, int)`) and `span`.
     fn declared_resources(
         &self,
         decls: &[crate::ast::statement::VariableDeclaration],
@@ -1162,8 +1168,8 @@ impl<'a> UseAfterMoveChecker<'a> {
                 if !self.resources.holds(&ty.kind) {
                     return None;
                 }
-                let type_name = Self::resource_type_name(&ty.kind)?;
-                Some((decl.name.clone(), type_name.to_string(), span))
+                let type_name = spelled_type(ty, WHOLE_TYPE);
+                Some((decl.name.clone(), type_name, span))
             })
             .collect()
     }
@@ -1197,19 +1203,6 @@ impl<'a> UseAfterMoveChecker<'a> {
                     repair: None,
                 });
             }
-        }
-    }
-
-    /// Extracts a display name for the resource type used in the W0004 warning.
-    ///
-    /// Returns the nominal name for `Custom` types and the parameter name for
-    /// `Generic` types (so a resource-bounded generic local appears in the
-    /// warning as `type 'T'`).
-    fn resource_type_name(kind: &TypeKind) -> Option<&str> {
-        match kind {
-            TypeKind::Custom(name, _) => Some(name.as_str()),
-            TypeKind::Generic(name, _) => Some(name.as_str()),
-            _ => None,
         }
     }
 
