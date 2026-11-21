@@ -91,6 +91,9 @@ impl TypeChecker {
         if !context.in_gpu_function {
             if let Some(name) = self.gpu_resident_identifier(obj, context) {
                 let name = name.to_string();
+                // The index is checked all the same: a read in it is a defect
+                // of its own, which copying `name` to the host does not repair.
+                self.infer_expression(index, context);
                 self.report_error_with_help(
                     DiagnosticCode::TarGpuResidencyViolation,
                     format!(

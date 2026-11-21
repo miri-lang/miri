@@ -26,7 +26,7 @@ use std::collections::HashSet;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::gpu_wire::{buffer_conversion, scalar_capture_wire};
-use crate::ast::gpu_writes::visit_buffer_writes;
+use crate::ast::gpu_writes::{visit_buffer_writes, OutArgumentQuery};
 use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::node::IdNode;
 use crate::ast::statement::{Statement, StatementKind, VariableDeclaration};
@@ -758,11 +758,11 @@ fn mark_written_params(
     buffer_captures: &[&CaptureInfo],
     read_only_count: usize,
 ) {
-    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
-    out_params.extend(std::iter::repeat_n(false, read_only_count));
-    kernel.signature.out_params = out_params;
+    let mut read_write: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
+    read_write.extend(std::iter::repeat_n(false, read_only_count));
+    kernel.signature.storage_read_write = read_write;
     let mut param_written: Vec<bool> = buffer_captures.iter().map(|c| c.writes_buffer).collect();
-    param_written.resize(kernel.signature.out_params.len(), false);
+    param_written.resize(kernel.signature.storage_read_write.len(), false);
     kernel.signature.param_written = param_written;
 }
 
@@ -1204,11 +1204,12 @@ fn emit_gpu_launch_nd(
     )
 }
 
-/// The names `body` writes, through a store or an atomic builtin, wherever in
+/// The names `body` writes, through a store, an atomic builtin or an `out`
+/// argument (the type checker's record says which arguments are), wherever in
 /// the body the write sits.
-fn collect_written_captures(body: &Statement) -> HashSet<String> {
+fn collect_written_captures(body: &Statement, outs: &dyn OutArgumentQuery) -> HashSet<String> {
     let mut written = HashSet::new();
-    visit_buffer_writes(body, &mut |name, _| {
+    visit_buffer_writes(body, outs, &mut |name, _| {
         written.insert(name.to_string());
     });
     written
@@ -1517,7 +1518,7 @@ pub fn collect_capture_infos(
     span: Span,
 ) -> Result<Vec<CaptureInfo>, LoweringError> {
     let capture_names = collect_outer_captures(body, loop_vars, ctx);
-    let written = collect_written_captures(body);
+    let written = collect_written_captures(body, &ctx.type_checker.out_arguments);
     let mut captures: Vec<CaptureInfo> = Vec::with_capacity(capture_names.len());
 
     for name in capture_names {

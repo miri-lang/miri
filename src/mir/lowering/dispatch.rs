@@ -550,6 +550,7 @@ fn lower_call_arguments(
         (declared_parameter_types(ctx, &param_types), HashMap::new())
     };
     let param_names = callee_parameter_names(ctx, callee_id);
+    check_out_record(ctx, (call_expr_id, call.span), args, (&param_names, outs))?;
     let callee = RuntimeCallee::of(func, &targets);
     let parameters = DeclaredParameters {
         types: &targets,
@@ -575,6 +576,54 @@ fn lower_call_arguments(
     let restores = taken.make_own(ctx, &mut arg_slots)?;
     let operands = operands_in_parameter_order(arg_slots, call.span)?;
     Ok(CallArguments { operands, restores })
+}
+
+/// In device code, refuses a call whose arguments the declaration's `out`
+/// parameters (`outs`) and the type checker's record of `out` arguments
+/// disagree on. The record decides which buffers a kernel writes and how it
+/// binds them, and the declaration decides which operands lowering passes
+/// `out`; a disagreement would bind a buffer for one and write it as the
+/// other. A call the record has not checked is left to the declaration.
+fn check_out_record(
+    ctx: &LoweringContext,
+    (call_expr_id, span): (usize, Span),
+    args: &[Expression],
+    (param_names, outs): (&[String], &OutParameters),
+) -> Result<(), LoweringError> {
+    if !ctx.body.is_gpu() {
+        return Ok(());
+    }
+    let names: Vec<&str> = param_names.iter().map(String::as_str).collect();
+    let record = &ctx.type_checker.out_arguments;
+    let bound = crate::ast::expression::bind_arguments_to_parameters(args, &names);
+    for (position, value) in bound {
+        let Some(recorded) = record.recorded_binding(call_expr_id, value.id) else {
+            continue;
+        };
+        let declared = outs.is_out(position);
+        if recorded != declared {
+            return Err(LoweringError::internal(
+                DiagnosticCode::MirCustomLoweringError,
+                format!(
+                    "argument {position} of a device call is passed {} by the callee's \
+                     declaration but recorded as {} by the type checker",
+                    out_spelling(declared),
+                    out_spelling(recorded)
+                ),
+                span,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// How an argument is spelled in a disagreement about `out`: `out` or lent.
+fn out_spelling(is_out: bool) -> &'static str {
+    if is_out {
+        "`out`"
+    } else {
+        "lent, not `out`"
+    }
 }
 
 /// A call's argument operands in parameter order, and what it leaves to

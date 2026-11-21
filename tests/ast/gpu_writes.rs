@@ -3,24 +3,65 @@
 
 //! The write walk shared by `forall` lowering and the `gpu frame` checker.
 
-use miri::ast::gpu_writes::{visit_buffer_writes, BufferWrite};
+use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::gpu_writes::{visit_buffer_writes, BufferWrite, OutArgumentQuery};
 use miri::lexer::Lexer;
 use miri::parser::Parser;
 use std::collections::BTreeSet;
 
-/// Every `(name, kind)` write the walk reports for the statements of `source`,
-/// with the atomic builtins the GPU target recognizes.
-fn writes(source: &str) -> BTreeSet<(String, &'static str)> {
+/// A call record in which no argument binds an `out` parameter.
+struct NoOutArguments;
+
+impl OutArgumentQuery for NoOutArguments {
+    fn binds_out(&self, _call: &Expression, _argument: &Expression) -> bool {
+        false
+    }
+}
+
+/// A call record, filled by hand, in which the first argument of every call
+/// to the function `callee` binds an `out` parameter. A named argument is
+/// recorded as the value it names, as the type checker records it.
+struct FirstArgumentOutOf(&'static str);
+
+impl OutArgumentQuery for FirstArgumentOutOf {
+    fn binds_out(&self, call: &Expression, argument: &Expression) -> bool {
+        let ExpressionKind::Call(callee, args) = &call.node else {
+            return false;
+        };
+        let is_callee =
+            matches!(&callee.node, ExpressionKind::Identifier(name, _) if name == self.0);
+        let first = args.first().map(|first| match &first.node {
+            ExpressionKind::NamedArgument(_, value) => value.as_ref(),
+            _ => first,
+        });
+        is_callee && first.is_some_and(|first| first.id == argument.id)
+    }
+}
+
+/// How a test spells the index an `out` write carries: the name it reads, or
+/// `<expr>` for anything else.
+fn spelled_index(index: Option<&Expression>) -> String {
+    match index.map(|index| &index.node) {
+        Some(ExpressionKind::Identifier(name, _)) => name.clone(),
+        Some(_) => "<expr>".to_string(),
+        None => "-".to_string(),
+    }
+}
+
+/// Every `(name, kind)` write the walk reports for the statements of
+/// `source`, reading which arguments bind an `out` parameter off `outs`.
+fn writes_with(source: &str, outs: &dyn OutArgumentQuery) -> BTreeSet<(String, String)> {
     let mut lexer = Lexer::new(source);
     let program = Parser::new(&mut lexer, source)
         .parse()
         .expect("the source parses");
     let mut found = BTreeSet::new();
     for stmt in &program.body {
-        visit_buffer_writes(stmt, &mut |name, kind| {
+        visit_buffer_writes(stmt, outs, &mut |name, kind| {
             let kind = match kind {
-                BufferWrite::Store => "store",
-                BufferWrite::Atomic => "atomic",
+                BufferWrite::Store => "store".to_string(),
+                BufferWrite::Atomic => "atomic".to_string(),
+                BufferWrite::Out { index } => format!("out {}", spelled_index(index)),
             };
             found.insert((name.to_string(), kind));
         });
@@ -28,8 +69,17 @@ fn writes(source: &str) -> BTreeSet<(String, &'static str)> {
     found
 }
 
-fn set(entries: &[(&str, &'static str)]) -> BTreeSet<(String, &'static str)> {
-    entries.iter().map(|(n, k)| (n.to_string(), *k)).collect()
+/// Every `(name, kind)` write the walk reports for the statements of `source`,
+/// with the atomic builtins the GPU target recognizes and no `out` argument.
+fn writes(source: &str) -> BTreeSet<(String, String)> {
+    writes_with(source, &NoOutArguments)
+}
+
+fn set(entries: &[(&str, &str)]) -> BTreeSet<(String, String)> {
+    entries
+        .iter()
+        .map(|(n, k)| (n.to_string(), k.to_string()))
+        .collect()
 }
 
 #[test]
@@ -70,4 +120,40 @@ fn a_store_inside_a_lambda_body_is_not_a_write_of_the_loop() {
 fn every_atomic_builtin_of_the_gpu_target_is_an_atomic_write() {
     let found = writes("atomic_max(peak, 0, 3)\natomic_compare_exchange(slot, 0, 1, 2)\n");
     assert_eq!(found, set(&[("peak", "atomic"), ("slot", "atomic")]));
+}
+
+#[test]
+fn an_element_handed_to_an_out_parameter_is_written_at_its_index() {
+    let found = writes_with("bump(dst[i])\n", &FirstArgumentOutOf("bump"));
+    assert_eq!(found, set(&[("dst", "out i")]));
+}
+
+#[test]
+fn a_field_of_an_element_handed_out_carries_the_index_at_its_root() {
+    let found = writes_with("bump(pts[j].x)\n", &FirstArgumentOutOf("bump"));
+    assert_eq!(found, set(&[("pts", "out j")]));
+}
+
+#[test]
+fn a_whole_binding_handed_out_carries_no_index() {
+    let found = writes_with("let y = bump(total)\n", &FirstArgumentOutOf("bump"));
+    assert_eq!(found, set(&[("total", "out -")]));
+}
+
+#[test]
+fn a_named_argument_handed_out_is_written() {
+    let found = writes_with("bump(x: dst[k + 1])\n", &FirstArgumentOutOf("bump"));
+    assert_eq!(found, set(&[("dst", "out <expr>")]));
+}
+
+#[test]
+fn an_argument_the_record_does_not_name_out_is_only_read() {
+    let found = writes_with("bump(dst[i], src[i])\n", &FirstArgumentOutOf("bump"));
+    assert_eq!(found, set(&[("dst", "out i")]));
+}
+
+#[test]
+fn an_out_argument_inside_a_branch_is_a_write() {
+    let found = writes_with("if k > 0\n    bump(dst[k])\n", &FirstArgumentOutOf("bump"));
+    assert_eq!(found, set(&[("dst", "out k")]));
 }

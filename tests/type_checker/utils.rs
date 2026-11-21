@@ -1102,3 +1102,17 @@ fn byte_size_alias_cycle_terminates_without_a_width() {
         None
     );
 }
+
+/// Every type error the frontend reports for `source`, rendered, panicking if
+/// the source type-checks or fails at another stage. A test reads it to check
+/// that one refusal is among them and another is not.
+pub fn type_checker_errors(source: &str) -> Vec<String> {
+    let pipeline = Pipeline::new();
+    match pipeline.frontend(source) {
+        Ok(_) => panic!("Expected type errors, but got success"),
+        Err(CompilerError::TypeErrors { errors, .. }) => {
+            errors.iter().map(|e| e.to_string()).collect()
+        }
+        Err(e) => panic!("Expected TypeErrors, but got: {:?}", e),
+    }
+}

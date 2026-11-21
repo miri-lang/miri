@@ -324,7 +324,7 @@ fn main()
     );
 }
 
-const DEVICE_STEP: &str = r#"
+const DEVICE_NESTED: &str = r#"
 use system.io
 use system.gpu
 use system.collections.array
@@ -335,7 +335,9 @@ fn bump(n out int) int
 
 gpu fn fill(dst out Array<int, 4>)
     let i = kernel.global_idx.x
-    let _ = bump(dst[i])
+    var grid = [[1, 2], [3, 4]]
+    let _ = bump(grid[0][1])
+    dst[i] = grid[0][1]
 
 fn main()
     gpu var out = Array<int, 4>()
@@ -343,12 +345,12 @@ fn main()
 "#;
 
 #[test]
-fn an_element_in_device_code_names_the_returned_value_repair() {
+fn a_nested_element_in_device_code_names_the_copy_in_copy_out_repair() {
     assert_refused_exactly(
-        DEVICE_STEP,
+        DEVICE_NESTED,
         "MER_TYP_054",
-        "'out' parameter 'n' is handed 'dst[i]' in device code, where a call takes no place",
-        "take the value as a plain parameter and return the new one, then store it: 'dst[i] = …(dst[i])'",
+        "'out' parameter 'n' is handed 'grid[0][1]' in device code, which takes only a whole local, an element of a buffer ('dst[i]') or a component of a vector ('v.x', 'pts[i].x')",
+        "copy it into a 'var', pass that and store it back: 'var value = grid[0][1]', pass 'value', then 'grid[0][1] = value'",
     );
 }
 

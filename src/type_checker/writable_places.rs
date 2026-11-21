@@ -207,8 +207,10 @@ impl TypeChecker {
 }
 
 /// The binding the place starting at `root` starts at, when a write may land
-/// through it. A binding held in device memory is a place only whole:
-/// `is_path` says a field or an element of it is reached.
+/// through it. On the host a binding held in device memory is a place only
+/// whole: `is_path` says a field or an element of it is reached. In device
+/// code that binding is a buffer the code runs beside, and a place in it is
+/// one a call may take.
 fn place_root<'e>(
     root: &'e Expression,
     is_path: bool,
@@ -223,7 +225,8 @@ fn place_root<'e>(
     let Some(info) = context.resolve_info(name) else {
         return Err(Refusal::NotAPlace);
     };
-    if is_path && matches!(info.residency, BindingResidency::Gpu) {
+    let is_host_code = !context.is_device_code();
+    if is_path && is_host_code && matches!(info.residency, BindingResidency::Gpu) {
         return Err(Refusal::DeviceResident(name));
     }
     match (info.mutable && !info.is_constant, info.is_parameter) {

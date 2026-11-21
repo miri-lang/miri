@@ -97,6 +97,32 @@ impl Representation {
     }
 }
 
+/// How a call hands the slot an `out` argument names to its callee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutHandover {
+    /// The place itself, which a backend passes by the slot's address: the
+    /// callee writes the slot in place.
+    ByAddress,
+    /// A temp the slot's value is copied into before the call, the temp
+    /// handed over and copied back into the slot as the first statement
+    /// after the call.
+    CopiedIn,
+}
+
+/// How a call in a body hands over an `out` argument of `representation`:
+/// the one answer every stage reads. A host body hands it by address where
+/// the layout allows ([`Representation::is_passed_out_by_address`]). Device
+/// code (`body_is_gpu`) always copies it in: a WGSL pointer parameter
+/// reaches only a whole function variable, never storage or a sub-object,
+/// and device code holds no counts a copy would have to keep.
+pub fn out_handover(representation: &Representation, body_is_gpu: bool) -> OutHandover {
+    if !body_is_gpu && representation.is_passed_out_by_address() {
+        OutHandover::ByAddress
+    } else {
+        OutHandover::CopiedIn
+    }
+}
+
 /// How a value of `kind` is held at the top level.
 fn held(kind: &TypeKind, scope: LayoutScope<'_>) -> Held {
     if *kind == TypeKind::Void {

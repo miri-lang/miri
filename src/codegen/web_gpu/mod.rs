@@ -15,7 +15,6 @@ mod buffers;
 mod manifest;
 
 use crate::ast::types::{FrameFieldKind, FRAME_INPUT_FIELDS};
-use crate::codegen::wgsl::types::is_atomic_element_buffer;
 use crate::codegen::wgsl::{compile_module, WgslOptions};
 use crate::error::compiler::CompilerError;
 use crate::error::syntax::Span;
@@ -345,15 +344,15 @@ fn extract_buffer_bindings(
     let body = plan.body;
     buffers::storage_params(body)
         .zip(&plan.handles)
-        .map(|((local_idx, decl), &handle)| {
+        .map(|((local_idx, _), &handle)| {
             let buffer = buffers.buffer_of(handle).ok_or_else(|| {
                 CompilerError::Codegen(format!("device buffer {handle} has no bundle entry"))
             })?;
-            // Atomic buffers need read-write access; check the element type
-            let is_atomic_buffer = is_atomic_element_buffer(&decl.ty.kind);
-            let is_out = body
+            // Lowering marks every buffer the kernel binds read-write, one
+            // of atomics included.
+            let is_read_write = body
                 .signature
-                .out_params
+                .storage_read_write
                 .get(local_idx - 1)
                 .copied()
                 .unwrap_or(false);
@@ -362,11 +361,11 @@ fn extract_buffer_bindings(
                 .param_written
                 .get(local_idx - 1)
                 .copied()
-                .unwrap_or(is_out);
+                .unwrap_or(is_read_write);
             Ok(BufferBinding {
                 name: buffer.name.clone(),
                 element_type: buffer.element_type,
-                read_only: !is_atomic_buffer && !is_out,
+                read_only: !is_read_write,
                 writes,
             })
         })

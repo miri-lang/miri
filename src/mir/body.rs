@@ -67,9 +67,17 @@ pub struct Body {
 pub struct Signature {
     /// Which parameters (indexed 1..=arg_count) are `out` parameters.
     /// `out_params[i-1] == true` means parameter `_i` was declared `out`.
-    /// Populated by MIR lowering from `Parameter::is_out`.
+    /// Populated by MIR lowering from `Parameter::is_out`, and only from it:
+    /// a kernel the compiler builds for a parallel loop declares none, its
+    /// buffers binding as [`Signature::storage_read_write`] says.
     /// Used by codegen to emit pointer ABI for scalar out params (copy-in/copy-out).
     pub out_params: Vec<bool>,
+    /// For a kernel, which parameters (indexed 1..=arg_count) bind a storage
+    /// buffer the kernel may write: `storage_read_write[i-1] == true` means
+    /// parameter `_i` binds `read_write`. True for a buffer the kernel writes,
+    /// for one whose elements are atomic whatever the kernel does with it, and
+    /// for a `gpu fn`'s `out` buffer. Empty for any other body.
+    pub storage_read_write: Vec<bool>,
     /// Which parameters (indexed 1..=arg_count) the body owns because it keeps
     /// them: a resource parameter its escape summary keeps
     /// (`type_checker::kept_parameters`). `kept_params[i-1] == true` means
@@ -83,7 +91,7 @@ pub struct Signature {
     pub receiver: Option<Local>,
     /// Which parameters (indexed 1..=arg_count) the body actually writes.
     /// `param_written[i-1] == true` means parameter `_i` is written by this body.
-    /// Distinct from `out_params`, which for a kernel also drives the WGSL storage
+    /// Distinct from `storage_read_write`, which drives a kernel's WGSL storage
     /// qualifier and stays true for atomic buffers regardless of data flow; this
     /// carries the truthful flow to backends that need it.
     pub param_written: Vec<bool>,

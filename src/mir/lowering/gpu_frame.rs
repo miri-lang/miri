@@ -735,12 +735,12 @@ fn build_frame_kernel_literal(
         is_frame_step: true,
     }));
 
-    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
-    out_params.extend(std::iter::repeat_n(false, frame_param_count));
-    out_params.extend(scalar_captures.iter().map(|_| false));
-    kernel.signature.out_params = out_params;
+    let mut read_write: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
+    read_write.extend(std::iter::repeat_n(false, frame_param_count));
+    read_write.extend(scalar_captures.iter().map(|_| false));
+    kernel.signature.storage_read_write = read_write;
     let mut param_written: Vec<bool> = buffer_captures.iter().map(|c| c.writes_buffer).collect();
-    param_written.resize(kernel.signature.out_params.len(), false);
+    param_written.resize(kernel.signature.storage_read_write.len(), false);
     kernel.signature.param_written = param_written;
 
     let mut ctx = LoweringContext::for_kernel(kernel, parent);
@@ -846,13 +846,13 @@ fn build_frame_kernel_runtime(
         is_frame_step: true,
     }));
 
-    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
-    out_params.extend(std::iter::repeat_n(false, frame_param_count));
-    out_params.push(false);
-    out_params.extend(scalar_captures.iter().map(|_| false));
-    kernel.signature.out_params = out_params;
+    let mut read_write: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
+    read_write.extend(std::iter::repeat_n(false, frame_param_count));
+    read_write.push(false);
+    read_write.extend(scalar_captures.iter().map(|_| false));
+    kernel.signature.storage_read_write = read_write;
     let mut param_written: Vec<bool> = buffer_captures.iter().map(|c| c.writes_buffer).collect();
-    param_written.resize(kernel.signature.out_params.len(), false);
+    param_written.resize(kernel.signature.storage_read_write.len(), false);
     kernel.signature.param_written = param_written;
 
     let mut ctx = LoweringContext::for_kernel(kernel, parent);

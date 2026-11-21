@@ -7,6 +7,7 @@ pub mod body;
 pub mod class;
 pub mod closure_abi;
 pub mod drop_elaboration;
+pub mod gpu;
 pub mod lowering;
 pub mod operand;
 pub mod optimization;

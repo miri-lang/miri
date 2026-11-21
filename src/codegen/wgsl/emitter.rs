@@ -23,9 +23,9 @@ use crate::mir::backend::BackendMetadata;
 use crate::mir::gpu_names::spelled_name;
 use crate::mir::symbol::Symbol;
 use crate::mir::{
-    BasicBlock, BinOp, Body, Bounds, Constant, Dimension, ExecutionModel, GpuIndexNarrowing,
-    GpuIntrinsic, Local, LocalDecl, MathIntrinsic, Operand, Place, PlaceElem, Rvalue,
-    StatementKind, StorageClass, TerminatorKind, UnOp,
+    arg_mode, ArgMode, BasicBlock, BinOp, Body, Bounds, Constant, Dimension, ExecutionModel,
+    GpuIndexNarrowing, GpuIntrinsic, Local, LocalDecl, MathIntrinsic, Operand, Place, PlaceElem,
+    Rvalue, StatementKind, StorageClass, TerminatorKind, UnOp,
 };
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
@@ -278,57 +278,87 @@ impl<'o> Emitter<'o> {
     }
 
     fn emit_helper_fn(&mut self, name: &str, body: &Body) -> Result<(), CodegenError> {
-        if body.local_decls.is_empty() {
-            return Err(CodegenError::Internal(
-                "Helper function must have at least a return local".to_string(),
-            ));
-        }
-
-        let return_type = scalar(&body.local_decls[0].ty.kind)?;
-
-        write!(self.output, "fn {}(", name).map_err(emit_err)?;
-
-        // Parameters are locals 1..=arg_count, named to match how the body
-        // references them (`_1`, `_2`, ...). The body's allocator belongs to
-        // the CPU reference-counting ABI and has no GPU counterpart, so it is skipped —
-        // GPU call sites never pass it.
-        let mut emitted = 0;
-        for i in 1..=body.arg_count {
-            let local_decl = body.local_decls.get(i).ok_or_else(|| {
-                CodegenError::Internal(format!(
-                    "WGSL backend: helper function missing param local {}",
-                    i
-                ))
-            })?;
-            if body.signature.allocator == Some(Local(i)) {
-                continue;
-            }
-            if emitted > 0 {
-                write!(self.output, ", ").map_err(emit_err)?;
-            }
-            let param_type = scalar(&local_decl.ty.kind)?;
-            write!(
+        let return_kind = &body
+            .local_decls
+            .first()
+            .ok_or_else(|| {
+                CodegenError::Internal(
+                    "Helper function must have at least a return local".to_string(),
+                )
+            })?
+            .ty
+            .kind;
+        let returns_value = !matches!(return_kind, TypeKind::Void);
+        let parameters = helper_parameters(body)?;
+        if returns_value {
+            let return_type = scalar(return_kind)?;
+            writeln!(
                 self.output,
-                "{}: {}",
-                local_name(Local(i)),
-                param_type.name()
+                "fn {}({}) -> {} {{",
+                name,
+                parameters,
+                return_type.name()
             )
             .map_err(emit_err)?;
-            emitted += 1;
+        } else {
+            writeln!(self.output, "fn {}({}) {{", name, parameters).map_err(emit_err)?;
         }
-
-        writeln!(self.output, ") -> {} {{", return_type.name()).map_err(emit_err)?;
 
         // Helpers carry no `@workgroup_size`; the value is unused for non-entry bodies.
         let mut ctx =
             BodyEmitter::new(body, &[], [1, 1, 1], &mut self.output, &mut self.source_map)?;
-        ctx.return_local = Some(Local(0));
+        // A helper returning nothing ends with a bare `return;`, so it has no
+        // result slot to return.
+        ctx.return_local = returns_value.then_some(Local(0));
+        ctx.out_pointers = out_pointer_params(body);
         ctx.device_helpers = Some(self.device_helpers);
         emit_body_absorbing_checked(ctx, &mut self.checked_helpers)?;
 
         writeln!(self.output, "}}").map_err(emit_err)?;
         writeln!(self.output).map_err(emit_err)
     }
+}
+
+/// The WGSL parameter list of the helper `body`. Parameters are locals
+/// 1..=arg_count, named to match how the body references them (`_1`, `_2`,
+/// ...). The body's allocator belongs to the CPU reference-counting ABI and
+/// has no GPU counterpart, so it is skipped — GPU call sites never pass it.
+/// An `out` parameter is a pointer to the caller's function variable, which
+/// the caller copied the place it names into and stores back after the call.
+fn helper_parameters(body: &Body) -> Result<String, CodegenError> {
+    let out_pointers = out_pointer_params(body);
+    let mut parameters = Vec::with_capacity(body.arg_count);
+    for i in 1..=body.arg_count {
+        let local_decl = body.local_decls.get(i).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "WGSL backend: helper function missing param local {}",
+                i
+            ))
+        })?;
+        if body.signature.allocator == Some(Local(i)) {
+            continue;
+        }
+        let param_type = scalar(&local_decl.ty.kind)?;
+        let name = local_name(Local(i));
+        parameters.push(if out_pointers.contains(&Local(i)) {
+            format!("{}: ptr<function, {}>", name, param_type.name())
+        } else {
+            format!("{}: {}", name, param_type.name())
+        });
+    }
+    Ok(parameters.join(", "))
+}
+
+/// The parameters of the helper `body` declared `out`, each a WGSL pointer
+/// the body reads and writes through.
+fn out_pointer_params(body: &Body) -> HashSet<Local> {
+    body.signature
+        .out_params
+        .iter()
+        .enumerate()
+        .filter(|(_, is_out)| **is_out)
+        .map(|(position, _)| Local(position + 1))
+        .collect()
 }
 
 /// Emits the declarations and blocks of the body `ctx` writes, then adds the
@@ -455,13 +485,13 @@ fn collect_storage_bindings(
     for &(param_idx, decl) in storage {
         let read_write = body
             .signature
-            .out_params
+            .storage_read_write
             .get(param_idx - 1)
             .copied()
             .ok_or_else(|| {
                 CodegenError::Internal(format!(
-                    "WGSL backend: out_params length {} < arg_count {}",
-                    body.signature.out_params.len(),
+                    "WGSL backend: storage_read_write length {} < arg_count {}",
+                    body.signature.storage_read_write.len(),
                     body.arg_count
                 ))
             })?;
@@ -638,6 +668,10 @@ struct BodyEmitter<'a> {
     /// value (`_0`). `None` for `@compute` kernel entry points, which return
     /// `void` and read/write storage buffers instead.
     return_local: Option<Local>,
+    /// For a helper, its `out` parameters: each a `ptr<function, T>` the body
+    /// reads and writes as `(*_k)`. Empty for a kernel, whose buffers bind as
+    /// storage.
+    out_pointers: HashSet<Local>,
     /// The bodies the module declares as device helpers, which a call names
     /// by their WGSL names; `None` where the module declares none.
     device_helpers: Option<&'a HashSet<Symbol>>,
@@ -697,6 +731,7 @@ impl<'a> BodyEmitter<'a> {
             loop_info,
             loop_stack: Vec::new(),
             return_local: None,
+            out_pointers: HashSet::new(),
             device_helpers: None,
             checked_helpers: BTreeSet::new(),
         };
@@ -1308,11 +1343,12 @@ impl<'a> BodyEmitter<'a> {
                 TerminatorKind::Call {
                     func,
                     args,
+                    arg_modes,
                     destination,
                     target,
                     ..
                 } => {
-                    self.emit_call(func, args, destination, target.as_ref())?;
+                    self.emit_call(func, args, arg_modes, destination)?;
                     if let Some(target) = target {
                         cur = *target;
                     } else {
@@ -1575,13 +1611,14 @@ impl<'a> BodyEmitter<'a> {
         Ok(())
     }
 
-    /// Emit a function call: `_dest = func_name(args); goto target`.
+    /// Emit a function call: `_dest = func_name(args);`, or the bare call
+    /// when the callee returns nothing.
     fn emit_call(
         &mut self,
         func: &Operand,
         args: &[Operand],
+        arg_modes: &[ArgMode],
         destination: &Place,
-        _target: Option<&BasicBlock>,
     ) -> Result<(), CodegenError> {
         // An `Array<T, N>()` constructor targeting a function-scope array local
         // has no WGSL form of its own: there is no `miri_rt_array_new(...)` to
@@ -1624,24 +1661,68 @@ impl<'a> BodyEmitter<'a> {
             }
         };
 
-        self.write_indent()?;
-        let dest_str = self.render_place(destination)?;
-
         // The implicit CPU reference-counting `allocator` argument has no GPU counterpart;
         // the helper signature drops the matching param, so drop the argument too.
-        let device_args: Vec<&Operand> = args
-            .iter()
-            .filter(|a| !self.is_allocator_operand(a))
-            .collect();
-        let arg_strs: Result<Vec<_>, _> = device_args
-            .into_iter()
-            .map(|a| self.render_operand(a))
-            .collect();
-        let args_str = arg_strs?.join(", ");
+        let mut arg_strs = Vec::with_capacity(args.len());
+        for (position, arg) in args.iter().enumerate() {
+            if self.is_allocator_operand(arg) {
+                continue;
+            }
+            arg_strs.push(match arg_mode(arg_modes, position) {
+                ArgMode::Out => self.render_out_argument(arg)?,
+                ArgMode::Borrowed | ArgMode::Owned | ArgMode::Donated => {
+                    self.render_operand(arg)?
+                }
+            });
+        }
+        let args_str = arg_strs.join(", ");
 
-        writeln!(self.output, "{} = {}({});", dest_str, func_name, args_str).map_err(emit_err)?;
+        self.write_indent()?;
+        if self.is_void_place(destination) {
+            writeln!(self.output, "{}({});", func_name, args_str).map_err(emit_err)
+        } else {
+            let dest_str = self.render_place(destination)?;
+            writeln!(self.output, "{} = {}({});", dest_str, func_name, args_str).map_err(emit_err)
+        }
+    }
 
-        Ok(())
+    /// The address a call hands an `out` parameter: always a whole
+    /// function-variable temp, which lowering copied the named place into
+    /// before the call and stores back after it. A WGSL pointer parameter
+    /// reaches only a function variable, so any other operand is a lowering
+    /// defect.
+    fn render_out_argument(&self, arg: &Operand) -> Result<String, CodegenError> {
+        let temp = match arg {
+            Operand::Copy(place) | Operand::Move(place) => place,
+            Operand::Constant(_) | Operand::Function(_) => {
+                return Err(CodegenError::Internal(format!(
+                    "WGSL backend: an `out` argument is not a place: {arg:?}"
+                )));
+            }
+        };
+        let is_function_variable = temp.projection.is_empty()
+            && self.binding_name(temp.local).is_none()
+            && self.shared_local_name(temp.local).is_none()
+            && !self.out_pointers.contains(&temp.local)
+            && temp.local.0 > self.body.arg_count;
+        if !is_function_variable {
+            return Err(CodegenError::Internal(format!(
+                "WGSL backend: the `out` argument {temp} is not a whole function variable; \
+                 device code copies the place into a temp and hands over the temp"
+            )));
+        }
+        Ok(format!("&{}", local_name(temp.local)))
+    }
+
+    /// Whether `place` is a `void`-typed local: the throwaway destination of
+    /// a call returning nothing, which WGSL has no value for.
+    fn is_void_place(&self, place: &Place) -> bool {
+        place.projection.is_empty()
+            && self
+                .body
+                .local_decls
+                .get(place.local.0)
+                .is_some_and(|d| matches!(d.ty.kind, TypeKind::Void))
     }
 
     /// The name a call to `symbol` is spelled with: the name the device body
@@ -1897,6 +1978,8 @@ impl<'a> BodyEmitter<'a> {
             name.to_string()
         } else if let Some(name) = self.shared_local_name(place.local) {
             name
+        } else if self.out_pointers.contains(&place.local) {
+            format!("(*{})", local_name(place.local))
         } else {
             local_name(place.local)
         };
@@ -2694,6 +2777,7 @@ mod tests {
             loop_info: HashMap::new(),
             loop_stack: Vec::new(),
             return_local: None,
+            out_pointers: HashSet::new(),
             device_helpers: None,
             checked_helpers: BTreeSet::new(),
         };

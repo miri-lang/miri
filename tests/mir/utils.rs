@@ -29,19 +29,21 @@
 //! one test file lives in that file, not here.
 
 use miri::ast::literal::{IntegerLiteral, Literal};
-use miri::ast::statement::StatementKind as AstStatementKind;
+use miri::ast::statement::{Statement as AstStatement, StatementKind as AstStatementKind};
 use miri::ast::types::{Type, TypeKind};
+use miri::error::lowering::LoweringError;
 use miri::error::syntax::Span;
 use miri::mir::compiler_intrinsics::{compiler_intrinsic, compiler_intrinsic_names};
 use miri::mir::lowering::{lower_function, Lowered};
 use miri::mir::rc::RcClassifier;
 use miri::mir::symbol::RuntimeCallee;
 use miri::mir::{
-    Body, Constant, GpuIntrinsic, LocalDecl, Operand, Rvalue, StatementKind, Terminator,
-    TerminatorKind,
+    ArgMode, Body, Constant, GpuIntrinsic, LocalDecl, Operand, Place, Rvalue, StatementKind,
+    Terminator, TerminatorKind,
 };
 use miri::pipeline::Pipeline;
 use miri::runtime_effects::{ParamUse, RuntimeEffect};
+use miri::type_checker::TypeChecker;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -85,6 +87,92 @@ pub fn mir_lower_main(source: &str) -> Lowered {
         .expect("No function declaration found in source");
 
     lower_function(func_stmt, &result.type_checker, false, false).expect("Lowering failed")
+}
+
+/// The function `name` of `source`, type checked as a host program and
+/// lowered as it is declared, or as a body running on a GPU (`on_gpu`): a
+/// lowering seam the type checker does not reach, which refuses some of what
+/// a GPU body is handed.
+pub fn lower_named(source: &str, name: &str, on_gpu: bool) -> Body {
+    lower_named_amended(source, (name, on_gpu), |_, _| {})
+        .expect("Lowering failed")
+        .body
+}
+
+/// [`lower_named`], with `amend` handed the type checker and the function's
+/// declaration between checking and lowering: a seam for a record lowering
+/// must refuse to disagree with. Answers lowering's own result.
+pub fn lower_named_amended(
+    source: &str,
+    (name, on_gpu): (&str, bool),
+    amend: impl FnOnce(&mut TypeChecker, &AstStatement),
+) -> Result<Lowered, LoweringError> {
+    let pipeline = Pipeline::new();
+    let mut result = pipeline.frontend(source).expect("Frontend failed");
+    let mut stmt = result
+        .ast
+        .body
+        .iter()
+        .find(|s| matches!(&s.node, AstStatementKind::FunctionDeclaration(f) if f.name == name))
+        .unwrap_or_else(|| panic!("no function `{name}`"))
+        .clone();
+    if let AstStatementKind::FunctionDeclaration(decl) = &mut stmt.node {
+        decl.properties.is_gpu |= on_gpu;
+    }
+    amend(&mut result.type_checker, &stmt);
+    lower_function(&stmt, &result.type_checker, false, false)
+}
+
+/// One `out` argument as a call hands it over: the operand, the place its
+/// value was copied from in the call's block, and the place the block the
+/// call continues in first stores it back into.
+pub struct OutHandover {
+    pub operand: Place,
+    pub copied_from: Option<Place>,
+    pub stored_back_into: Option<Place>,
+}
+
+/// Every `out` argument of every call in `body`, in block order.
+pub fn out_handovers(body: &Body) -> Vec<OutHandover> {
+    let mut found = Vec::new();
+    for block in &body.basic_blocks {
+        let Some(TerminatorKind::Call {
+            args,
+            arg_modes,
+            target,
+            ..
+        }) = block.terminator.as_ref().map(|t| &t.kind)
+        else {
+            continue;
+        };
+        for (arg, mode) in args.iter().zip(arg_modes) {
+            let (ArgMode::Out, Operand::Copy(place) | Operand::Move(place)) = (mode, arg) else {
+                continue;
+            };
+            let copied_from = block.statements.iter().rev().find_map(|s| match &s.kind {
+                StatementKind::Assign(to, Rvalue::Use(Operand::Copy(from))) if to == place => {
+                    Some(from.clone())
+                }
+                _ => None,
+            });
+            let stored_back_into = target
+                .and_then(|t| body.basic_blocks[t.0].statements.first())
+                .and_then(|s| match &s.kind {
+                    StatementKind::Assign(to, Rvalue::Use(Operand::Copy(from)))
+                        if from == place =>
+                    {
+                        Some(to.clone())
+                    }
+                    _ => None,
+                });
+            found.push(OutHandover {
+                operand: place.clone(),
+                copied_from,
+                stored_back_into,
+            });
+        }
+    }
+    found
 }
 
 /// Normalize MIR output for comparison by trimming lines and removing empty lines.

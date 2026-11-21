@@ -7,7 +7,7 @@
 use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
-use miri::mir::representation::Representation;
+use miri::mir::representation::{out_handover, OutHandover, Representation};
 use miri::type_checker::value_class::LayoutScope;
 use std::collections::{HashMap, HashSet};
 
@@ -109,4 +109,51 @@ fn a_void_argument_is_represented_apart_from_the_open_parameter() {
     // A call answering with `void` returns nothing, so the shared body, which
     // returns the parameter as a word, cannot answer it.
     assert_eq!(agreement(&parameter(), &TypeKind::Void), (false, false));
+}
+
+/// How an `out` argument of `kind` is handed to its callee, in a host body
+/// and in a GPU body.
+fn handovers(kind: &TypeKind) -> (OutHandover, OutHandover) {
+    let definitions = HashMap::new();
+    let representation = Representation::of(kind, LayoutScope::program(&definitions));
+    (
+        out_handover(&representation, false),
+        out_handover(&representation, true),
+    )
+}
+
+#[test]
+fn a_counted_or_optional_slot_is_handed_by_address_on_the_host_and_copied_in_on_a_gpu() {
+    for kind in [list(TypeKind::Int), optional(TypeKind::Int)] {
+        assert_eq!(
+            handovers(&kind),
+            (OutHandover::ByAddress, OutHandover::CopiedIn),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn an_uncounted_word_is_copied_in_on_the_host_and_on_a_gpu() {
+    for kind in [TypeKind::Int, TypeKind::F32, TypeKind::U8] {
+        assert_eq!(
+            handovers(&kind),
+            (OutHandover::CopiedIn, OutHandover::CopiedIn),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn the_host_handover_is_the_representation_layout() {
+    let definitions = HashMap::new();
+    for kind in [TypeKind::Int, list(TypeKind::Int), optional(TypeKind::Int)] {
+        let representation = Representation::of(&kind, LayoutScope::program(&definitions));
+        let by_address = out_handover(&representation, false) == OutHandover::ByAddress;
+        assert_eq!(
+            by_address,
+            representation.is_passed_out_by_address(),
+            "{kind:?}"
+        );
+    }
 }

@@ -15,14 +15,22 @@
 //! itself is left as it is, for the callee to write. [`TakenArguments`]
 //! keeps that order for every call that takes a place.
 //!
-//! How the slot is handed over is the representation's to say
-//! ([`Representation::is_passed_out_by_address`]): a counted word, an
-//! optional and a value held as its bytes are handed as the place, which a
-//! backend passes by the slot's address, so the callee writes in place and
-//! every exit of the callee leaves its value there. A word nothing counts may
-//! sit in a slot narrower than the word a callee reads, so it is copied into
-//! a temp of its own, the temp is handed over, and the temp is copied back
-//! into the slot as the first thing after the call ([`Restore`]).
+//! How the slot is handed over is [`out_handover`]'s to say, from the
+//! representation and the body: on the host a counted word, an optional and
+//! a value held as its bytes are handed as the place, which a backend passes
+//! by the slot's address, so the callee writes in place and every exit of the
+//! callee leaves its value there. A word nothing counts may sit in a slot
+//! narrower than the word a callee reads, so it is copied into a temp of its
+//! own, the temp is handed over, and the temp is copied back into the slot as
+//! the first thing after the call ([`Restore`]).
+//!
+//! Device code hands every `out` argument over copied in that way, a whole
+//! binding included: a device pointer parameter reaches only a whole function
+//! variable, never a buffer's storage or a sub-object, and a binding that is
+//! itself an `out` parameter is a pointer already. Device code holds no
+//! counts and no copy-on-write block, so nothing above the slot is made the
+//! caller's own; only the indexes the path is reached through are held in
+//! temps of their own.
 //!
 //! A slot inside a class instance that is no resource is copied in and out
 //! the same way, whatever its representation
@@ -41,7 +49,7 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::place::PlaceElem;
-use crate::mir::representation::Representation;
+use crate::mir::representation::{out_handover, OutHandover, Representation};
 use crate::mir::type_facts::unsharing::is_shared_on_assignment;
 use crate::mir::{Local, Operand, Place, Rvalue, Statement, StatementKind};
 
@@ -65,18 +73,23 @@ pub(crate) struct TakenArguments {
 impl TakenArguments {
     /// Lowers `value`, bound to the parameter at `position`, up to the call
     /// when that parameter is `out` (`is_out`) and `value` is a field or an
-    /// element. False when it is anything else, for the caller to lower as
-    /// any argument: a whole binding is handed over as its local.
+    /// element, or in device code a whole binding too. False when it is
+    /// anything else, for the caller to lower as any argument: a host body
+    /// hands a whole binding over as its local.
     pub(crate) fn take(
         &mut self,
         ctx: &mut LoweringContext,
         (position, is_out): (usize, bool),
         value: &Expression,
     ) -> Result<bool, LoweringError> {
+        // Device code copies every `out` argument in, a whole binding
+        // included, so a call never hands a pointer to a binding that is
+        // itself a pointer, an `out` parameter of the body.
         let is_path = matches!(
             value.node,
             ExpressionKind::Member(..) | ExpressionKind::Index(..)
-        );
+        ) || (ctx.body.is_gpu()
+            && matches!(value.node, ExpressionKind::Identifier(..)));
         if !is_out || !is_path {
             return Ok(false);
         }
@@ -249,8 +262,14 @@ impl PendingOut {
             (path.enclosing_types()).any(|ty| is_shared_on_assignment(&ctx.body, ty, resources));
         let (place, ty) = path.make_own_enclosing(ctx, span)?;
         let representation = Representation::of(&ty.kind, ctx.body.layout_scope());
-        if !is_shared && representation.is_passed_out_by_address() {
-            return Ok((Operand::Copy(place), None));
+        let handover = if is_shared {
+            OutHandover::CopiedIn
+        } else {
+            out_handover(&representation, ctx.body.is_gpu())
+        };
+        match handover {
+            OutHandover::ByAddress => return Ok((Operand::Copy(place), None)),
+            OutHandover::CopiedIn => {}
         }
         let is_counted_field = matches!(place.projection.last(), Some(PlaceElem::Field(_)))
             && ctx.is_counted(&ty.kind);

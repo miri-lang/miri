@@ -14,6 +14,7 @@
 
 mod abi_translation;
 mod closure_captures;
+mod device_out_places;
 mod drop_flags;
 mod in_bounds;
 mod lent_arguments;

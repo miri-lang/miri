@@ -1043,12 +1043,23 @@ pub(super) fn resolve_execution_model(
 /// Assign WGSL storage classes to the parameters of an explicit `gpu fn`: a
 /// buffer-shaped parameter becomes a `GpuGlobal` `var<storage>` binding, and a
 /// scalar with a GPU wire lane a `UniformBuffer` field of the kernel's scalar
-/// inputs, which the launch fills from the call's scalar arguments. A no-op
-/// for non-GPU functions; `forall_gpu` assigns its own kernels' classes.
+/// inputs, which the launch fills from the call's scalar arguments. An `out`
+/// buffer and a buffer of atomics bind read-write; a scalar binds no storage.
+/// A no-op for non-GPU functions; `forall_gpu` assigns its own kernels'
+/// classes.
 fn assign_gpu_param_storage_classes(ctx: &mut LoweringContext, param_count: usize) {
     if ctx.body.execution_model != ExecutionModel::GpuKernel {
         return;
     }
+    let signature = &ctx.body.signature;
+    let read_write = (1..=param_count)
+        .map(|param_idx| {
+            let kind = &ctx.body.local_decls[param_idx].ty.kind;
+            let is_out = signature.out_params.get(param_idx - 1) == Some(&true);
+            is_gpu_storage_param(kind) && (is_out || holds_atomic_elements(kind))
+        })
+        .collect();
+    ctx.body.signature.storage_read_write = read_write;
     for param_idx in 1..=param_count {
         let kind = &ctx.body.local_decls[param_idx].ty.kind;
         if is_gpu_storage_param(kind) {
@@ -1057,6 +1068,14 @@ fn assign_gpu_param_storage_classes(ctx: &mut LoweringContext, param_count: usiz
             ctx.body.local_decls[param_idx].storage_class = StorageClass::UniformBuffer;
         }
     }
+}
+
+/// Whether a buffer of `kind` holds atomic elements, which WGSL keeps only in
+/// a read-write binding whatever the kernel does with them.
+fn holds_atomic_elements(kind: &TypeKind) -> bool {
+    (kind.sequence_element_kind())
+        .and_then(crate::ast::types::atomic_inner_kind)
+        .is_some()
 }
 
 /// True for parameter types the GPU dispatcher marshals as a storage buffer

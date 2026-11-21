@@ -4,15 +4,26 @@
 //! Tests for kernel-callable user functions.
 //!
 //! A plain Miri `fn` may be called inside a `gpu fn`/`forall` kernel body
-//! if its parameters and return type are GPU-compatible scalars (no managed
-//! types, no arrays, no out parameters, no recursion).
+//! if its parameters, `out` ones included, and its return type, if it has
+//! one, are GPU-compatible scalars (no managed types, no arrays, no
+//! recursion).
 //!
 //! The WGSL backend emits callable functions as module-level helpers (not
-//! entry points), allowing the kernel entry to invoke them.
+//! entry points), allowing the kernel entry to invoke them. An `out`
+//! parameter is a `ptr<function, T>` the helper reads and writes as `(*_k)`;
+//! the call copies the place it names (a whole local, a buffer element, a
+//! vector component) into a function variable, hands over `&_t` and stores
+//! the temp back after the call, so no pointer ever reaches storage or a
+//! sub-object. A helper returning nothing declares no result and is called
+//! as a statement. The same helper gives the same values on the host.
 
 use super::device::assert_gpu_runs_with_output;
-use super::helpers::{assert_gpu_wgsl_valid, assert_gpu_wgsl_valid_in};
+use super::helpers::{
+    assert_gpu_wgsl_valid, assert_gpu_wgsl_valid_in, compile_kernel_to_hlsl,
+    compile_kernel_to_spirv, compile_to_wgsl,
+};
 use super::utils::*;
+use crate::utils::miri_run;
 
 /// Simplest case: kernel calls a trivial user function.
 /// The function doubles its input.
@@ -349,27 +360,6 @@ fn main()
     );
 }
 
-/// A void-returning function has no WGSL scalar representation, so it cannot be
-/// called from a kernel — rejected at type-check rather than crashing codegen.
-#[test]
-fn kernel_cannot_call_void_returning_function() {
-    assert_compiler_error(
-        "
-use system.gpu
-
-fn noop(x float)
-    let _ = x + 1.0
-
-fn main()
-    gpu var arr = [1.0]
-    gpu forall i in 0..1
-        arr[i] = arr[i] + 1.0
-        noop(arr[i])
-",
-        "not GPU-compatible",
-    );
-}
-
 /// A generic helper is instantiated at the type each kernel call passes, and
 /// that instantiation is declared in the kernel's module like any helper.
 #[test]
@@ -578,4 +568,454 @@ fn main()
 ",
         "Function 'keep' parameter 'h' has type 'Handle' which is not GPU-compatible",
     );
+}
+
+/// The helpers the `out` tests call: one `bump` for every target.
+const OUT_HELPERS: &str = "
+use system.gpu
+use system.gpu.vector
+use system.collections.array
+
+fn bump(x out int)
+    x = x + 1
+
+fn bumpf(x out f32)
+    x = x + 1.0
+";
+
+/// A kernel module calling `bump` on a whole local: the helper takes a
+/// pointer to a function variable and the call hands it the temp's address.
+const BUMP_A_LOCAL: &str = "
+fn main()
+    gpu var dst = [0, 1, 2, 3]
+    gpu forall i in 0..4
+        var k = dst[i]
+        bump(k)
+        dst[i] = k
+    let host = dst
+    println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+
+/// An `out` parameter is a pointer to a function variable, read and written
+/// through `(*p)`, and the call hands over a temp's address: a void helper
+/// declares no result.
+#[test]
+fn kernel_out_helper_takes_a_function_pointer() {
+    let wgsl = compile_to_wgsl(&format!("{OUT_HELPERS}{BUMP_A_LOCAL}"));
+    assert!(wgsl.contains(": ptr<function, i32>) {"), "{wgsl}");
+    assert!(wgsl.contains("(*_1)"), "{wgsl}");
+    assert!(wgsl.contains("(&_"), "{wgsl}");
+    assert!(!wgsl.contains("ptr<storage"), "{wgsl}");
+}
+
+#[test]
+fn kernel_out_helper_emits_valid_wgsl() {
+    assert_gpu_wgsl_valid(&format!("{OUT_HELPERS}{BUMP_A_LOCAL}"));
+}
+
+/// The pointer parameter cross-compiles to the Vulkan and D3D shader forms.
+#[test]
+fn kernel_out_helper_cross_compiles_to_spirv_and_hlsl() {
+    let source = format!("{OUT_HELPERS}{BUMP_A_LOCAL}");
+    assert!(!compile_kernel_to_spirv(&source).is_empty());
+    assert!(!compile_kernel_to_hlsl(&source).is_empty());
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_on_a_whole_local() {
+    assert_gpu_runs_with_output(&format!("{OUT_HELPERS}{BUMP_A_LOCAL}"), "1 2 3 4");
+}
+
+/// A buffer element is copied into a temp, the temp handed over and stored
+/// back into the element.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_on_a_buffer_element() {
+    assert_gpu_runs_with_output(
+        &format!(
+            "{OUT_HELPERS}
+fn main()
+    gpu var dst = [10, 20, 30, 40]
+    gpu forall i in 0..4
+        bump(dst[i])
+    let host = dst
+    println(f'{{host[0]}} {{host[1]}} {{host[2]}} {{host[3]}}')
+"
+        ),
+        "11 21 31 41",
+    );
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_on_a_component_of_a_local_vector() {
+    assert_gpu_runs_with_output(
+        &format!(
+            "{OUT_HELPERS}
+fn main()
+    gpu var dst [f32; 4] = [1.0, 2.0, 3.0, 4.0]
+    gpu forall i in 0..4
+        var v = Vec2<f32>(dst[i], 0.0)
+        bumpf(v.x)
+        dst[i] = v.x + v.y
+    let host = dst
+    println(f'{{host[0]}} {{host[1]}} {{host[2]}} {{host[3]}}')
+"
+        ),
+        "2.0 3.0 4.0 5.0",
+    );
+}
+
+/// Only the named component changes; its sibling keeps its value.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_on_a_component_of_a_buffer_vector() {
+    assert_gpu_runs_with_output(
+        &format!(
+            "{OUT_HELPERS}
+fn main()
+    gpu var pts = [Vec2<f32>(1.0, 2.0), Vec2<f32>(3.0, 4.0)]
+    gpu forall i in 0..2
+        bumpf(pts[i].x)
+    let host = pts
+    println(f'{{host[0].x}} {{host[0].y}} {{host[1].x}} {{host[1].y}}')
+"
+        ),
+        "2.0 2.0 4.0 4.0",
+    );
+}
+
+/// A helper returning nothing hands its result back only through `out`.
+const VOID_HELPER: &str = "
+use system.gpu
+use system.collections.array
+
+fn twice(x int, r out int)
+    r = x * 2
+
+fn main()
+    gpu let src = [1, 2, 3, 4]
+    gpu var dst = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        twice(src[i], dst[i])
+    let host = dst
+    println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+
+#[test]
+fn kernel_void_helper_emits_valid_wgsl() {
+    assert_gpu_wgsl_valid(VOID_HELPER);
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_void_helper_writes_through_out() {
+    assert_gpu_runs_with_output(VOID_HELPER, "2 4 6 8");
+}
+
+/// A helper leaving early still has its writes stored back: the lanes that
+/// return keep the first increment, the others take both.
+const EARLY_RETURN_HELPER: &str = "
+use system.gpu
+use system.collections.array
+
+fn grow(x out int)
+    x = x + 1
+    if x > 25
+        return
+    x = x + 100
+
+fn main()
+    gpu var dst = [10, 20, 30, 40]
+    gpu forall i in 0..4
+        grow(dst[i])
+    let host = dst
+    println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+
+#[test]
+fn kernel_out_helper_with_an_early_return_emits_valid_wgsl() {
+    assert_gpu_wgsl_valid(EARLY_RETURN_HELPER);
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_helper_with_an_early_return_stores_back() {
+    assert_gpu_runs_with_output(EARLY_RETURN_HELPER, "111 121 31 41");
+}
+
+/// One `bump` runs on the host and on the device, and gives each the same
+/// elements.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_helper_matches_the_host() {
+    assert_gpu_runs_with_output(
+        &format!(
+            "{OUT_HELPERS}
+fn main()
+    gpu var dst = [10, 20, 30, 40]
+    gpu forall i in 0..4
+        bump(dst[i])
+    var cpu = [10, 20, 30, 40]
+    for j in 0..4
+        bump(cpu[j])
+    let host = dst
+    println(f'{{host[0]}} {{host[1]}} {{host[2]}} {{host[3]}}')
+    println(f'{{cpu[0]}} {{cpu[1]}} {{cpu[2]}} {{cpu[3]}}')
+"
+        ),
+        "11 21 31 41\n11 21 31 41",
+    );
+}
+
+/// A `bool` and a `u32` local each pass through `out` at their own width:
+/// the flag flips on every lane and the counter steps from 7 to 8.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_on_a_bool_and_a_u32_local() {
+    assert_gpu_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn flip(b out bool)
+    b = not b
+
+fn step(x out u32)
+    x = x + 1
+
+fn main()
+    gpu var dst = [0, 1, 2, 3]
+    gpu forall i in 0..4
+        var b = i > 1
+        flip(b)
+        var u u32 = 7
+        step(u)
+        if b
+            dst[i] = 100
+        else
+            dst[i] = 200
+        if u == 8
+            dst[i] = dst[i] + 1
+    let host = dst
+    println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+",
+        "101 101 201 201",
+    );
+}
+
+/// One call takes two elements of two buffers, and stores each back.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_on_two_elements_in_one_call() {
+    assert_gpu_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn two(a out int, b out int)
+    a = a + 1
+    b = b + 10
+
+fn main()
+    gpu var dst = [0, 1, 2, 3]
+    gpu var aux = [100, 200, 300, 400]
+    gpu forall i in 0..4
+        two(dst[i], aux[i])
+    let host = dst
+    let other = aux
+    println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+    println(f'{other[0]} {other[1]} {other[2]} {other[3]}')
+",
+        "1 2 3 4\n110 210 310 410",
+    );
+}
+
+/// A helper hands its own `out` parameter on to another helper, twice when
+/// the first step leaves it above 2.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_parameter_handed_on_by_a_nested_helper() {
+    assert_gpu_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn bump(x out int)
+    x = x + 1
+
+fn outer(x out int)
+    bump(x)
+    if x > 2
+        bump(x)
+
+fn main()
+    gpu var dst = [0, 1, 2, 3]
+    gpu forall i in 0..4
+        outer(dst[i])
+    let host = dst
+    println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+",
+        "1 2 4 5",
+    );
+}
+
+/// An `out` call under an `if` and in a `while` of the kernel, on the lane's
+/// own element: lane `i` takes one step past 1 and `i` steps in the loop.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_call_under_if_and_while() {
+    assert_gpu_runs_with_output(
+        &format!(
+            "{OUT_HELPERS}
+fn main()
+    gpu var dst = [0, 1, 2, 3]
+    gpu forall i in 0..4
+        if i > 1
+            bump(dst[i])
+        var n = 0
+        while n < i
+            bump(dst[i])
+            n = n + 1
+    let host = dst
+    println(f'{{host[0]}} {{host[1]}} {{host[2]}} {{host[3]}}')
+"
+        ),
+        "0 2 5 7",
+    );
+}
+
+/// Sub-word buffer elements pass through `out` at their declared widths,
+/// and an element no lane hands over keeps its value.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_on_u8_and_i16_elements() {
+    assert_gpu_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn bump8(x out u8)
+    x = x + 1
+
+fn bump16(x out i16)
+    x = x + 1
+
+fn main()
+    gpu var a [u8; 4] = [1, 2, 3, 255]
+    gpu var b [i16; 4] = [1, 2, 3, 4]
+    gpu forall i in 0..4
+        if i < 3
+            bump8(a[i])
+        bump16(b[i])
+    let h = a
+    let g = b
+    println(f'{h[0]} {h[1]} {h[2]} {h[3]}')
+    println(f'{g[0]} {g[1]} {g[2]} {g[3]}')
+",
+        "2 3 4 255\n2 3 4 5",
+    );
+}
+
+/// A helper overflowing the `u8` it was handed through `out` stops the
+/// program with the host's overflow trap.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_helper_overflow_stops_the_program() {
+    assert_runtime_error(
+        "
+use system.gpu
+use system.collections.array
+
+fn bump8(x out u8)
+    x = x + 1
+
+fn main()
+    gpu var a [u8; 4] = [1, 2, 3, 255]
+    gpu forall i in 0..4
+        bump8(a[i])
+    let h = a
+    println(f'{h[0]} {h[3]}')
+",
+        "MER_RT_003",
+    );
+}
+
+/// The same value-sensitive helper on the device and on the host, each
+/// handed one element as both its lent and its `out` argument: the sibling
+/// operand reads the element's value before the call on both, so the two
+/// lines agree, and both differ from the input.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn kernel_out_helper_reading_its_lent_argument_matches_the_host() {
+    let result = miri_run(
+        "
+use system.gpu
+use system.collections.array
+
+fn add(v int, x out int)
+    x = x + v
+
+fn main()
+    gpu var dst = [1, 2, 3, 4]
+    gpu forall i in 0..4
+        add(dst[i], dst[i])
+    let h = dst
+    println(f'{h[0]} {h[1]} {h[2]} {h[3]}')
+    var c = [1, 2, 3, 4]
+    for i in 0..4
+        add(c[i], c[i])
+    println(f'{c[0]} {c[1]} {c[2]} {c[3]}')
+",
+    );
+    assert!(result.success, "{}", result.output());
+    let lines: Vec<&str> = result.stdout.lines().collect();
+    let [device, host] = lines.as_slice() else {
+        panic!("a device line and a host line:\n{}", result.output());
+    };
+    assert_eq!(device, host, "the device agrees with the host");
+    assert_ne!(*device, "1 2 3 4", "the helper wrote the element");
 }

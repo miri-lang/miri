@@ -68,11 +68,27 @@ mod out_arguments;
 use out_arguments::CallPlaces;
 
 impl TypeChecker {
+    /// Infers the return type of a function or constructor call, then marks
+    /// the call checked in the record of `out` arguments: every argument it
+    /// binds to an `out` parameter is recorded by then.
+    pub(crate) fn infer_call(
+        &mut self,
+        func: &Expression,
+        args: &[Expression],
+        span: Span,
+        context: &mut Context,
+        call_id: usize,
+    ) -> Type {
+        let result = self.infer_call_and_arguments(func, args, span, context, call_id);
+        self.out_arguments.mark_checked(call_id);
+        result
+    }
+
     /// Infers the return type of a function or constructor call.
     ///
     /// Handles positional and named arguments, generic type inference,
     /// struct/class constructors via `Meta` types, and argument validation.
-    pub(crate) fn infer_call(
+    fn infer_call_and_arguments(
         &mut self,
         func: &Expression,
         args: &[Expression],
@@ -1316,8 +1332,8 @@ impl TypeChecker {
 
     /// Validates that a callee function is GPU-compatible.
     /// A GPU-callable function must have:
-    /// - Only scalar (GPU-compatible) parameter types and return type (not arrays)
-    /// - No `out` parameters
+    /// - Only scalar (GPU-compatible) parameter types, `out` ones included,
+    ///   and a scalar return type or none (not arrays)
     /// - A body that only calls other GPU-compatible functions or GPU/math intrinsics
     /// - No direct or indirect recursion
     ///
@@ -1365,63 +1381,9 @@ impl TypeChecker {
                     .unwrap_or_default()
             });
 
-        // Validate return type is a GPU-compatible scalar. A function with no
-        // declared return type returns `void`, which has no WGSL representation.
-        let Some(ret_type_expr) = &func_data.return_type else {
-            self.report_error(
-                DiagnosticCode::TarGpuIncompatibleSignature,
-                format!(
-                    "Function '{}' returns 'void' which is not GPU-compatible",
-                    func_name
-                ),
-                func.span,
-            );
+        let callee = (func_name, func.span);
+        if !self.is_gpu_callee_signature(callee, func_data, instantiation.as_ref(), context) {
             return;
-        };
-        {
-            let ret_type = self.gpu_callee_type(ret_type_expr, instantiation.as_ref(), context);
-            if !self.is_gpu_scalar(&ret_type.kind) {
-                self.report_error(
-                    DiagnosticCode::TarGpuIncompatibleSignature,
-                    format!(
-                        "Function '{}' returns '{}' which is not GPU-compatible",
-                        func_name, ret_type
-                    ),
-                    func.span,
-                );
-                return;
-            }
-        }
-
-        // Validate parameter types and out-parameter constraints
-        for param in &func_data.params {
-            let param_type = self.gpu_callee_type(&param.typ, instantiation.as_ref(), context);
-
-            // Reject out parameters in GPU callees
-            if param.is_out {
-                self.report_error(
-                    DiagnosticCode::TarGpuIncompatibleSignature,
-                    format!(
-                        "Function '{}' has 'out' parameter '{}' which is not GPU-compatible",
-                        func_name, param.name
-                    ),
-                    func.span,
-                );
-                return;
-            }
-
-            // Reject non-scalar parameter types (arrays, lists, etc.)
-            if !self.is_gpu_scalar(&param_type.kind) {
-                self.report_error(
-                    DiagnosticCode::TarGpuIncompatibleSignature,
-                    format!(
-                        "Function '{}' parameter '{}' has type '{}' which is not GPU-compatible",
-                        func_name, param.name, param_type
-                    ),
-                    func.span,
-                );
-                return;
-            }
         }
 
         // Analyze the function body for GPU compatibility (host-only calls, recursion).
@@ -1434,6 +1396,75 @@ impl TypeChecker {
         if let Some(body) = body_opt {
             self.validate_gpu_function_body(&declared, &body, func.span);
         }
+    }
+
+    /// Whether the signature of `func_data`, the callee `func_name` a call at
+    /// `span` pulls onto the device, is one device code can call, reporting
+    /// the first part that is not: every parameter, `out` ones included,
+    /// takes a GPU scalar, and the callee returns one or nothing.
+    fn is_gpu_callee_signature(
+        &mut self,
+        (func_name, span): (&str, Span),
+        func_data: &crate::ast::types::FunctionTypeData,
+        instantiation: Option<&HashMap<String, Type>>,
+        context: &Context,
+    ) -> bool {
+        // Validate return type is a GPU-compatible scalar, or none: a helper
+        // that returns nothing is called for what it writes through its
+        // `out` parameters.
+        if let Some(ret_type_expr) = &func_data.return_type {
+            let ret_type = self.gpu_callee_type(ret_type_expr, instantiation, context);
+            let is_void = matches!(ret_type.kind, TypeKind::Void);
+            if !is_void && !self.is_gpu_scalar(&ret_type.kind) {
+                self.report_error(
+                    DiagnosticCode::TarGpuIncompatibleSignature,
+                    format!(
+                        "Function '{}' returns '{}' which is not GPU-compatible",
+                        func_name, ret_type
+                    ),
+                    span,
+                );
+                return false;
+            }
+        }
+
+        // Validate parameter types: an `out` parameter is copied in and
+        // stored back at the call, so it takes a scalar like any other.
+        for param in &func_data.params {
+            let param_type = self.gpu_callee_type(&param.typ, instantiation, context);
+
+            // A launch context is the device's to provide: code reads it,
+            // and no call writes one.
+            if param.is_out && is_gpu_context_type(&param_type.kind) {
+                self.report_error_with_help(
+                    DiagnosticCode::TypFunctionSignature,
+                    format!(
+                        "'out' parameter '{}' of '{}' has type '{}', a launch context device code only reads: no call writes one",
+                        param.name, func_name, param_type
+                    ),
+                    span,
+                    format!(
+                        "drop 'out' from '{}' and return what the function computes, or write it through an 'out' parameter of a scalar type",
+                        param.name
+                    ),
+                );
+                return false;
+            }
+
+            // Reject non-scalar parameter types (arrays, lists, etc.)
+            if !self.is_gpu_scalar(&param_type.kind) {
+                self.report_error(
+                    DiagnosticCode::TarGpuIncompatibleSignature,
+                    format!(
+                        "Function '{}' parameter '{}' has type '{}' which is not GPU-compatible",
+                        func_name, param.name, param_type
+                    ),
+                    span,
+                );
+                return false;
+            }
+        }
+        true
     }
 
     /// The type a GPU callee's signature writes as `written`: resolved in the
@@ -1756,19 +1787,15 @@ impl TypeChecker {
             | TypeKind::Boolean
             | TypeKind::Error => true,
 
-            // A `void` value has no WGSL scalar representation, so a
-            // void-returning function cannot be emitted as a GPU helper.
+            // A `void` value has no WGSL scalar representation: no parameter
+            // holds one. A helper returning nothing is accepted where its
+            // return type is read, not here.
             TypeKind::Void => false,
 
             // Generic parameters and GPU builtins are OK
             TypeKind::Generic(_, _) => true,
-            TypeKind::Custom(name, _) => {
-                // Only allow GPU builtin types, not Array/List/etc.
-                name == crate::ast::types::DIM3_TYPE_NAME
-                    || name == crate::ast::types::GPU_CONTEXT_TYPE_NAME
-                    || name == crate::ast::types::KERNEL_TYPE_NAME
-                    || name == crate::ast::types::FRAME_INPUT_TYPE_NAME
-            }
+            // Only GPU builtin types, not Array/List/etc.
+            TypeKind::Custom(..) => is_gpu_context_type(kind),
 
             // Arrays, collections, strings, etc. are NOT scalar
             TypeKind::Array(_, _)
@@ -2170,6 +2197,7 @@ impl TypeChecker {
         let mut named_args = site.named_args;
         let parameters_site = OutSite {
             span: site.span,
+            call_id: site.call_id,
             taker: site.out_taker,
             receiver: site.receiver,
         };
@@ -2617,6 +2645,7 @@ impl TypeChecker {
     ) {
         let span = site.span;
         if let Some(arg) = arg_expr {
+            self.out_arguments.record(site.call_id, arg.id);
             let out_site = OutSite {
                 span: arg.span,
                 ..site
@@ -3946,6 +3975,16 @@ struct CallSite<'a, 'e> {
     receiver: Option<&'e Expression>,
 }
 
+/// Whether `kind` is one of the compiler's GPU launch-context types (`Dim3`,
+/// `GpuContext`, `Kernel`, `FrameInput`), which device code reads and the
+/// device provides.
+fn is_gpu_context_type(kind: &TypeKind) -> bool {
+    use crate::ast::types::{
+        DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME,
+    };
+    matches!(kind, TypeKind::Custom(name, _) if [DIM3_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME, FRAME_INPUT_TYPE_NAME].contains(&name.as_str()))
+}
+
 /// The value the method `func` names is called on: `h` in `h.update(…)`;
 /// `None` for a callee that is no member.
 fn called_receiver(func: &Expression) -> Option<&Expression> {
@@ -3961,6 +4000,8 @@ fn called_receiver(func: &Expression) -> Option<&Expression> {
 #[derive(Clone, Copy)]
 struct OutSite<'e> {
     span: Span,
+    /// The id of the call expression the arguments are written in.
+    call_id: usize,
     taker: OutTaker,
     receiver: Option<&'e Expression>,
 }

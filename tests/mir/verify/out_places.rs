@@ -196,14 +196,14 @@ fn a_place_taken_out_in_a_device_body_is_flagged() {
 }
 
 #[test]
-fn a_whole_local_taken_out_in_a_device_body_is_clean() {
+fn a_whole_local_taken_out_in_a_device_body_without_its_copy_is_flagged() {
     let body = calling_on(
         ExecutionModel::GpuDevice,
         function(),
         vec![out(whole(INDEX))],
         whole(RESULT),
     );
-    assert_clean(&body);
+    assert_one(&body, INDEX, "copied from");
 }
 
 #[test]

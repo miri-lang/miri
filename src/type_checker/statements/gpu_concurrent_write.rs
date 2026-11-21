@@ -25,8 +25,14 @@
 //! writable gpu buffers is discovered: the `forall` pass takes the captured
 //! bindings; the `gpu fn` pass takes the buffer-typed parameters.
 //!
-//! Writes are flagged in subscript form (`buf[i] = e`) and in method form
-//! (`buf.set(i, e)`). The rule biases toward "noisy but safe" over "permissive
+//! Writes are flagged in subscript form (`buf[i] = e`), in method form
+//! (`buf.set(i, e)`) and as a place handed to an `out` parameter
+//! (`bump(buf[i])`), which the call writes whatever its callee does; which
+//! arguments bind an `out` parameter is read off the record the call's own
+//! check filled. A call may sit in any expression a statement holds — a
+//! condition, a range, an initializer, a returned value — and each is
+//! checked. A local handed to an `out` parameter is no longer one per
+//! thread: the callee may write any value to it. The rule biases toward "noisy but safe" over "permissive
 //! but unsound": some provably-disjoint indices the checker cannot see are also
 //! rejected. The escape hatch is an atomic element (`Array<Atomic<T>, N>`),
 //! whose writes are race-free by construction and exempt from this pass.
@@ -37,6 +43,7 @@ use std::collections::HashSet;
 use crate::ast::captures::collect_free_identifiers_excluding;
 use crate::ast::common::Parameter;
 use crate::ast::expression::{Expression, ExpressionKind, LeftHandSideExpression};
+use crate::ast::gpu_writes::{visit_buffer_writes, visit_expression_buffer_writes, BufferWrite};
 use crate::ast::operator::BinaryOp;
 use crate::ast::statement::{Statement, StatementKind, VariableDeclaration};
 use crate::ast::types::{
@@ -149,6 +156,9 @@ impl TypeChecker {
 
     /// Inner walk with buffer-alias tracking. Aliases are locals initialized to
     /// a buffer or another alias, so writes through them must be checked.
+    /// Every expression a statement holds is checked — a condition, a range,
+    /// an initializer, a returned value — since a call in any of them may
+    /// hand a buffer element to an `out` parameter.
     fn walk_writes_with_aliases(
         &mut self,
         stmt: &Statement,
@@ -163,17 +173,18 @@ impl TypeChecker {
                 }
             }
             StatementKind::Variable(decls, _) => {
-                self.record_index_derivation_and_aliases(
-                    decls,
-                    buffer_derived,
-                    buffers,
-                    buffer_aliases,
-                );
+                self.walk_declarations(decls, (buffers, buffer_derived, buffer_aliases));
             }
             StatementKind::Expression(expr) => {
                 self.check_write_expression(expr, buffers, buffer_derived, buffer_aliases);
             }
-            StatementKind::If(_, then_branch, else_branch, _) => {
+            StatementKind::Return(value) => {
+                if let Some(value) = value {
+                    self.check_held_expression(value, buffers, buffer_derived, buffer_aliases);
+                }
+            }
+            StatementKind::If(cond, then_branch, else_branch, _) => {
+                self.check_held_expression(cond, buffers, buffer_derived, buffer_aliases);
                 self.walk_writes_with_aliases(then_branch, buffers, buffer_derived, buffer_aliases);
                 if let Some(else_branch) = else_branch {
                     self.walk_writes_with_aliases(
@@ -184,38 +195,71 @@ impl TypeChecker {
                     );
                 }
             }
-            StatementKind::While(_, loop_body, _) => {
+            StatementKind::While(cond, loop_body, _) => {
+                self.taint_out_written_locals_in(loop_body, buffer_derived);
+                self.check_held_expression(cond, buffers, buffer_derived, buffer_aliases);
                 self.walk_writes_with_aliases(loop_body, buffers, buffer_derived, buffer_aliases);
             }
-            StatementKind::For(decls, _, loop_body) => {
-                self.walk_nested_loop_with_aliases(
-                    decls,
-                    loop_body,
-                    buffers,
-                    buffer_derived,
-                    buffer_aliases,
-                );
+            StatementKind::For(decls, iterable, loop_body)
+            | StatementKind::GpuFrame(decls, iterable, loop_body)
+            | StatementKind::Forall {
+                vars: decls,
+                iterable,
+                body: loop_body,
+                ..
+            } => {
+                self.check_held_expression(iterable, buffers, buffer_derived, buffer_aliases);
+                let walk = (buffers, &mut *buffer_derived, &mut *buffer_aliases);
+                self.walk_nested_loop_with_aliases(decls, loop_body, walk);
             }
-            _ => {}
+            StatementKind::GpuFrameBlock(block) => {
+                self.walk_writes_with_aliases(block, buffers, buffer_derived, buffer_aliases);
+            }
+            StatementKind::Empty
+            | StatementKind::Break
+            | StatementKind::Continue
+            | StatementKind::Use(_, _)
+            | StatementKind::Type(_, _)
+            | StatementKind::FunctionDeclaration(_)
+            | StatementKind::Enum(_, _, _, _, _, _)
+            | StatementKind::Struct(_, _, _, _, _, _)
+            | StatementKind::Class(_)
+            | StatementKind::Trait(..)
+            | StatementKind::RuntimeFunctionDeclaration(..)
+            | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
         }
+    }
+
+    /// Check each initializer of `decls`, then record which declared locals
+    /// are not one per thread and which alias a buffer.
+    fn walk_declarations(
+        &mut self,
+        decls: &[VariableDeclaration],
+        (buffers, buffer_derived, buffer_aliases): WalkState<'_>,
+    ) {
+        for init in decls.iter().filter_map(|d| d.initializer.as_deref()) {
+            self.check_held_expression(init, buffers, buffer_derived, buffer_aliases);
+        }
+        self.record_index_derivation_and_aliases(decls, buffer_derived, buffers, buffer_aliases);
     }
 
     /// Walk a nested CPU loop. Its induction variables are the same across every
     /// `forall`/kernel thread, so writes indexed by them race; taint them as
     /// non-injective for the loop body, then restore the outer scope's taint.
+    /// A local the body hands to an `out` parameter is tainted before the
+    /// body is walked: a later iteration indexes by the value the call wrote.
     fn walk_nested_loop_with_aliases(
         &mut self,
         decls: &[VariableDeclaration],
         loop_body: &Statement,
-        buffers: &HashSet<String>,
-        buffer_derived: &mut HashSet<String>,
-        buffer_aliases: &mut HashSet<String>,
+        (buffers, buffer_derived, buffer_aliases): WalkState<'_>,
     ) {
         let tainted: Vec<String> = decls
             .iter()
             .filter(|d| buffer_derived.insert(d.name.clone()))
             .map(|d| d.name.clone())
             .collect();
+        self.taint_out_written_locals_in(loop_body, buffer_derived);
         self.walk_writes_with_aliases(loop_body, buffers, buffer_derived, buffer_aliases);
         for name in tainted {
             buffer_derived.remove(&name);
@@ -250,7 +294,8 @@ impl TypeChecker {
     }
 
     /// Flag a non-injective buffer write — in subscript (`buf[i] = e`) or method
-    /// (`buf.set(i, e)`) form — and propagate index-derivation taint through a
+    /// (`buf.set(i, e)`) form, or through an `out` argument anywhere in the
+    /// expression — and propagate index-derivation taint through a
     /// plain identifier reassignment.
     fn check_write_expression(
         &mut self,
@@ -259,12 +304,68 @@ impl TypeChecker {
         buffer_derived: &mut HashSet<String>,
         buffer_aliases: &mut HashSet<String>,
     ) {
+        self.check_held_expression(expr, buffers, buffer_derived, buffer_aliases);
         if let ExpressionKind::Assignment(lhs, _, rhs) = &expr.node {
             self.check_subscript_write(lhs, buffers, buffer_derived, buffer_aliases, expr.span);
             self.propagate_reassignment_taint(lhs, rhs, buffer_derived, buffers, buffer_aliases);
             return;
         }
         self.check_method_set_write(expr, buffers, buffer_derived, buffer_aliases);
+    }
+
+    /// Check an expression a statement holds: each local it hands to an `out`
+    /// parameter is no longer one per thread — the callee may write any
+    /// value to it — and each buffer element it hands to one is a write.
+    fn check_held_expression(
+        &mut self,
+        expr: &Expression,
+        buffers: &HashSet<String>,
+        buffer_derived: &mut HashSet<String>,
+        buffer_aliases: &HashSet<String>,
+    ) {
+        let mut written = Vec::new();
+        visit_expression_buffer_writes(expr, &self.out_arguments, &mut |root, write| {
+            collect_out_root(root, write, &mut written)
+        });
+        buffer_derived.extend(written);
+        self.check_out_argument_writes(expr, buffers, buffer_derived, buffer_aliases);
+    }
+
+    /// Taint each local `stmt` hands to an `out` parameter anywhere in it.
+    fn taint_out_written_locals_in(&self, stmt: &Statement, buffer_derived: &mut HashSet<String>) {
+        let mut written = Vec::new();
+        visit_buffer_writes(stmt, &self.out_arguments, &mut |root, write| {
+            collect_out_root(root, write, &mut written)
+        });
+        buffer_derived.extend(written);
+    }
+
+    /// Flag each place in `expr` handed to an `out` parameter whose root is a
+    /// checkable buffer (or an alias of one) when the subscript taken on the
+    /// buffer is not provably unique per thread. A buffer handed out whole,
+    /// or through a field, is written by every thread, so it is flagged too.
+    fn check_out_argument_writes(
+        &mut self,
+        expr: &Expression,
+        buffers: &HashSet<String>,
+        buffer_derived: &HashSet<String>,
+        buffer_aliases: &HashSet<String>,
+    ) {
+        let mut shared: Vec<&str> = Vec::new();
+        visit_expression_buffer_writes(expr, &self.out_arguments, &mut |root, write| {
+            let index = match write {
+                BufferWrite::Out { index } => index,
+                BufferWrite::Store | BufferWrite::Atomic => return,
+            };
+            let is_checkable = buffers.contains(root) || buffer_aliases.contains(root);
+            let is_unique = index.is_some_and(|index| is_injective_index(index, buffer_derived));
+            if is_checkable && !is_unique {
+                shared.push(root);
+            }
+        });
+        for buffer in shared {
+            self.report_concurrent_write(buffer, expr.span);
+        }
     }
 
     /// Flag a subscript write `buf[index] = e` when `buf` is a checkable buffer
@@ -366,6 +467,23 @@ impl TypeChecker {
     }
 }
 
+/// The state a walk carries into a nested loop: the checkable buffers, the
+/// locals that are not one per thread and the aliases of a buffer.
+type WalkState<'w> = (
+    &'w HashSet<String>,
+    &'w mut HashSet<String>,
+    &'w mut HashSet<String>,
+);
+
+/// Collects `root`, the binding a place handed to an `out` parameter starts
+/// at, which the call writes with a value no thread index bounds.
+fn collect_out_root(root: &str, write: BufferWrite<'_>, written: &mut Vec<String>) {
+    match write {
+        BufferWrite::Out { .. } => written.push(root.to_string()),
+        BufferWrite::Store | BufferWrite::Atomic => {}
+    }
+}
+
 /// True if `elem` is an `Atomic<T>` element type.
 fn is_atomic_element(elem: &Type) -> bool {
     matches!(&elem.kind, TypeKind::Custom(name, _) if name == ATOMIC_TYPE_NAME)
@@ -382,6 +500,10 @@ fn is_named_method(method: &Expression, name: &str) -> bool {
 /// `kernel.warp.lane_id`, …), or an affine combination built from `+`, `-`, `*`.
 /// A buffer read, division, modulo, call, or any nested-loop-/buffer-derived
 /// local is not injective.
+// TODO: a literal, a local no buffer feeds and a uniform member are the same
+// for every thread, so an index built only from them (`dst[0]`, `dst[k]`,
+// `dst[i * 0]`) is not one-to-one, yet this accepts it; the judgement must
+// require an injective dependence on a thread-index coordinate.
 fn is_injective_index(expr: &Expression, buffer_derived: &HashSet<String>) -> bool {
     match &expr.node {
         ExpressionKind::Literal(_) => true,

@@ -8,11 +8,13 @@ use miri::codegen::wgsl::{WgslBackend, WgslOptions};
 use miri::error::syntax::Span;
 use miri::mir::backend::{BackendMetadata, GpuBodyMetadata};
 use miri::mir::body::LaunchUniform;
+use miri::mir::symbol::Symbol;
 use miri::mir::{
-    AggregateKind, BasicBlock, BasicBlockData, BinOp, Body, Constant, Dimension, ExecutionModel,
-    GpuIntrinsic, Local, LocalDecl, Operand, Place, PlaceElem, Rvalue, Statement, StatementKind,
-    StorageClass, Terminator, TerminatorKind, UnOp,
+    AggregateKind, ArgMode, BasicBlock, BasicBlockData, BinOp, Body, CallFlags, Constant,
+    Dimension, ExecutionModel, GpuIntrinsic, Local, LocalDecl, Operand, Place, PlaceElem, Rvalue,
+    Statement, StatementKind, StorageClass, Terminator, TerminatorKind, UnOp,
 };
+use miri::type_checker::ModuleId;
 
 fn dummy_span() -> Span {
     Span::new(0, 0)
@@ -53,6 +55,7 @@ fn build_copy_kernel() -> Body {
     body.local_decls.push(output);
 
     body.signature.out_params = vec![false, true];
+    body.signature.storage_read_write = vec![false, true];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([64, 1, 1]),
         grid_size: None,
@@ -243,7 +246,7 @@ fn math_intrinsic_maps_to_wgsl_sqrt() {
     buf.is_user_variable = true;
     body.local_decls.push(buf);
 
-    body.signature.out_params = vec![true];
+    body.signature.storage_read_write = vec![true];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
         grid_size: None,
@@ -327,7 +330,7 @@ fn block_dim_intrinsic_substitutes_workgroup_size_literal() {
     buf.is_user_variable = true;
     body.local_decls.push(buf);
 
-    body.signature.out_params = vec![true];
+    body.signature.storage_read_write = vec![true];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([128, 1, 1]),
         grid_size: None,
@@ -416,7 +419,7 @@ fn single_buffer_kernel() -> Body {
     buf.name = Some("buf".into());
     buf.is_user_variable = true;
     body.local_decls.push(buf);
-    body.signature.out_params = vec![true];
+    body.signature.storage_read_write = vec![true];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
         grid_size: None,
@@ -508,15 +511,15 @@ fn back_edge_loop_is_rejected() {
 }
 
 #[test]
-fn out_params_length_mismatch_is_rejected() {
+fn storage_read_write_length_mismatch_is_rejected() {
     let mut body = single_buffer_kernel();
-    body.signature.out_params.clear();
+    body.signature.storage_read_write.clear();
     finish_body(&mut body, vec![]);
 
     let msg = compile_err(&body);
     assert!(
-        msg.contains("out_params length"),
-        "expected out_params length error, got: {}",
+        msg.contains("storage_read_write length"),
+        "expected storage_read_write length error, got: {}",
         msg
     );
 }
@@ -796,7 +799,7 @@ fn non_buffer_kernel_param_is_rejected() {
     scalar_param.is_user_variable = true;
     body.local_decls.push(scalar_param);
 
-    body.signature.out_params = vec![false];
+    body.signature.storage_read_write = vec![false];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
         grid_size: None,
@@ -863,7 +866,7 @@ fn uniform_buffer_storage_class_emits_uniform_binding() {
     uniform_param.is_user_variable = true;
     body.local_decls.push(uniform_param);
 
-    body.signature.out_params = vec![false];
+    body.signature.storage_read_write = vec![false];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
         grid_size: None,
@@ -892,4 +895,100 @@ fn uniform_buffer_storage_class_emits_uniform_binding() {
         source
     );
     assert_wgsl_valid(source);
+}
+
+/// A `GpuDevice` body `bump(_1 out i32) { _1 = 7 }` returning nothing.
+fn bump_helper() -> Body {
+    let span = dummy_span();
+    let mut body = Body::new(1, span, ExecutionModel::GpuDevice);
+    body.local_decls
+        .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
+    body.local_decls
+        .push(LocalDecl::new(Type::new(TypeKind::I32, span), span));
+    body.signature.out_params = vec![true];
+    finish_body(
+        &mut body,
+        vec![assign(
+            Place::new(Local(1)),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span,
+                ty: Type::new(TypeKind::I32, span),
+                literal: Literal::Integer(IntegerLiteral::I32(7)),
+            }))),
+        )],
+    );
+    body
+}
+
+/// An `out` parameter is a pointer to a function variable, written through
+/// `(*_1)`, and a helper returning nothing declares no result.
+#[test]
+fn out_parameter_is_a_function_pointer() {
+    let artifact = WgslBackend
+        .compile(&[("bump", &bump_helper())], &WgslOptions::default())
+        .expect("an out helper must emit");
+    let wgsl = String::from_utf8(artifact.bytes).expect("WGSL is UTF-8");
+    assert!(wgsl.contains("fn bump(_1: ptr<function, i32>) {"), "{wgsl}");
+    assert!(
+        wgsl.contains("(*_1) = 7i;") || wgsl.contains("(*_1) = 7;"),
+        "{wgsl}"
+    );
+    assert!(!wgsl.contains("->"), "{wgsl}");
+}
+
+/// A kernel calling `bump` with `out` on `place`, the call's result dropped
+/// into a `void` temp; `_2` is an `i32` function variable.
+fn kernel_calling_bump(place: Place) -> Body {
+    let span = dummy_span();
+    let mut body = single_buffer_kernel();
+    body.local_decls
+        .push(LocalDecl::new(Type::new(TypeKind::I32, span), span));
+    body.local_decls
+        .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
+    let bump = Symbol::function(&ModuleId::Program, "bump", &[]);
+    let mut entry = BasicBlockData::new(None);
+    entry.terminator = Some(Terminator::new(
+        TerminatorKind::Call {
+            func: Operand::function(bump, span),
+            args: vec![Operand::Copy(place)],
+            arg_modes: vec![ArgMode::Out],
+            arg_handles: Vec::new(),
+            flags: CallFlags::default(),
+            destination: Place::new(Local(3)),
+            target: Some(BasicBlock(1)),
+        },
+        span,
+    ));
+    body.basic_blocks.push(entry);
+    finish_body(&mut body, vec![]);
+    body
+}
+
+/// The call hands over the temp's address and, the callee returning
+/// nothing, assigns no result.
+#[test]
+fn out_argument_hands_over_the_temps_address() {
+    let body = kernel_calling_bump(Place::new(Local(2)));
+    let artifact = WgslBackend
+        .compile(&[("k", &body)], &WgslOptions::default())
+        .expect("a call handing over a temp must emit");
+    let wgsl = String::from_utf8(artifact.bytes).expect("WGSL is UTF-8");
+    assert!(wgsl.contains("var _2: i32"), "{wgsl}");
+    assert!(wgsl.contains("(&_2);"), "{wgsl}");
+    assert!(!wgsl.contains("_3 ="), "{wgsl}");
+}
+
+/// A buffer element handed to `out` directly, not through a temp, has no
+/// WGSL pointer form: the emitter refuses it rather than point into storage.
+#[test]
+fn out_argument_naming_a_buffer_element_is_refused() {
+    let element = Place {
+        local: Local(1),
+        projection: vec![PlaceElem::index(Local(2))],
+    };
+    let msg = compile_err(&kernel_calling_bump(element));
+    assert!(
+        msg.contains("is not a whole function variable"),
+        "expected the out-argument refusal, got: {msg}"
+    );
 }

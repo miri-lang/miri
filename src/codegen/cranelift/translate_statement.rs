@@ -21,7 +21,7 @@ use crate::codegen::cranelift::value_abi::{
 use crate::codegen::cranelift::value_locals::ValueBuild;
 use crate::error::CodegenError;
 use crate::mir::place_type::PlaceTypes;
-use crate::mir::representation::Representation;
+use crate::mir::representation::{out_handover, OutHandover, Representation};
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::taken_places;
 use crate::mir::value_arguments::call_written_roots;
@@ -1144,8 +1144,11 @@ impl<'a> FunctionTranslator<'a> {
         }
         // A slot holding a word nothing counts may be narrower than the word
         // the callee reads, so lowering copies such a value in and out; one
-        // reaching here would be read and written at the wrong width.
-        let types = type_ctx.values.body().map(PlaceTypes::of);
+        // reaching here would be read and written at the wrong width. The
+        // backend holds lowering to the answer `out_handover` gives the body
+        // it compiles and decides nothing of its own.
+        let body = type_ctx.values.body();
+        let types = body.map(PlaceTypes::of);
         let ty = types
             .and_then(|types| types.declared(place))
             .ok_or_else(|| {
@@ -1154,11 +1157,16 @@ impl<'a> FunctionTranslator<'a> {
                  cannot be derived"
                 ))
             })?;
-        if !Representation::of(&ty.kind, type_ctx.layout_scope()).is_passed_out_by_address() {
-            return Err(CodegenError::Internal(format!(
-                "`out` argument {position}, `{place}`, is passed by its address, but a slot of \
-                 its type is copied in and out"
-            )));
+        let representation = Representation::of(&ty.kind, type_ctx.layout_scope());
+        let is_gpu = body.is_some_and(|body| body.is_gpu());
+        match out_handover(&representation, is_gpu) {
+            OutHandover::ByAddress => {}
+            OutHandover::CopiedIn => {
+                return Err(CodegenError::Internal(format!(
+                    "`out` argument {position}, `{place}`, is passed by its address, but a slot of \
+                     its type is copied in and out"
+                )))
+            }
         }
         Self::slot_address(builder, ctx, place, locals, type_ctx)
     }

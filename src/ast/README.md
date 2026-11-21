@@ -18,7 +18,9 @@ Unlike the linear stream of tokens produced by the Lexer, the AST forms a tree t
 A few walks over the tree answer questions both the type checker and MIR
 lowering ask, and live here so neither stage imports the other:
 `captures.rs` (the outer names a closure or loop body uses), `gpu_writes.rs`
-(the names a parallel-loop body writes) and `gpu_frame_passes.rs` (the ordered
+(the names a parallel-loop body writes, with a buffer element handed to an
+`out` parameter counted as a write; which arguments a call hands `out` is
+asked of the type checker's record, `OutArgumentQuery`) and `gpu_frame_passes.rs` (the ordered
 passes a `gpu frame` block runs, with literal-count repeats expanded).
 
 ## Type arguments

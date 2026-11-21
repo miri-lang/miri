@@ -599,3 +599,173 @@ fn test_literal_grid_dim_2d_i64_max() {
     const BLOCK_SIZE_2D: u32 = 16;
     assert_eq!(literal_grid_dim(i64::MAX, BLOCK_SIZE_2D), u32::MAX);
 }
+
+/// How many of the kernel's buffers bind for writing (`storage_read_write`)
+/// and how many it writes (`param_written`), when `main` is lowered with the
+/// call to
+/// `callee` in `source` recorded as handing its first argument to an `out`
+/// parameter (`record_out`) or as the type checker left it.
+fn kernel_written_buffers(source: &str, callee: &str, record_out: bool) -> (usize, usize) {
+    let Lowered { lambdas, .. } =
+        lower_main_recording(source, callee, record_out).expect("lowering");
+    let kernel = lambdas
+        .into_iter()
+        .find(|l| l.body.execution_model == ExecutionModel::GpuKernel)
+        .expect("a kernel");
+    let count = |flags: &[bool]| flags.iter().filter(|written| **written).count();
+    assert!(
+        !kernel.body.signature.out_params.contains(&true),
+        "a kernel's buffers are no `out` parameters"
+    );
+    (
+        count(&kernel.body.signature.storage_read_write),
+        count(&kernel.body.signature.param_written),
+    )
+}
+
+/// `main` of `source` lowered, with the call to `callee` recorded as handing
+/// its first argument to an `out` parameter (`record_out`) or as the type
+/// checker left it.
+fn lower_main_recording(
+    source: &str,
+    callee: &str,
+    record_out: bool,
+) -> Result<Lowered, miri::error::lowering::LoweringError> {
+    use miri::ast::expression::{Expression, ExpressionKind};
+    let pipeline = Pipeline::new();
+    let mut result = pipeline.frontend(source).expect("frontend");
+    let func_stmt = result
+        .ast
+        .body
+        .iter()
+        .find(|s| matches!(&s.node, StatementKind::FunctionDeclaration(f) if f.name == "main"))
+        .expect("main");
+    if record_out {
+        let mut calls: Vec<&Expression> = Vec::new();
+        find_calls(func_stmt, callee, &mut calls);
+        for call in calls {
+            if let ExpressionKind::Call(_, args) = &call.node {
+                result
+                    .type_checker
+                    .out_arguments
+                    .record(call.id, args[0].id);
+            }
+        }
+    }
+    lower_function(func_stmt, &result.type_checker, false, false)
+}
+
+/// Every call to `callee` in `stmt`, through blocks, `forall` bodies,
+/// assignments and the arguments of other calls.
+fn find_calls<'s>(
+    stmt: &'s miri::ast::Statement,
+    callee: &str,
+    found: &mut Vec<&'s miri::ast::expression::Expression>,
+) {
+    use miri::ast::expression::ExpressionKind;
+    fn in_expression<'s>(
+        expr: &'s miri::ast::expression::Expression,
+        callee: &str,
+        found: &mut Vec<&'s miri::ast::expression::Expression>,
+    ) {
+        match &expr.node {
+            ExpressionKind::Call(func, args) => {
+                if matches!(&func.node, ExpressionKind::Identifier(n, _) if n == callee) {
+                    found.push(expr);
+                }
+                args.iter()
+                    .for_each(|arg| in_expression(arg, callee, found));
+            }
+            ExpressionKind::Assignment(_, _, rhs) => in_expression(rhs, callee, found),
+            _ => {}
+        }
+    }
+    match &stmt.node {
+        StatementKind::FunctionDeclaration(decl) => {
+            if let Some(body) = &decl.body {
+                find_calls(body, callee, found);
+            }
+        }
+        StatementKind::Block(stmts) => stmts.iter().for_each(|s| find_calls(s, callee, found)),
+        StatementKind::Forall { body, .. } => find_calls(body, callee, found),
+        StatementKind::Expression(expr) => in_expression(expr, callee, found),
+        _ => {}
+    }
+}
+
+const READS_DST_THROUGH_A_HELPER: &str = "
+use system.gpu
+use system.collections.array
+
+fn touch(x int) int
+    x + 1
+
+fn main()
+    gpu var dst = [0, 0, 0, 0]
+    gpu var seen = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        seen[i] = touch(dst[i])
+";
+
+#[test]
+fn a_buffer_the_kernel_only_reads_through_a_helper_binds_read_only() {
+    let written = kernel_written_buffers(READS_DST_THROUGH_A_HELPER, "touch", false);
+    assert_eq!(written, (1, 1), "only seen is written");
+}
+
+const WRITES_DST_THROUGH_A_HELPER: &str = "
+use system.gpu
+use system.collections.array
+
+fn touch(x out int)
+    x = x + 1
+
+fn main()
+    gpu var dst = [0, 0, 0, 0]
+    gpu var seen = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        touch(dst[i])
+        seen[i] = 1
+";
+
+#[test]
+fn a_buffer_element_handed_to_an_out_parameter_binds_read_write() {
+    let written = kernel_written_buffers(WRITES_DST_THROUGH_A_HELPER, "touch", false);
+    assert_eq!(written, (2, 2), "dst is written through the out argument");
+}
+
+/// The record of `out` arguments decides which buffers a kernel binds for
+/// writing, and the callee's declaration which operands lowering passes
+/// `out`: a record the declaration disagrees with is an internal error, never
+/// a buffer bound for one and written as the other.
+#[test]
+fn a_recorded_out_argument_the_declaration_lends_is_an_internal_error() {
+    let lowered = lower_main_recording(READS_DST_THROUGH_A_HELPER, "touch", true);
+    let error = lowered.err().expect("the disagreement is refused");
+    assert!(
+        format!("{error:?}").contains("internal compiler error"),
+        "{error:?}"
+    );
+}
+
+const ATOMIC_COUNTER: &str = "
+use system.gpu
+use system.gpu.atomic
+
+fn main()
+    gpu var hist = Array<Atomic<u32>, 4>()
+    gpu forall i in 0..4
+        atomic_add(hist, i % 4, 1 as u32)
+";
+
+#[test]
+fn an_atomic_buffer_binds_read_write_and_is_no_out_parameter() {
+    let Lowered { lambdas, .. } = crate::mir::utils::mir_lower_main(ATOMIC_COUNTER);
+    let kernel = lambdas
+        .into_iter()
+        .find(|l| l.body.execution_model == ExecutionModel::GpuKernel)
+        .expect("a kernel");
+    let signature = &kernel.body.signature;
+    assert_eq!(signature.storage_read_write.first(), Some(&true));
+    assert!(!signature.out_params.contains(&true));
+}

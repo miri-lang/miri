@@ -308,3 +308,40 @@ fn test_gpu_atomic_past_the_end_stops_the_program() {
 fn test_gpu_in_range_atomic_reports_no_fault() {
     assert_runs_with_output(&atomic_program("1, 1"), "0 2");
 }
+
+/// A `forall` over four lanes handing element `i + 1` of a four-element
+/// buffer to an `out` parameter: one-to-one, and past the end on the last
+/// lane.
+const OUT_PAST_THE_END: &str = "
+use system.gpu
+use system.collections.array
+
+fn bump(x out int)
+    x = x + 1
+
+fn main()
+    gpu var dst = [10, 20, 30, 40]
+    gpu forall i in 0..4
+        bump(dst[i + 1])
+    let host = dst
+    println(f\"{host[0]}\")
+";
+
+/// The copy-in and the store-back of an `out` element are an ordinary load
+/// and store, each checked against the buffer's length.
+#[test]
+fn test_wgsl_out_element_on_an_unproven_index_records_index_out_of_bounds() {
+    let wgsl = compile_to_wgsl(OUT_PAST_THE_END);
+    assert!(wgsl.contains("dst[_checked_index__"), "{wgsl}");
+    assert!(wgsl.contains(RAISE_INDEX_OUT_OF_BOUNDS), "{wgsl}");
+    assert_gpu_wgsl_valid(OUT_PAST_THE_END);
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_out_element_past_the_end_stops_the_program() {
+    assert_runtime_error(OUT_PAST_THE_END, INDEX_OUT_OF_BOUNDS);
+}

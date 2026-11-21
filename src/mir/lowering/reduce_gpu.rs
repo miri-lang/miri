@@ -934,7 +934,7 @@ fn build_gpu_reduce_kernel(
         is_frame_step: false,
     }));
 
-    kernel.signature.out_params = vec![false, false, true];
+    kernel.signature.storage_read_write = vec![false, false, true];
 
     let mut ctx = LoweringContext::for_kernel(kernel, parent);
 

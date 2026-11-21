@@ -404,9 +404,12 @@ impl TakenPath {
             return Err(untaken_place(span, "names no step"));
         };
         let mut place = self.root.clone();
+        // Device code holds no counts, so no block above the slot is shared.
+        let is_device_code = ctx.body.is_gpu();
         for step in above {
             place.projection.extend(step.elem.clone());
-            let unshared = unsharing(&ctx.body, &step.ty).filter(|_| !step.is_own_already);
+            let unshared =
+                unsharing(&ctx.body, &step.ty).filter(|_| !step.is_own_already && !is_device_code);
             if let Some(unsharing) = unshared {
                 emit_unshare(ctx, &place, &step.ty, unsharing, span)?;
             }
@@ -471,8 +474,14 @@ fn lower_path(
     obj: &Expression,
     roots: Roots,
 ) -> Result<Option<LoweredPath>, LoweringError> {
-    // Reference counts exist on the host only; a GPU body writes in place.
-    if ctx.body.is_gpu() {
+    // Reference counts exist on the host only: a GPU body writes in place,
+    // and lowers a path only for a call to take `out`, which copies the
+    // slot's value in and stores it back.
+    let is_written_in_place = match roots {
+        Roots::Written => ctx.body.is_gpu(),
+        Roots::Taken => false,
+    };
+    if is_written_in_place {
         return Ok(None);
     }
     let mut steps = Vec::new();
@@ -672,7 +681,9 @@ fn root_step<'e>(
     if decl.device_handle.is_some() {
         return Ok(None);
     }
-    let is_parameter = (1..=ctx.body.arg_count).contains(&local.0);
+    // Device code holds no copy-on-write block a parameter could share with
+    // its caller.
+    let is_parameter = (1..=ctx.body.arg_count).contains(&local.0) && !ctx.body.is_gpu();
     if is_parameter && is_copied_on_write(&ctx.body, &decl.ty) {
         if ctx.body.signature.receiver == Some(local) {
             return Ok(match roots {

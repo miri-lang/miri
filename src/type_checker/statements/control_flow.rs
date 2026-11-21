@@ -41,7 +41,7 @@
 
 use crate::ast::captures::collect_free_identifiers_excluding;
 use crate::ast::factory::make_type;
-use crate::ast::gpu_writes::{visit_buffer_writes, BufferWrite};
+use crate::ast::gpu_writes::{visit_buffer_writes, BufferWrite, OutArgumentQuery};
 use crate::ast::statement;
 use crate::ast::types::{is_range_type_name, is_unresolved, Type, TypeKind, ENTRIES_TRAIT_NAME};
 use crate::ast::*;
@@ -51,6 +51,7 @@ use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::operators::{
     unsteppable_range_help, unsteppable_range_message, ValueStepping,
 };
+use crate::type_checker::out_positions::SpelledWritesOnly;
 use crate::type_checker::utils::is_residency_gated_buffer;
 use crate::type_checker::{IterationPlan, TypeChecker};
 
@@ -379,19 +380,14 @@ impl TypeChecker {
         context: &mut Context,
         stmt_span: Span,
     ) {
-        if let Some(accum_name) = detect_reduction(body, vars, context) {
-            self.report_error(
-                DiagnosticCode::TarGpuParallelConstruct,
-                format!(
-                    "loop-carried accumulator '{}' makes 'forall' iterations order-dependent; \
-                    'forall' requires independent iterations (reductions are not yet supported)",
-                    accum_name
-                ),
-                stmt_span,
-            );
+        // Before the body is checked, refuse an accumulator the body stores
+        // to, so it is the loop's only diagnostic rather than one beside
+        // every error the body would report about it. No call in the body is
+        // checked yet, so this walk judges only the writes the syntax spells.
+        if let Some(accumulator) = detect_reduction(body, vars, context, &SpelledWritesOnly) {
+            self.report_loop_carried_accumulator(&accumulator, stmt_span);
             return;
         }
-
         let target = resolve_forall_device(body, *device, vars, context);
 
         match target {
@@ -404,8 +400,29 @@ impl TypeChecker {
                         .to_string(),
                     stmt_span,
                 );
+                // The body is not checked, so no call in it is recorded.
+                return;
             }
         }
+        // Once the body is checked, every call in it is recorded, and a
+        // captured value handed to an `out` parameter is an accumulator too.
+        if let Some(accumulator) = detect_reduction(body, vars, context, &self.out_arguments) {
+            self.report_loop_carried_accumulator(&accumulator, stmt_span);
+        }
+    }
+
+    /// Refuses a `forall` whose body writes `accumulator`, a value captured
+    /// from outside it, which makes the iterations depend on their order.
+    fn report_loop_carried_accumulator(&mut self, accumulator: &str, stmt_span: Span) {
+        self.report_error(
+            DiagnosticCode::TarGpuParallelConstruct,
+            format!(
+                "loop-carried accumulator '{}' makes 'forall' iterations order-dependent; \
+                'forall' requires independent iterations (reductions are not yet supported)",
+                accumulator
+            ),
+            stmt_span,
+        );
     }
 
     fn check_forall_cpu(
@@ -1126,10 +1143,11 @@ impl TypeChecker {
                     );
                     continue;
                 }
-                // Apply per-pass semantic buffer validation.
-                self.check_gpu_frame_buffers(decls, body, context, pass.span);
-                // Then type-check the pass.
+                // Type-check the pass, then validate the buffers it reads and
+                // writes: a write through an `out` argument is recorded as
+                // the pass's calls are checked.
                 self.check_gpu_for(decls, iterable, body, context, pass.span);
+                self.check_gpu_frame_buffers(decls, body, context, pass.span);
             }
         }
 
@@ -1159,7 +1177,8 @@ impl TypeChecker {
         // For a single forall pass: reject iff read_set ∩ write_set ≠ ∅ (race),
         // or write_set is empty. Multiple disjoint writes are now LEGAL.
         let loop_var_name = &loop_decls[0].name;
-        let (read_set, write_set) = collect_pass_buffer_sets(body, loop_var_name, context);
+        let (read_set, write_set) =
+            collect_pass_buffer_sets(body, loop_var_name, context, &self.out_arguments);
 
         if write_set.is_empty() {
             self.report_error(
@@ -1503,17 +1522,18 @@ fn collect_pass_buffer_sets(
     body: &Statement,
     loop_var_name: &str,
     context: &Context,
+    outs: &dyn OutArgumentQuery,
 ) -> (
     std::collections::HashSet<String>,
     std::collections::HashSet<String>,
 ) {
     use std::collections::HashSet;
 
-    let written = collect_written_names_in_stmt(body);
+    let written = collect_written_names_in_stmt(body, outs);
     // Atomic buffers are read-modify-write race-free by construction, so they
     // are counted as writes only and exempt from the read/write disjointness
     // rule (which exists to make non-atomic ping-pong safe).
-    let atomic_written = collect_atomic_written_names_in_stmt(body);
+    let atomic_written = collect_atomic_written_names_in_stmt(body, outs);
     let mut read_set = HashSet::new();
     let mut write_set = HashSet::new();
 
@@ -1557,20 +1577,26 @@ fn collect_pass_buffer_sets(
     (read_set, write_set)
 }
 
-/// Collects every name a statement writes, through a store or an atomic
-/// builtin, wherever in the statement the write sits.
-fn collect_written_names_in_stmt(stmt: &Statement) -> std::collections::HashSet<String> {
+/// Collects every name a statement writes, through a store, an atomic
+/// builtin or an `out` argument, wherever in the statement the write sits.
+fn collect_written_names_in_stmt(
+    stmt: &Statement,
+    outs: &dyn OutArgumentQuery,
+) -> std::collections::HashSet<String> {
     let mut written = std::collections::HashSet::new();
-    visit_buffer_writes(stmt, &mut |name, _| {
+    visit_buffer_writes(stmt, outs, &mut |name, _| {
         written.insert(name.to_string());
     });
     written
 }
 
 /// Collects the names of buffers mutated by an atomic builtin in a pass body.
-fn collect_atomic_written_names_in_stmt(stmt: &Statement) -> std::collections::HashSet<String> {
+fn collect_atomic_written_names_in_stmt(
+    stmt: &Statement,
+    outs: &dyn OutArgumentQuery,
+) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
-    visit_buffer_writes(stmt, &mut |name, kind| {
+    visit_buffer_writes(stmt, outs, &mut |name, kind| {
         if kind == BufferWrite::Atomic {
             names.insert(name.to_string());
         }
@@ -1851,8 +1877,9 @@ fn detect_reduction(
     body: &Statement,
     vars: &[VariableDeclaration],
     context: &Context,
+    outs: &dyn OutArgumentQuery,
 ) -> Option<String> {
-    let written = collect_written_names_in_stmt(body);
+    let written = collect_written_names_in_stmt(body, outs);
 
     let bound: std::collections::HashSet<String> = vars.iter().map(|d| d.name.clone()).collect();
     let captured = collect_free_identifiers_excluding(body, &bound);

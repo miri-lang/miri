@@ -17,11 +17,15 @@ use std::collections::HashMap;
 use super::{OutSite, OutTaker};
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::place_path::{path_links, path_root, PathLink};
+use crate::ast::statement::BindingResidency;
+use crate::ast::types::{atomic_buffer_element, vec_dim, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
+use crate::error::type_error::TypeErrorKind;
 use crate::type_checker::context::Context;
 use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::place_reads::{index_spelling, place_spelling};
+use crate::type_checker::utils::{captured_buffer_element, is_gpu_buffer_element};
 use crate::type_checker::writable_places::{let_to_var_repair, ImmutableBinding, Refusal};
 use crate::type_checker::TypeChecker;
 
@@ -74,13 +78,20 @@ impl TypeChecker {
             }
         };
         let spelled = spelled_argument(arg);
+        if let Some(atomic) = atomic_element_step(arg, |e| self.get_type(e.id)) {
+            return self.refuse_atomic_element(param_name, &spelled, atomic, site.span);
+        }
         match (place.steps.is_empty(), site.taker) {
             (true, OutTaker::Lowered | OutTaker::Builtin) => {}
-            (false, OutTaker::Lowered | OutTaker::Builtin) if context.is_device_code() => {
-                self.refuse_out_path_in_device_code(param_name, &spelled, site.span)
-            }
             (false, OutTaker::Builtin) => {
                 self.refuse_out_path_to_builtin(param_name, &spelled, site.span)
+            }
+            (false, OutTaker::Lowered)
+                if context.is_device_code()
+                    && !self.is_device_out_path(arg)
+                    && !roots_a_refused_buffer(arg, context) =>
+            {
+                self.refuse_out_path_in_device_code(param_name, &spelled, site.span)
             }
             (false, OutTaker::Lowered) => {}
         }
@@ -183,6 +194,7 @@ impl TypeChecker {
                 entry_refusal(param_name, (&place, &rest), entry)
             }
             Refusal::DeviceResident(name) => {
+                self.withdraw_root_element_read(arg);
                 device_resident_refusal(param_name, (&place, &rest), name)
             }
             Refusal::TupleSlot(tuple) => tuple_slot_refusal(param_name, &place, tuple),
@@ -204,18 +216,95 @@ impl TypeChecker {
         self.report_error_with_help_and_optional_repair(code, message, span, help, repair);
     }
 
+    /// Withdraws the refusal to read an element of the gpu-resident root of
+    /// `place`, an `out` argument, on the host: the argument is refused as a
+    /// place the host call cannot take, whose repair, copying the binding to
+    /// the host, is the one that also repairs that read. One defect gets one
+    /// diagnostic. The read is the subscript taken on the root itself
+    /// (`h[k]` in `h[k].x`), refused at exactly its own span; a read of
+    /// another binding inside the index (`g[1]` in `h[g[1]]`) is a defect of
+    /// its own and stays.
+    fn withdraw_root_element_read(&mut self, place: &Expression) {
+        let (_, links) = path_links(place);
+        let Some(PathLink::Index(_, _, read)) = links.first() else {
+            return;
+        };
+        let read = read.span;
+        self.diagnostics.errors.retain(|error| {
+            let is_residency_read = matches!(
+                &error.kind,
+                TypeErrorKind::Coded {
+                    code: DiagnosticCode::TarGpuResidencyViolation,
+                    ..
+                }
+            );
+            !(is_residency_read && error.span == read)
+        });
+    }
+
+    /// Whether the path `arg` is one device code hands to an `out`
+    /// parameter, copying it in and storing it back at the call: an element
+    /// of a buffer (`dst[i]`), or a component of a vector held in a local
+    /// (`v.x`) or in an element of a buffer (`pts[i].x`). A buffer is a list
+    /// or an array whose element device memory holds.
+    fn is_device_out_path(&self, arg: &Expression) -> bool {
+        let is_buffer = |collection: &Expression| {
+            (self.get_type(collection.id))
+                .and_then(|ty| captured_buffer_element(&ty.kind))
+                .is_some_and(|element| is_gpu_buffer_element(&element.kind))
+        };
+        let is_vector = |holder: &Expression| {
+            matches!(
+                self.get_type(holder.id).map(|ty| &ty.kind),
+                Some(TypeKind::Custom(name, _)) if vec_dim(name).is_some()
+            )
+        };
+        let (_, links) = path_links(arg);
+        match links.as_slice() {
+            [PathLink::Index(collection, _, _)] => is_buffer(collection),
+            [PathLink::Member(holder, _, _)] => is_vector(holder),
+            [PathLink::Index(collection, _, _), PathLink::Member(holder, _, _)] => {
+                is_buffer(collection) && is_vector(holder)
+            }
+            [] | [PathLink::Member(..), _] | [_, PathLink::Index(..)] | [_, _, _, ..] => false,
+        }
+    }
+
     /// Refuses the field or element `place` handed to the `out` parameter
-    /// `param_name` in device code, whose places have no address a call can
-    /// be handed.
+    /// `param_name` in device code, which is no element of a buffer and no
+    /// component of a vector: the places a device call copies in and stores
+    /// back.
     fn refuse_out_path_in_device_code(&mut self, param_name: &str, place: &str, span: Span) {
         self.report_error_with_help(
             DiagnosticCode::TypFunctionSignature,
             format!(
-                "'out' parameter '{param_name}' is handed '{place}' in device code, where a call takes no place"
+                "'out' parameter '{param_name}' is handed '{place}' in device code, which takes only a whole local, an element of a buffer ('dst[i]') or a component of a vector ('v.x', 'pts[i].x')"
+            ),
+            span,
+            copied_in_and_out_help(place),
+        );
+    }
+
+    /// Refuses `place`, an element of an atomic buffer, handed to the `out`
+    /// parameter `param_name`. A call copies the element in and stores it
+    /// back, a read and a write another thread can come between, so an
+    /// atomic element is changed only by an atomic builtin, which reads and
+    /// writes it in one step.
+    fn refuse_atomic_element(
+        &mut self,
+        param_name: &str,
+        place: &str,
+        (buffer, index): (String, String),
+        span: Span,
+    ) {
+        self.report_error_with_help(
+            DiagnosticCode::TypFunctionSignature,
+            format!(
+                "'out' parameter '{param_name}' is handed '{place}', an element of the atomic buffer '{buffer}', which no call takes: the call would read the element and store it back in two steps, and another thread may write it in between"
             ),
             span,
             format!(
-                "take the value as a plain parameter and return the new one, then store it: '{place} = …({place})'"
+                "change the element with an atomic builtin, which reads and writes it in one step: 'atomic_add({buffer}, {index}, 1)', or another 'atomic_' operation"
             ),
         );
     }
@@ -309,6 +398,43 @@ fn holding(lent: &Expression, taken: &Expression) -> Option<Holding> {
         std::cmp::Ordering::Equal if through_fields() => Some(Holding::Same),
         std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => None,
     }
+}
+
+/// The atomic buffer the path `arg` takes an element of, and that element's
+/// index, as a refusal spells them; `None` when no step of the path indexes
+/// an atomic buffer. `type_of` reads the type the checker gave an
+/// expression.
+fn atomic_element_step<'t>(
+    arg: &Expression,
+    type_of: impl Fn(&Expression) -> Option<&'t Type>,
+) -> Option<(String, String)> {
+    let (_, links) = path_links(arg);
+    links.iter().find_map(|link| match link {
+        PathLink::Index(collection, index, _) => {
+            let ty = type_of(collection)?;
+            atomic_buffer_element(&ty.kind)?;
+            let buffer = place_spelling(collection).unwrap_or_else(|| "buffer".to_string());
+            Some((buffer, index_spelling(index)))
+        }
+        PathLink::Member(..) => None,
+    })
+}
+
+/// Whether `arg` starts at a buffer a parallel pass binds — a gpu-resident
+/// binding or a parameter — whose element is no storage element. The
+/// binding is refused for that by its own check, which names the element
+/// type, so the path handed out gets no second refusal.
+fn roots_a_refused_buffer(arg: &Expression, context: &Context) -> bool {
+    let ExpressionKind::Identifier(name, _) = &path_root(arg).node else {
+        return false;
+    };
+    let Some(info) = context.resolve_info(name) else {
+        return false;
+    };
+    let is_bound = info.residency == BindingResidency::Gpu || info.is_parameter;
+    is_bound
+        && captured_buffer_element(&info.ty.kind)
+            .is_some_and(|element| !is_gpu_buffer_element(&element.kind))
 }
 
 /// The refusal of `arg`, which is no binding and no path from one, handed to

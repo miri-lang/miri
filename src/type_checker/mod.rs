@@ -83,6 +83,7 @@ mod place_reads;
 pub use iteration_plan::{IterationPlan, PositionalAccess, ProtocolWalk};
 pub(crate) use operators::{named_class, ValueOrdering, ValueStepping};
 pub mod open_consumption;
+pub mod out_positions;
 pub(crate) mod pattern_coverage;
 mod reached_instantiations;
 mod reference_cycles;
@@ -228,6 +229,10 @@ pub struct TypeChecker {
     /// caller's reference lowering releases at the call; see
     /// [`use_after_move::ConsumedArguments`].
     pub consumed_arguments: use_after_move::ConsumedArguments,
+    /// The call arguments bound to an `out` parameter, which every walk of
+    /// the places a parallel pass writes reads; see
+    /// [`out_positions::OutArguments`].
+    pub out_arguments: out_positions::OutArguments,
     /// The resource parameters each function owns, which both sides of a
     /// call read; see [`kept_parameters::KeptParameters`].
     pub kept_parameters: kept_parameters::KeptParameters,
@@ -439,6 +444,7 @@ impl TypeChecker {
             captured_mentions: body_writes::CapturedMentions::default(),
             held_operands: body_writes::HeldOperands::default(),
             consumed_arguments: use_after_move::ConsumedArguments::default(),
+            out_arguments: out_positions::OutArguments::default(),
             kept_parameters: kept_parameters::KeptParameters::default(),
             thunk_bodies: thunk_methods::ThunkBodies::default(),
             slot_conventions: slot_conventions::SlotConventions::default(),
