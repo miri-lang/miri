@@ -158,7 +158,7 @@ let result = if x > 10: "Large" else: "Small"
 ```miri
 // For loop
 for x in 1..10
-    print(x)
+    println(f"{x}")
 
 // While loop
 while x > 0
@@ -191,7 +191,7 @@ println(f"{r.start} {r.end} {r.inclusive}")   // 2 5 true
 var q = 0..3
 q.end = 5
 for i in q
-    print(i)                                  // 01234
+    print(f"{i}")                             // 01234
 ```
 
 `for i in r` runs from `start` while `i` is below `end`, or at it when `inclusive` holds, stepping to each next value. It steps through a range of any `Steppable` type: the integers add one; a one-character `String` steps by Unicode code point, skipping the surrogates U+D800 to U+DFFF, so `for c in 'a'..='e'` runs `a` to `e`; and a class implementing `Steppable` steps through its own `successor()`, with its `compare` saying when the end is reached. An inclusive range leaves once it has run at its end, before asking for a successor, so a range ending at its type's last value never steps past it. Before the first pass the loop asks `steppable()` of the start and then the end: a string bound must be exactly one character, which a bound written as a literal is checked for when the program is compiled (`MER_TYP_086`), and a bound computed at run time for which `steppable()` is false stops the program before the body runs (`MER_RT_019`). A range of any other type cannot be stepped and is refused (`MER_TYP_086`): a float has no next value, so loop over integers and scale them (`for i in 0..n` then `let x = start + (i as float) * step`); `bool` has no successor, so walk `[false, true]`; and a generic body looping over a range of its parameter `T` bounds it, `fn walk<T implements Steppable>(a T, b T)`, or is refused where it is written. `forall` holds a range to the same rule (`MER_TYP_086`), and since it hands out its passes as independent integer indices it also refuses a range stepped through `successor()`, such as a `String` or class range, which is reached only one value after another (`MER_TAR_005`); loop over that with `for`. Membership needs only an order, not a step, so it works on float and `bool` ranges too: `x in r` holds when `r.start <= x` and `x < r.end` (`x <= r.end` when `r.inclusive`), for any element type `<` orders: the numbers, `bool`, `String`, and a type implementing `Comparable`, whose `compare` answers both comparisons. It accepts exactly the operands those comparisons accept, and an element or value type without an ordering is refused (`MER_TYP_075`). Written with range syntax on the right, `x in a..b` is `a <= x and x < b` (`x <= b` for `a..=b`): `x`, `a` and `b` are each evaluated once, left to right, and no range value is built, so the test is the same inside a `gpu forall` kernel. The start is asked first, and when it already rules `x` out the end is not compared. Inside a kernel only numbers have an ordering, so a membership test over a range of anything else is refused there. A range value itself has no device layout: binding one inside a kernel, passing one to a `gpu fn`, making one `gpu`-resident or iterating one with `gpu forall` is refused.
@@ -200,7 +200,7 @@ for i in q
 
 ```miri
 if x > 10: print("Large")
-for x in 1..10: print(x)
+for x in 1..10: println(f"{x}")
 while x > 0: x -= 1
 forever: print("Spinning")
 ```
@@ -652,7 +652,9 @@ use system.io.{print, println}
 
 // Module aliasing
 use system.collections.list as L
-use system.{io, collections.map as M}
+
+// Aliasing a selected name
+use system.math.{sqrt as root}
 ```
 
 ### Local Modules
@@ -1230,7 +1232,7 @@ fn first<T>(a T, b T) T
     a
 ```
 
-Calling with different types produces separate compiled functions (`identity_int`, `identity_string`, etc.).
+Calling with different types produces separate compiled functions (`identity$int`, `identity$String`, etc.).
 
 ```miri
 let n = identity(42)

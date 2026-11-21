@@ -15,6 +15,15 @@ Records every change to `docs/grammar.peg`.
   downstream consumer. That is a human judgement; the hash only guarantees no
   grammar edit passes unnoticed.
 
+## Version 6
+
+**Content Hash**: `e905c389db5d543ec279fc3259434db1`
+
+Adds aliases inside a selective import. `use_group` now reads `use_group_item`s,
+each a name optionally followed by `as` and a new name (`use system.math.{sqrt as root}`),
+which the compiler already accepted. A consumer holding version 5 rejects programs
+the compiler accepts, so this is a breaking change for anything caching the rules.
+
 ## Version 5
 
 **Content Hash**: `197365d0de774ae6a538e90e21e07b15`

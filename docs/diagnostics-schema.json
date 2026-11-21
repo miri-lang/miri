@@ -15,7 +15,7 @@
     },
     "command": {
       "type": "string",
-      "description": "The command that produced this envelope: 'check', 'build', 'run', 'test', 'explain', 'fix', 'determinism', 'view', 'patch', 'skill', or 'profile'.",
+      "description": "The command that produced this envelope: 'check', 'build', 'run', 'test', 'explain', 'fix', 'determinism', 'view', 'patch', 'skill', 'fmt', or 'profile'.",
       "enum": [
         "check",
         "build",
@@ -27,6 +27,7 @@
         "view",
         "patch",
         "skill",
+        "fmt",
         "profile"
       ]
     },
@@ -262,7 +263,7 @@
             "object",
             "null"
           ],
-          "description": "Always absent in schema version 1; reserved for the repair-plan surface in future versions.",
+          "description": "The repair the compiler recorded for this diagnostic: the edits that fix it, which `miri fix` applies. Absent when the diagnostic has none.",
           "$ref": "#/$defs/JsonRepair"
         },
         "related": {

@@ -1,4 +1,4 @@
-# version: 5
+# version: 6
 
 # The Miri language grammar, over the token stream the lexer produces.
 #
@@ -39,7 +39,8 @@ declaration_kind <- use_declaration / function_declaration / class_declaration /
 
 use_declaration <- USE use_path (AS IDENT)? STMT_END
 use_path <- use_segment (DOT use_segment)* (DOT use_group)?
-use_group <- L_BRACE use_segment (COMMA use_segment)* R_BRACE
+use_group <- L_BRACE use_group_item (COMMA use_group_item)* R_BRACE
+use_group_item <- use_segment (AS IDENT)?
 use_segment <- IDENT / SYSTEM / GPU / LOCAL / TYPE / DEFAULT
 
 function_declaration <- FN function_name generic_parameters? L_PAREN parameter_list? R_PAREN type_expression? function_tail
