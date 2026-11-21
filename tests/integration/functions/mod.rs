@@ -13,6 +13,7 @@ pub mod large_frames;
 pub mod main_return;
 pub mod named_arguments;
 pub mod nested;
+pub mod out_function_values;
 pub mod parameter_guards;
 pub mod recursive;
 pub mod stack_overflow;

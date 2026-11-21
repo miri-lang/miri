@@ -691,7 +691,14 @@ impl TypeChecker {
             // agrees only with the same scalar, as a type argument does: a
             // `fn(x i32) i32` called as a `fn(x int) int` would truncate
             // every argument and result to 32 bits.
+            // An `out` parameter is handed the address of the caller's slot,
+            // any other the value, so two parameters agree only when both are
+            // `out` or neither is: a `fn(acc out int)` called as a `fn(int)`
+            // would read an `int` as an address.
             for (p1, p2) in f1.params.iter().zip(f2.params.iter()) {
+                if p1.is_out != p2.is_out {
+                    return Some(false);
+                }
                 let t1 = self
                     .extract_type_from_expression(&p1.typ)
                     .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));

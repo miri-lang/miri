@@ -106,6 +106,13 @@ impl TypeChecker {
                  outside its range"
             );
         }
+        if takes_out_where_a_value_is_expected(expected, found) {
+            return format!(
+                "a function value takes each parameter as its type `{expected_text}` declares, \
+                 and a function type cannot declare `out`: pass a function that takes the \
+                 value as a plain parameter and returns the new one"
+            );
+        }
         if let TypeKind::Option(inner) = &found.kind {
             if spelled(inner) == expected_text {
                 return format!(
@@ -329,4 +336,18 @@ fn binds_tighter_than_a_cast(value: &Expression) -> bool {
         | ExpressionKind::Block(..)
         | ExpressionKind::Cast(..) => false,
     }
+}
+
+/// Whether `found` is a function taking some parameter `out` where
+/// `expected`, a function type of the same arity, takes it as a value: a
+/// mismatch no change to the declared type can repair, since a function type
+/// cannot spell `out`.
+fn takes_out_where_a_value_is_expected(expected: &Type, found: &Type) -> bool {
+    let (TypeKind::Function(expected), TypeKind::Function(found)) = (&expected.kind, &found.kind)
+    else {
+        return false;
+    };
+    expected.params.len() == found.params.len()
+        && (expected.params.iter().zip(&found.params))
+            .any(|(wanted, given)| given.is_out && !wanted.is_out)
 }

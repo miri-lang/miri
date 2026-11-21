@@ -146,7 +146,10 @@ fn spelled_function(function: &crate::ast::types::FunctionTypeData) -> String {
     let parameters: Vec<String> = function
         .params
         .iter()
-        .map(|parameter| spelled_argument(&parameter.typ))
+        .map(|parameter| {
+            let mode = if parameter.is_out { "out " } else { "" };
+            format!("{mode}{}", spelled_argument(&parameter.typ))
+        })
         .collect();
     let result = function
         .return_type
