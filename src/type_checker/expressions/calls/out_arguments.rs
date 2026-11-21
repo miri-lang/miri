@@ -96,11 +96,11 @@ impl TypeChecker {
 
     /// Refuses each place a call takes that a value it lends beside it holds:
     /// another argument, or `receiver`, the value a method call is made on,
-    /// naming the place's root or a path toward the place. Two elements of
-    /// one collection cannot be proved different, so a path through
-    /// `v[j]` toward `v[i].conn` holds it. The callee would read the place
-    /// through that value while it writes it, so the call lends a value
-    /// containing a place it writes, which is refused.
+    /// naming the place's root or a path toward the place, or the place
+    /// itself. Two elements of one collection cannot be proved different, so
+    /// a path through `v[j]` toward `v[i].conn` holds it. The callee would
+    /// read the place through that value while it writes it, so the call
+    /// lends a value containing a place it writes, which is refused.
     pub(super) fn refuse_lent_holders(
         &mut self,
         places: &CallPlaces<'_>,
@@ -114,7 +114,10 @@ impl TypeChecker {
             .chain(arguments)
         };
         for (param_name, taken) in &places.taken {
-            if let Some(holder) = lent().find(|(value, _)| holds_place(value, taken)) {
+            let holder = lent().find_map(|(value, lent_as)| {
+                holding(value, taken).map(|holding| (value, lent_as, holding))
+            });
+            if let Some(holder) = holder {
                 self.refuse_lent_holder(param_name, taken, holder);
             }
         }
@@ -126,7 +129,7 @@ impl TypeChecker {
         &mut self,
         param_name: &str,
         taken: &Expression,
-        (holder, lent_as): (&Expression, Lent),
+        (holder, lent_as, holding): (&Expression, Lent, Holding),
     ) {
         let place = spelled_argument(taken);
         let holder_spelled = spelled_argument(holder);
@@ -134,10 +137,13 @@ impl TypeChecker {
             Lent::Argument => format!("the call also lends '{holder_spelled}'"),
             Lent::Receiver => format!("the call is made on '{holder_spelled}'"),
         };
+        let (relation, help) = match holding {
+            Holding::Encloses => ("a value holding that place", copied_in_and_out_help(&place)),
+            Holding::Same => ("the same place", lent_copy_help(&place)),
+        };
         let message = format!(
-            "'out' parameter '{param_name}' is handed '{place}', and {lends}, a value holding that place: a call may not lend a value containing a place it writes"
+            "'out' parameter '{param_name}' is handed '{place}', and {lends}, {relation}: a call may not lend a value containing a place it writes"
         );
-        let help = copied_in_and_out_help(&place);
         self.report_error_with_help(
             DiagnosticCode::TypOutParameterMisuse,
             message,
@@ -260,31 +266,49 @@ enum Lent {
     Receiver,
 }
 
-/// Whether the value `lent` names holds the place `taken`, a field or an
-/// element: both start at one binding, and `lent` is a path toward `taken`,
-/// field for field, any element standing for any other since two indexes
-/// cannot be proved different.
-///
-/// A whole binding taken `out` beside itself lent (`f(x, x)`) is not
-/// refused: the lent argument is a copy made before the call, which sees the
-/// value the binding held before it.
-fn holds_place(lent: &Expression, taken: &Expression) -> bool {
+/// How a value a call lends holds a place the same call takes.
+#[derive(Clone, Copy)]
+enum Holding {
+    /// The value encloses the place: a binding or a path toward it.
+    Encloses,
+    /// The value is the place itself, reached by the same fields and no
+    /// element (`f(a, a)`, `f(p.n, p.n)`).
+    Same,
+}
+
+/// Whether, and how, the value `lent` names holds the place `taken`: both
+/// start at one binding, and `lent` is a path toward `taken`, field for
+/// field, any element standing for any other since two indexes cannot be
+/// proved different. A path of the same length holds the place only when it
+/// is the same place for certain, through fields alone: two elements of one
+/// collection (`f(v[i], v[j])`) are siblings, and the lent one sees the
+/// value from before the call.
+fn holding(lent: &Expression, taken: &Expression) -> Option<Holding> {
     let (lent_root, lent_links) = path_links(lent);
     let (taken_root, taken_links) = path_links(taken);
     let same_root = matches!(
         (&lent_root.node, &taken_root.node),
         (ExpressionKind::Identifier(a, _), ExpressionKind::Identifier(b, _)) if a == b
     );
-    if !same_root {
-        return false;
+    let toward = (lent_links.iter().zip(&taken_links)).all(|pair| match pair {
+        (PathLink::Member(_, a, _), PathLink::Member(_, b, _)) => a.node == b.node,
+        (PathLink::Index(..), PathLink::Index(..)) => true,
+        (PathLink::Member(..), PathLink::Index(..))
+        | (PathLink::Index(..), PathLink::Member(..)) => false,
+    });
+    if !same_root || !toward {
+        return None;
     }
-    lent_links.len() < taken_links.len()
-        && (lent_links.iter().zip(&taken_links)).all(|pair| match pair {
-            (PathLink::Member(_, a, _), PathLink::Member(_, b, _)) => a.node == b.node,
-            (PathLink::Index(..), PathLink::Index(..)) => true,
-            (PathLink::Member(..), PathLink::Index(..))
-            | (PathLink::Index(..), PathLink::Member(..)) => false,
-        })
+    let through_fields = || {
+        !taken_links
+            .iter()
+            .any(|link| matches!(link, PathLink::Index(..)))
+    };
+    match lent_links.len().cmp(&taken_links.len()) {
+        std::cmp::Ordering::Less => Some(Holding::Encloses),
+        std::cmp::Ordering::Equal if through_fields() => Some(Holding::Same),
+        std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => None,
+    }
 }
 
 /// The refusal of `arg`, which is no binding and no path from one, handed to
@@ -435,6 +459,14 @@ fn copied_in_and_out_help(place: &str) -> String {
     format!(
         "copy it into a 'var', pass that and store it back: 'var value = {place}', pass 'value', then '{place} = value'"
     )
+}
+
+/// The repair for a place lent beside itself taken `out`: pass it once, and
+/// lend what the call reads from it as a value of its own, made before the
+/// call. A copy of a resource cannot be made, so its own spelling reads what
+/// is needed rather than copying the whole value.
+fn lent_copy_help(place: &str) -> String {
+    format!("pass '{place}' once, and read what the other argument needs from it before the call: for a value, 'let before = {place}', then pass 'before' where '{place}' is lent")
 }
 
 /// `arg` as the program writes it: a binding or a path from one, or a path

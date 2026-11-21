@@ -964,3 +964,105 @@ fn main()
         "closed 2\n60 77\nclosed 77\nclosed 60",
     );
 }
+
+const SAME_PLACE: &str = r#"
+use system.io
+use system.collections.list
+
+class Point
+    var n int
+
+class Counter
+    var n int
+
+    fn absorb(other out Counter)
+        other = Counter(n: other.n + self.n)
+
+fn add(x out int, y int)
+    x = x + y
+"#;
+
+fn with_same_place(program: &str) -> String {
+    format!("{SAME_PLACE}\n{program}")
+}
+
+#[test]
+fn a_variable_taken_out_beside_itself_lent_names_the_copy_first_repair() {
+    assert_refused_exactly(
+        &with_same_place(
+            r#"
+fn main()
+    var a = 1
+    add(a, a)
+"#,
+        ),
+        "MER_TYP_066",
+        "'out' parameter 'x' is handed 'a', and the call also lends 'a', the same place: a call may not lend a value containing a place it writes",
+        "pass 'a' once, and read what the other argument needs from it before the call: for a value, 'let before = a', then pass 'before' where 'a' is lent",
+    );
+}
+
+#[test]
+fn a_variable_lent_as_a_copy_under_its_own_name_runs() {
+    assert_runs_with_output(
+        &with_same_place(
+            r#"
+fn main()
+    var a = 1
+    let before = a
+    add(a, before)
+    println(f"{a}")
+"#,
+        ),
+        "2",
+    );
+}
+
+#[test]
+fn a_field_taken_out_beside_itself_lent_is_refused() {
+    assert_refused_exactly(
+        &with_same_place(
+            r#"
+fn main()
+    var p = Point(n: 1)
+    add(p.n, p.n)
+"#,
+        ),
+        "MER_TYP_066",
+        "'out' parameter 'x' is handed 'p.n', and the call also lends 'p.n', the same place: a call may not lend a value containing a place it writes",
+        "pass 'p.n' once, and read what the other argument needs from it before the call: for a value, 'let before = p.n', then pass 'before' where 'p.n' is lent",
+    );
+}
+
+#[test]
+fn a_variable_taken_out_by_a_method_called_on_it_is_refused() {
+    assert_refused_exactly(
+        &with_same_place(
+            r#"
+fn main()
+    var c = Counter(n: 1)
+    c.absorb(c)
+"#,
+        ),
+        "MER_TYP_066",
+        "'out' parameter 'other' is handed 'c', and the call is made on 'c', the same place: a call may not lend a value containing a place it writes",
+        "pass 'c' once, and read what the other argument needs from it before the call: for a value, 'let before = c', then pass 'before' where 'c' is lent",
+    );
+}
+
+#[test]
+fn two_elements_of_one_list_one_taken_out_still_run_with_the_pre_call_value() {
+    assert_runs_with_output(
+        &with_same_place(
+            r#"
+fn main()
+    var v = List([1, 10])
+    var i = 0
+    add(v[i], v[i])
+    add(v[0], v[1])
+    println(f"{v[0]} {v[1]}")
+"#,
+        ),
+        "12 10",
+    );
+}

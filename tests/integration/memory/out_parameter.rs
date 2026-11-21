@@ -75,14 +75,12 @@ swap(x, x)
     );
 }
 
-// ─────────────────────────────────────────────────────
-// mixed: first param regular, second out — duplicate only
-// for the out params, not the regular param
-// ─────────────────────────────────────────────────────
+// A variable lent beside itself taken `out` is the place the call writes,
+// so the call is refused rather than handing the callee a stale copy.
 
 #[test]
-fn test_out_param_duplicate_only_out_params_tracked() {
-    assert_type_checks(
+fn a_variable_taken_out_beside_itself_lent_is_refused_as_the_same_place() {
+    assert_compiler_error(
         r#"
 fn update(a int, b out int)
     b = a + b
@@ -90,6 +88,24 @@ fn update(a int, b out int)
 var x = 1
 update(x, x)
 "#,
+        "and the call also lends 'x', the same place",
+    );
+}
+
+#[test]
+fn a_named_argument_lending_the_out_variable_itself_is_refused() {
+    assert_compiler_error(
+        r#"
+use system.collections.list
+
+fn bump(xs out [int], ys [int])
+    xs.push(ys[0])
+
+fn main()
+    var a = List([1, 2, 3])
+    bump(ys: a, xs: a)
+"#,
+        "and the call also lends 'a', the same place",
     );
 }
 
@@ -156,13 +172,12 @@ let x = c
     );
 }
 
-// A call writes its `out` arguments when it runs, after every argument is
-// evaluated, so another argument of the same call that names the variable
-// keeps the value it had before the call, whichever side of the `out`
-// argument it is written on.
+// A copy of the variable, made before the call and lent beside its `out`
+// argument, keeps the value the variable had before the call, whichever
+// side of the `out` argument it is written on.
 
 #[test]
-fn a_list_lent_after_its_own_out_argument_keeps_its_old_value() {
+fn a_list_copied_before_its_own_out_argument_keeps_its_old_value() {
     assert_heap_guard_output(
         r#"
 use system.io
@@ -174,7 +189,8 @@ fn bump(xs out [int], ys [int])
 
 fn main()
     var a = List([1, 2, 3])
-    bump(a, a)
+    let before = a
+    bump(a, before)
     println(f"a is {a.length()}")
 "#,
         "ys sees 3\na is 4",
@@ -182,7 +198,7 @@ fn main()
 }
 
 #[test]
-fn a_struct_lent_after_its_own_out_argument_keeps_its_old_fields() {
+fn a_struct_copied_before_its_own_out_argument_keeps_its_old_fields() {
     assert_heap_guard_output(
         r#"
 use system.io
@@ -199,7 +215,8 @@ fn rename(r out Rec, s Rec)
 
 fn main()
     var a = Rec(name: "old", tags: List<String>())
-    rename(a, a)
+    let before = a
+    rename(a, before)
     println(f"{a.name} {a.tags.length()}")
 "#,
         "old 0\nnew 1",
@@ -250,7 +267,7 @@ fn main()
 }
 
 #[test]
-fn a_named_argument_naming_the_out_variable_keeps_its_old_value() {
+fn a_named_argument_lending_a_copy_of_the_out_variable_keeps_its_old_value() {
     assert_heap_guard_output(
         r#"
 use system.io
@@ -262,8 +279,10 @@ fn bump(xs out [int], ys [int])
 
 fn main()
     var a = List([1, 2, 3])
-    bump(ys: a, xs: a)
-    bump(xs: a, ys: a)
+    let first = a
+    bump(ys: first, xs: a)
+    let second = a
+    bump(xs: a, ys: second)
     println(f"a is {a.length()}")
 "#,
         "ys sees 3\nys sees 4\na is 5",

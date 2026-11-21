@@ -30,10 +30,11 @@ fn main()
     );
 }
 
-/// `set(v, v)`: the callee writes `v` through its `out` parameter before it
-/// reads the value argument, which must still hold the old bytes.
+/// `set(v, before)` with `before` a copy of `v`: the callee writes `v`
+/// through its `out` parameter before it reads the copy, which must still
+/// hold the old bytes.
 #[test]
-fn a_value_passed_beside_itself_as_out_reads_the_old_bytes() {
+fn a_value_copied_before_its_own_out_argument_reads_the_old_bytes() {
     assert_runs_with_output(
         r#"
 struct V
@@ -46,7 +47,8 @@ fn set(o out V, a V)
 
 fn main()
     var v = V(x: 1.0, y: 2.0)
-    set(v, v)
+    let before = v
+    set(v, before)
     println(f"{v.x} {v.y}")
 "#,
         "11.0 2.0",
@@ -194,10 +196,11 @@ fn main()
     );
 }
 
-/// `setin(w, w)` on a value holding a value, an optional and an `int`: the
-/// callee writes `w.i` through its `out` parameter before reading `w.i.a`.
+/// `setin(w, before)` with `before` a copy of `w`, a value holding a value,
+/// an optional and an `int`: the callee writes `w.i` through its `out`
+/// parameter before reading the copy's `i.a`.
 #[test]
-fn a_nested_value_passed_beside_itself_as_out_reads_the_old_bytes() {
+fn a_nested_value_copied_before_its_own_out_argument_reads_the_old_bytes() {
     assert_runs_with_output(
         r#"
 struct In
@@ -221,7 +224,8 @@ fn main()
     w = flip(w)
     println(f"{w.i.a} {w.i.b} {w.k}")
     w.i = In(a: w.i.b, b: w.i.a)
-    setin(w, w)
+    let before = w
+    setin(w, before)
     println(f"{w.i.a} {w.k}")
 "#,
         "2.0 1.0 1\n9.0 2",

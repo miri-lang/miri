@@ -374,7 +374,7 @@ fn main()
     let o = replace(c, c)
 "#,
     );
-    assert_compiler_error(program, "MER_OWN_003");
+    assert_compiler_error(program, "MER_TYP_066");
     assert_compiler_error(program, "pass 'c' once");
 }
 

@@ -196,7 +196,7 @@ fn a_field_of_a_call_result_is_held_when_a_later_operand_runs_a_call() {
 
 #[test]
 fn an_out_argument_itself_is_never_held() {
-    let main = "    var n = 1\n    let r = give(n, n)\n";
+    let main = "    var v = List([1, 2])\n    let r = give(v[0], v[1])\n";
     assert_eq!(held_in_main(main), [true, false]);
 }
 

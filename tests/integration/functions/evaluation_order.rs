@@ -48,7 +48,7 @@ fn main()
 }
 
 #[test]
-fn an_argument_passed_again_as_the_same_calls_out_argument_keeps_its_value() {
+fn a_copy_lent_beside_the_calls_out_argument_keeps_its_value() {
     assert_runs_with_output(
         &program(
             r#"
@@ -58,7 +58,8 @@ fn g(a List<int>, b out List<int>) int
 
 fn main()
     var n = List([1])
-    println(f"<{g(n, n)}>")
+    let before = n
+    println(f"<{g(before, n)}>")
 "#,
         ),
         "<1>",
