@@ -50,7 +50,10 @@ use super::generic_method_calls::{generic_method_symbol, GenericMethodSite};
 use super::kept_parameters::{
     hand_over_kept_arguments, release_after_kept_call, value_call_convention, HandedOver, KeptCall,
 };
-use super::method_dispatch::{residency_specialize_call, with_mutated_receiver};
+use super::method_dispatch::{
+    residency_specialize_call, static_method_call_args, with_mutated_receiver,
+};
+use super::out_places::{Restores, TakenArguments};
 use super::runtime_writes::{self, RuntimeCallee};
 use super::sequencing::lower_operand;
 use super::written_receiver::{PendingReceiver, Receiver};
@@ -291,12 +294,7 @@ fn lower_static_method_impl(
         info: method_info,
     } = site;
     let arg_watermark = ctx.body.local_decls.len();
-    let param_names: Vec<&str> = method_info
-        .params
-        .iter()
-        .map(|(name, _)| name.as_str())
-        .collect();
-    let mut arg_ops = lower_args_by_name(ctx, args, &param_names, *span)?;
+    let (mut arg_ops, restores) = static_method_call_args(ctx, args, method_info, *span)?;
     push_allocator_arg(ctx, &mut arg_ops);
 
     let return_ty = ctx
@@ -346,6 +344,7 @@ fn lower_static_method_impl(
         destination,
         *span,
     );
+    restores.store_back(ctx)?;
     release_after_kept_call(ctx, &call, &arg_locals, &handed, *span);
     Ok(Some(result_op))
 }
@@ -480,7 +479,11 @@ fn lower_aliased_function_call(
         callee_id: signature_id,
         span: *span,
     };
-    let mut arg_ops = lower_call_arguments(ctx, call, call_expr_id, args, &func_op)?;
+    let outs = OutParameters::of(ctx, signature_id);
+    let CallArguments {
+        operands: mut arg_ops,
+        restores,
+    } = lower_call_arguments(ctx, call, (call_expr_id, &outs), args, &func_op)?;
     if callee_takes_allocator(ctx, callee) {
         push_allocator_arg(ctx, &mut arg_ops);
     }
@@ -494,10 +497,11 @@ fn lower_aliased_function_call(
     let at = (arg_watermark, destination.local);
     let named = (callee, signature_id);
     let call = KeptCall::of(ctx.type_checker, named, &func_op, None, args, at)?;
-    let mut arg_modes = Vec::new();
+    let mut arg_modes = outs.arg_modes(arg_ops.len());
     let handed = hand_over_kept_arguments(ctx, &call, &mut arg_ops, &mut arg_modes)?;
 
-    let arg_locals = operand_locals(&arg_ops);
+    let mut arg_locals = operand_locals(&arg_ops);
+    arg_locals.extend_from_slice(restores.pre_call_reads());
 
     emit_call_terminator(
         ctx,
@@ -508,6 +512,7 @@ fn lower_aliased_function_call(
         destination,
         *span,
     );
+    restores.store_back(ctx)?;
     end_direct_call(ctx, (callee, *span), &call, &arg_locals, &handed);
     Ok(Some(result_op))
 }
@@ -521,10 +526,10 @@ fn lower_aliased_function_call(
 fn lower_call_arguments(
     ctx: &mut LoweringContext,
     call: CallSite,
-    call_expr_id: usize,
+    (call_expr_id, outs): (usize, &OutParameters),
     args: &[Expression],
     func: &Operand,
-) -> Result<Vec<Operand>, LoweringError> {
+) -> Result<CallArguments, LoweringError> {
     let CallSite { callee_id, .. } = call;
     let is_generic_call = ctx
         .type_checker
@@ -546,39 +551,37 @@ fn lower_call_arguments(
     };
     let param_names = callee_parameter_names(ctx, callee_id);
     let callee = RuntimeCallee::of(func, &targets);
-    let (mut arg_slots, written) =
-        lower_and_coerce_args(ctx, args, &targets, &param_names, callee)?;
+    let parameters = DeclaredParameters {
+        types: &targets,
+        names: &param_names,
+        outs,
+    };
+    let LoweredArguments {
+        slots: mut arg_slots,
+        written,
+        mut taken,
+    } = lower_and_coerce_args(ctx, args, parameters, callee)?;
     let callee_params = CalleeParameters {
         params: param_types.as_deref().unwrap_or_default(),
         types: &targets,
         subs: callee_subs,
     };
-    fill_default_args(ctx, &mut arg_slots, callee_params, call)?;
+    fill_default_args(ctx, &mut arg_slots, callee_params, (call, &mut taken))?;
     for argument in written {
         let op = argument.pending.make_own(ctx)?;
         let op = coerce_written_arg(ctx, op, argument.value, targets.get(argument.position));
         place_at_parameter(&mut arg_slots, argument.position, op);
     }
-    operands_in_parameter_order(arg_slots, call.span)
+    let restores = taken.make_own(ctx, &mut arg_slots)?;
+    let operands = operands_in_parameter_order(arg_slots, call.span)?;
+    Ok(CallArguments { operands, restores })
 }
 
-/// Lower call arguments with plain expression lowering (no coercion), each
-/// in the order it is written and passed at the parameter it binds: a named
-/// argument at the parameter of `param_names` it names, every other at its
-/// position.
-fn lower_args_by_name(
-    ctx: &mut LoweringContext,
-    args: &[Expression],
-    param_names: &[&str],
-    span: Span,
-) -> Result<Vec<Operand>, LoweringError> {
-    let mut slots = Vec::with_capacity(args.len());
-    for (position, value) in crate::ast::expression::bind_arguments_to_parameters(args, param_names)
-    {
-        let op = lower_operand(ctx, value)?;
-        place_at_parameter(&mut slots, position, op);
-    }
-    operands_in_parameter_order(slots, span)
+/// A call's argument operands in parameter order, and what it leaves to
+/// store back into the fields and elements it took `out` once it returns.
+struct CallArguments {
+    operands: Vec<Operand>,
+    restores: Restores,
 }
 
 /// Append the implicit `allocator` argument unless it is already present.
@@ -1595,15 +1598,9 @@ fn lower_direct_call(
     apply_generic_mangling(ctx, callee, call_expr_id, &mut func_op)?;
 
     let arg_watermark = ctx.body.local_decls.len();
-    let call = CallSite {
-        callee_id: func.id,
-        span: *span,
-    };
-    let mut arg_ops = lower_call_arguments(ctx, call, call_expr_id, args, &func_op)?;
-
-    inject_allocator_arg(ctx, callee, &func_op, &mut arg_ops);
-    let slot_call = SlotCall::at(call_expr_id, arg_watermark);
-    adapt_runtime_slot_closures(ctx, slot_call, &func_op, &mut arg_ops)?;
+    let outs = OutParameters::of(ctx, callee.id);
+    let (mut arg_ops, restores) =
+        lower_direct_call_arguments(ctx, (func, *span, call_expr_id), (args, &outs), &func_op)?;
 
     // Per-residency device-handle Call-ABI: when a gpu-resident buffer is passed
     // to a `GpuLaunchSafe` callee, retarget the call to a residency-specialized
@@ -1628,14 +1625,15 @@ fn lower_direct_call(
     // call reads it off the declaration too: the instance's body takes those
     // parameters by address, and a call that passed them by value would hand
     // it a value to write through.
-    let mut arg_modes = build_arg_modes(&resolve_param_types(ctx, callee.id), &arg_ops);
+    let mut arg_modes = outs.arg_modes(arg_ops.len());
     let at = (arg_watermark, destination.local);
     let convention = value_call_convention(ctx, callee, &func_op);
     let named = (callee, callee.id);
     let call = KeptCall::of(tc, named, &func_op, convention.as_deref(), args, at)?;
     let handed = hand_over_kept_arguments(ctx, &call, &mut arg_ops, &mut arg_modes)?;
 
-    let arg_locals = operand_locals(&arg_ops);
+    let mut arg_locals = operand_locals(&arg_ops);
+    arg_locals.extend_from_slice(restores.pre_call_reads());
 
     emit_call_terminator(
         ctx,
@@ -1646,6 +1644,7 @@ fn lower_direct_call(
         destination.clone(),
         *span,
     );
+    restores.store_back(ctx)?;
     end_direct_call(ctx, (callee, *span), &call, &arg_locals, &handed);
     release_called_value(
         ctx,
@@ -1672,6 +1671,31 @@ fn release_called_value(
     if place.local != destination {
         ctx.emit_temp_drop(place.local, watermark, span);
     }
+}
+
+/// The operands a direct call through `func`, lowered to `func_op`, passes:
+/// its arguments ([`lower_call_arguments`]), the allocator when the callee
+/// takes one, and each closure a runtime entry point is handed adapted to
+/// the slot it fills; beside them, the scalars to copy back once it returns.
+fn lower_direct_call_arguments(
+    ctx: &mut LoweringContext,
+    (func, span, call_expr_id): (&Expression, Span, usize),
+    (args, outs): (&[Expression], &OutParameters),
+    func_op: &Operand,
+) -> Result<(Vec<Operand>, Restores), LoweringError> {
+    let arg_watermark = ctx.body.local_decls.len();
+    let call = CallSite {
+        callee_id: func.id,
+        span,
+    };
+    let CallArguments {
+        operands: mut arg_ops,
+        restores,
+    } = lower_call_arguments(ctx, call, (call_expr_id, outs), args, func_op)?;
+    inject_allocator_arg(ctx, callee_name_expression(func), func_op, &mut arg_ops);
+    let slot_call = SlotCall::at(call_expr_id, arg_watermark);
+    adapt_runtime_slot_closures(ctx, slot_call, func_op, &mut arg_ops)?;
+    Ok((arg_ops, restores))
 }
 
 /// Emit a `Call` terminator to `destination` and advance to its successor block.
@@ -1714,19 +1738,6 @@ pub(crate) fn emit_call_terminator(
         span,
     ));
     ctx.set_current_block(target_bb);
-}
-
-/// Build the per-argument [`ArgMode`] list for a direct call.
-fn build_arg_modes(
-    param_types: &Option<Vec<crate::ast::common::Parameter>>,
-    arg_ops: &[Operand],
-) -> Vec<ArgMode> {
-    match param_types {
-        Some(params) => (0..arg_ops.len())
-            .map(|i| ArgMode::from_out_flag(params.get(i).is_some_and(|p| p.is_out)))
-            .collect(),
-        None => Vec::new(),
-    }
 }
 
 /// The local each of `operands` reads, in order, for the ones reading a
@@ -2090,17 +2101,29 @@ pub(super) fn operands_in_parameter_order(
 /// An argument the callee writes in place is lowered up to its check and
 /// returned beside the slots, its slot holding a placeholder, for the caller
 /// to make the call's own once every other argument is lowered.
+///
+/// A field or an element handed to an `out` parameter is lowered up to the
+/// call the same way ([`TakenArguments::take`]), its slot left empty, and
+/// made the call's own after every written argument.
 fn lower_and_coerce_args<'e>(
     ctx: &mut LoweringContext,
     args: &'e [Expression],
-    targets: &[Type],
-    param_names: &[String],
+    parameters: DeclaredParameters<'_>,
     callee: Option<RuntimeCallee<'_>>,
-) -> Result<(Vec<Option<Operand>>, Vec<WrittenArgument<'e>>), LoweringError> {
+) -> Result<LoweredArguments<'e>, LoweringError> {
+    let DeclaredParameters {
+        types: targets,
+        names: param_names,
+        outs,
+    } = parameters;
     let names: Vec<&str> = param_names.iter().map(String::as_str).collect();
     let mut slots = Vec::with_capacity(args.len());
     let mut written = Vec::new();
+    let mut taken = TakenArguments::default();
     for (position, value) in crate::ast::expression::bind_arguments_to_parameters(args, &names) {
+        if taken.take(ctx, (position, outs.is_out(position)), value)? {
+            continue;
+        }
         let watermark = ctx.body.local_decls.len();
         let op = match runtime_writes::lower_call_argument(ctx, callee, position, value)? {
             runtime_writes::CallArgument::Lowered(op) => super::sequencing::hold(ctx, op, value),
@@ -2120,7 +2143,60 @@ fn lower_and_coerce_args<'e>(
         };
         place_at_parameter(&mut slots, position, op);
     }
-    Ok((slots, written))
+    Ok(LoweredArguments {
+        slots,
+        written,
+        taken,
+    })
+}
+
+/// The parameters a call's arguments bind, as the callee declares them: the
+/// type each is passed at, its name, and which are `out`.
+#[derive(Clone, Copy)]
+struct DeclaredParameters<'p> {
+    types: &'p [Type],
+    names: &'p [String],
+    outs: &'p OutParameters,
+}
+
+/// A call's written arguments, lowered: each at the parameter it binds, and
+/// those still to be made the call's own right before it.
+struct LoweredArguments<'e> {
+    slots: Vec<Option<Operand>>,
+    written: Vec<WrittenArgument<'e>>,
+    taken: TakenArguments,
+}
+
+/// Which parameters of a call's callee are `out`, read once off its
+/// declaration: what the call takes in place, and the mode each of its
+/// operands is passed in.
+struct OutParameters(Option<Vec<bool>>);
+
+impl OutParameters {
+    /// The `out` parameters of the function the expression `declared_id`
+    /// names, as declared rather than instantiated: an instance's body takes
+    /// those parameters by address whatever its type arguments.
+    fn of(ctx: &LoweringContext, declared_id: usize) -> Self {
+        let params = resolve_param_types(ctx, declared_id);
+        Self(params.map(|params| params.iter().map(|param| param.is_out).collect()))
+    }
+
+    /// Whether the parameter at `position` is `out`.
+    fn is_out(&self, position: usize) -> bool {
+        (self.0.as_ref()).is_some_and(|outs| outs.get(position).copied().unwrap_or(false))
+    }
+
+    /// The mode each of `operand_count` operands is passed in: `out` at an
+    /// `out` parameter, lent anywhere else. Empty when the callee's
+    /// parameters are unknown.
+    fn arg_modes(&self, operand_count: usize) -> Vec<ArgMode> {
+        match &self.0 {
+            Some(_) => (0..operand_count)
+                .map(|position| ArgMode::from_out_flag(self.is_out(position)))
+                .collect(),
+            None => Vec::new(),
+        }
+    }
 }
 
 /// An argument a runtime entry point writes in place, lowered up to its
@@ -2180,6 +2256,13 @@ pub(super) fn coerce_arg_to_declared(
     Operand::Copy(Place::new(temp))
 }
 
+/// The arguments a call binds the parameters ahead of a default to: each
+/// slot filled so far, and the fields and elements the call takes `out`.
+struct EarlierArguments<'a> {
+    slots: &'a mut [Option<Operand>],
+    taken: &'a mut TakenArguments,
+}
+
 /// Supply the default of every parameter no written argument bound. A named
 /// argument may skip over a defaulted parameter, so the gap can sit anywhere,
 /// not only after the last written argument.
@@ -2191,21 +2274,26 @@ fn fill_default_args(
     ctx: &mut LoweringContext,
     slots: &mut Vec<Option<Operand>>,
     callee: CalleeParameters<'_>,
-    call: CallSite,
+    (call, taken): (CallSite, &mut TakenArguments),
 ) -> Result<(), LoweringError> {
     for (position, param) in callee.params.iter().enumerate() {
-        if slots.get(position).is_some_and(Option::is_some) {
+        if slots.get(position).is_some_and(Option::is_some) || taken.holds(position) {
             continue;
         }
         if let Some(default_expr) = &param.default_value {
+            let reads_mark = taken.read_count();
+            let earlier = EarlierArguments { slots, taken };
             let scope =
-                earlier_parameter_scope(ctx, &callee, position, slots, default_expr, call.span)?;
+                earlier_parameter_scope(ctx, &callee, position, earlier, default_expr, call.span)?;
             let caller_scope = std::mem::replace(&mut ctx.variable_map, scope);
             let caller_subs = std::mem::replace(&mut ctx.generic_subs, callee.subs.clone());
             let lowered = lower_default_argument(ctx, default_expr, call);
             ctx.variable_map = caller_scope;
             ctx.generic_subs = caller_subs;
-            place_at_parameter(slots, position, lowered?);
+            let mut lowered = lowered?;
+            let read_at = (reads_mark, callee.types.get(position));
+            taken.release_reads_since(ctx, read_at, (&mut lowered, call.span));
+            place_at_parameter(slots, position, lowered);
         }
     }
     Ok(())
@@ -2222,11 +2310,16 @@ fn fill_default_args(
 /// own is read from there; any other one (a constant, a field) is put in a
 /// temporary first, which the call then passes in its place, so the call and
 /// the default read one value.
+///
+/// An `out` parameter's place is the callee's to write, so a default reading
+/// it reads the value the place holds before the call, held in a temporary of
+/// its own ([`TakenArguments::read_before_call`]), and the call still hands
+/// over the place itself.
 fn earlier_parameter_scope(
     ctx: &mut LoweringContext,
     callee: &CalleeParameters<'_>,
     position: usize,
-    slots: &mut [Option<Operand>],
+    EarlierArguments { slots, taken }: EarlierArguments<'_>,
     default_expr: &Expression,
     span: Span,
 ) -> Result<HashMap<Rc<str>, Local>, LoweringError> {
@@ -2238,33 +2331,60 @@ fn earlier_parameter_scope(
         scope.insert(Rc::from("allocator"), allocator);
     }
     let earlier = callee.params.get(..position).unwrap_or_default();
-    for (position, (param, slot)) in earlier.iter().zip(slots.iter_mut()).enumerate() {
-        let Some(op) = slot.as_mut().filter(|_| read.contains(&param.name)) else {
+    for (position, param) in earlier.iter().enumerate() {
+        if !read.contains(&param.name) {
             continue;
+        }
+        let slot = slots.get_mut(position).and_then(Option::as_mut);
+        if param.is_out {
+            let handed = (position, slot.as_deref());
+            let local = taken.read_before_call(ctx, handed, span)?;
+            scope.insert(Rc::from(param.name.as_str()), local);
+            continue;
+        }
+        let Some(op) = slot else {
+            return Err(LoweringError::internal(
+                DiagnosticCode::MirCustomLoweringError,
+                format!(
+                    "a default reads parameter '{}', to which the call binds no value",
+                    param.name
+                ),
+                span,
+            ));
         };
-        let local = match op {
-            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
-                place.local
-            }
-            _ => {
-                let ty = callee.types.get(position).cloned().ok_or_else(|| {
-                    LoweringError::internal(
-                        DiagnosticCode::MirCustomLoweringError,
-                        format!(
-                            "a default reads parameter '{}', whose declared type the call does not know",
-                            param.name
-                        ),
-                        span,
-                    )
-                })?;
-                let temp = store_operand_temp(ctx, op.clone(), ty, span);
-                *op = Operand::Copy(Place::new(temp));
-                temp
-            }
-        };
+        let declared = (param.name.as_str(), callee.types.get(position));
+        let local = argument_local(ctx, op, declared, span)?;
         scope.insert(Rc::from(param.name.as_str()), local);
     }
     Ok(scope)
+}
+
+/// The local a default reads the argument `op` from, bound to the parameter
+/// `name` the call passes at `declared`: the binding `op` reads, else a
+/// temporary `op` is put in first, which the call then passes in its place.
+fn argument_local(
+    ctx: &mut LoweringContext,
+    op: &mut Operand,
+    (name, declared): (&str, Option<&Type>),
+    span: Span,
+) -> Result<Local, LoweringError> {
+    if let Operand::Copy(place) | Operand::Move(place) = op {
+        if place.projection.is_empty() {
+            return Ok(place.local);
+        }
+    }
+    let ty = declared.cloned().ok_or_else(|| {
+        LoweringError::internal(
+            DiagnosticCode::MirCustomLoweringError,
+            format!(
+                "a default reads parameter '{name}', whose declared type the call does not know"
+            ),
+            span,
+        )
+    })?;
+    let temp = store_operand_temp(ctx, op.clone(), ty, span);
+    *op = Operand::Copy(Place::new(temp));
+    Ok(temp)
 }
 
 /// The parameters of the function a call reaches: as declared, the type the

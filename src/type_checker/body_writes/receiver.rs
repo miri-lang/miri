@@ -502,7 +502,8 @@ impl<'b> BodyFacts<'b> {
     }
 
     /// A mention of the receiver: a write when a closure holds it, when it
-    /// starts an assignment's target, when it is handed to a runtime entry
+    /// starts an assignment's target, when it or a field or element of it is
+    /// handed to an `out` parameter, when it is handed to a runtime entry
     /// point that does not only read it, or when it stands anywhere but a
     /// read; a replacement when it is assigned whole or handed whole to an
     /// `out` parameter; a call to follow when a method is called on it.
@@ -538,13 +539,12 @@ impl<'b> BodyFacts<'b> {
                 index,
                 is_bare,
                 ..
-            }) if is_bare
-                && word == ReceiverWord::Itself
+            }) if word == ReceiverWord::Itself
                 && mention.scope == Scope::Body
                 && (callees.binds_out)(callee, arguments, index) =>
             {
                 self.writes = true;
-                if self.replaced_at.is_none() {
+                if is_bare && self.replaced_at.is_none() {
                     self.replaced_at = Some(mention.expression.span);
                 }
             }

@@ -300,6 +300,12 @@ fn thunk_context<'a>(
 
     let mut body = Body::new(1 + func_data.params.len(), span, ExecutionModel::Cpu);
     body.new_local(LocalDecl::new(ret_ty, span));
+    // An `out` parameter is the caller's place, handed over as a slot the
+    // thunk writes back on return, as the function it forwards to does; the
+    // environment pointer ahead of the parameters is never `out`.
+    body.signature.out_params = std::iter::once(false)
+        .chain(func_data.params.iter().map(|param| param.is_out))
+        .collect();
 
     let mut thunk_ctx = LoweringContext::new(body, ctx.type_checker, ctx.is_release);
     thunk_ctx.read_source_like(ctx);

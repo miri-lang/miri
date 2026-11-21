@@ -2998,44 +2998,6 @@ impl TypeChecker {
         }
     }
 
-    /// Checks if an expression is mutable (can be assigned to).
-    #[allow(clippy::only_used_in_recursion)]
-    pub(crate) fn is_mutable_expression(&self, expr: &Expression, context: &Context) -> bool {
-        match &expr.node {
-            ExpressionKind::Identifier(name, _) => {
-                // 'self' is considered mutable for assignment purposes
-                if name == "self" {
-                    return true;
-                }
-                context.is_mutable(name)
-            }
-            ExpressionKind::Member(obj, prop) => {
-                // For self.field, check field mutability
-                if let ExpressionKind::Identifier(name, _) = &obj.node {
-                    if name == "self" {
-                        if let Some(class_name) = &context.current_class {
-                            if let Some(TypeDefinition::Class(def)) =
-                                self.type_table.global_type_definitions.get(class_name)
-                            {
-                                if let ExpressionKind::Identifier(field_name, _) = &prop.node {
-                                    if let Some((_, field_info)) =
-                                        def.fields.iter().find(|(n, _)| n == field_name)
-                                    {
-                                        return field_info.mutable;
-                                    }
-                                }
-                            }
-                        }
-                        return true;
-                    }
-                }
-                self.is_mutable_expression(obj, context)
-            }
-            ExpressionKind::Index(obj, _) => self.is_mutable_expression(obj, context),
-            _ => false,
-        }
-    }
-
     /// Tries to evaluate a constant integer expression at compile time,
     /// with context for resolving constant identifiers.
     pub(crate) fn try_eval_const_int_with_context(

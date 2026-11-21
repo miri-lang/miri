@@ -30,6 +30,7 @@ use std::ops::Range;
 
 use crate::ast::common::Parameter;
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::place_path::path_root;
 use crate::ast::statement::{Statement, StatementKind};
 
 /// How the spot a binding is mentioned at uses its value.
@@ -207,15 +208,6 @@ pub(crate) fn for_each_member<'s>(statement: &'s Statement, visit: &mut impl FnM
     for member in members {
         for_each_member(member, visit);
     }
-}
-
-/// The expression a path of fields and elements starts at.
-pub(crate) fn path_root(expression: &Expression) -> &Expression {
-    let mut root = expression;
-    while let ExpressionKind::Member(inner, _) | ExpressionKind::Index(inner, _) = &root.node {
-        root = inner;
-    }
-    root
 }
 
 struct Walk<'b> {

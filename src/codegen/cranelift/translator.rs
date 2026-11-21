@@ -999,10 +999,12 @@ impl<'a> FunctionTranslator<'a> {
         )
     }
 
-    /// The address of the value held inline at the projected `place`, outside
-    /// every value local: a value in a class or struct field, a collection
-    /// element, a payload.
-    pub(crate) fn held_place_address(
+    /// The address of the slot the projected `place` names, outside every
+    /// value local: a class or struct field, a collection element. A value
+    /// held as its bytes is held inline there, and any other value is the
+    /// word stored there, so the address is both where such a value is
+    /// built and what an `out` argument naming the place hands the callee.
+    pub(crate) fn slot_address(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         place: &Place,
@@ -1017,6 +1019,12 @@ impl<'a> FunctionTranslator<'a> {
             Self::walk_projection_path(builder, ctx, place, base_addr, locals, type_ctx)?;
         match place.projection.last() {
             Some(PlaceElem::Field(idx)) => {
+                if Self::opens_nullable_pointer(&holder.kind, *idx, type_ctx)? {
+                    return Err(CodegenError::Internal(format!(
+                        "`{place}` is the payload of an optional held as its payload's \
+                         pointer, which has no slot of its own"
+                    )));
+                }
                 let (offset, _) = layout::field_layout(
                     &holder.kind,
                     *idx,
@@ -1031,12 +1039,10 @@ impl<'a> FunctionTranslator<'a> {
                 })?;
                 let index_val = builder.use_var(*index_var);
                 let base = Self::last_collection_base(builder, place, addr, type_ctx);
-                Self::translate_collection_index_read(
-                    builder, ctx, base, index_val, &holder, type_ctx,
-                )
+                Self::collection_slot_address(builder, ctx, base, index_val, &holder, type_ctx)
             }
             Some(PlaceElem::Deref) | None => Err(CodegenError::Internal(format!(
-                "`{place}` reaches no value held inline in a holder"
+                "`{place}` reaches no slot in a holder"
             ))),
         }
     }
@@ -2048,13 +2054,56 @@ impl<'a> FunctionTranslator<'a> {
         base_type: &Type,
         type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i32;
         if let Some(layout) = type_ctx.value_layout(&base_type.kind) {
             let base_value = base.address(base_type)?;
             return Self::read_value_tuple_element(builder, ctx, base_value, idx_val, &layout);
         }
+        let slot = Self::element_slot(builder, ctx, base, idx_val, base_type, type_ctx)?;
+        // Inline element: the projection chain consumes the address directly, so
+        // it stays valid only while the collection holds the slot. A caller that
+        // keeps the element past that has to copy its components out first.
+        if slot.is_inline {
+            return Ok(slot.address);
+        }
+        Ok(builder
+            .ins()
+            .load(slot.word, MemFlagsData::new(), slot.address, 0))
+    }
 
+    /// The address of element `idx_val` of the collection of type
+    /// `base_type` reached at `base`: where the element is held.
+    fn collection_slot_address(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        base: CollectionBase,
+        idx_val: Value,
+        base_type: &Type,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, CodegenError> {
+        if let Some(layout) = type_ctx.value_layout(&base_type.kind) {
+            let base_value = base.address(base_type)?;
+            let (address, _) =
+                Self::value_element_address(builder, ctx, base_value, idx_val, &layout)?;
+            return Ok(address);
+        }
+        let slot = Self::element_slot(builder, ctx, base, idx_val, base_type, type_ctx)?;
+        Ok(slot.address)
+    }
+
+    /// The slot of element `idx_val` of the collection of type `base_type`
+    /// reached at `base`, a collection not itself held as its bytes, checked
+    /// against its length unless `base` carries a proof the index is in
+    /// bounds.
+    fn element_slot(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        base: CollectionBase,
+        idx_val: Value,
+        base_type: &Type,
+        type_ctx: &TypeCtx,
+    ) -> Result<ElementSlot, CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i32;
         // No element type ⇒ assume pointer-sized addressing (managed collections
         // hold pointers; this matches the historical silent fallback but is now
         // explicit at the call site rather than inside the resolver).
@@ -2091,16 +2140,12 @@ impl<'a> FunctionTranslator<'a> {
             data: fields_base,
             len: len_val,
         };
-        let elem_addr = Self::element_address(builder, ctx, base, fields, idx_val, elem_size)?;
-        // Inline element: the projection chain consumes the address directly, so
-        // it stays valid only while the collection holds the slot. A caller that
-        // keeps the element past that has to copy its components out first.
-        if inline.is_some() {
-            return Ok(elem_addr);
-        }
-        Ok(builder
-            .ins()
-            .load(cl_elem_ty, MemFlagsData::new(), elem_addr, 0))
+        let address = Self::element_address(builder, ctx, base, fields, idx_val, elem_size)?;
+        Ok(ElementSlot {
+            address,
+            is_inline: inline.is_some(),
+            word: cl_elem_ty,
+        })
     }
 
     /// Where an index projection at `position` of `place`, reached at
@@ -2620,4 +2665,13 @@ pub(crate) fn declared_element_bytes(kind: &TypeKind, type_ctx: &TypeCtx) -> u32
 pub(crate) fn inline_stride(kind: &TypeKind, type_ctx: &TypeCtx) -> Option<i64> {
     type_ctx.value_layout(kind)?;
     Some(element_layout(kind, type_ctx.layout_scope()).stride)
+}
+
+/// Where one element of a collection is held: its address, whether the
+/// element is held there inline as its bytes, and the word a read loads from
+/// there otherwise.
+struct ElementSlot {
+    address: Value,
+    is_inline: bool,
+    word: cl_types::Type,
 }

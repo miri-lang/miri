@@ -259,3 +259,71 @@ let f = fn()
     ";
     type_checker_error_test(code, "would be lost when the call ends");
 }
+
+const FROZEN: &str = "
+class Frozen
+    var count int
+    let fixed int
+
+    fn init(fixed int)
+        self.fixed = fixed
+        self.count = 0
+
+class Child extends Frozen
+    fn note()
+        self.count = 1
+";
+
+#[test]
+fn a_let_field_is_set_by_its_own_class_init() {
+    type_checker_test(&format!(
+        "{FROZEN}\nvar f = Frozen(fixed: 4)\nf.count = 2\n"
+    ));
+}
+
+#[test]
+fn a_let_field_assigned_from_outside_is_refused() {
+    type_checker_error_test(
+        &format!("{FROZEN}\nvar f = Frozen(fixed: 4)\nf.fixed = 5\n"),
+        "Cannot assign to field 'fixed': its class declares it with 'let'",
+    );
+}
+
+#[test]
+fn an_inherited_let_field_assigned_from_outside_is_refused() {
+    type_checker_error_test(
+        &format!("{FROZEN}\nvar k = Child(fixed: 4)\nk.fixed = 5\n"),
+        "Cannot assign to field 'fixed': its class declares it with 'let'",
+    );
+}
+
+#[test]
+fn an_inherited_let_field_assigned_in_a_subclass_method_is_refused() {
+    let code = "
+class Frozen
+    let fixed int
+
+class Child extends Frozen
+    fn poke()
+        self.fixed = 9
+";
+    type_checker_error_test(
+        code,
+        "Cannot assign to field 'fixed': its class declares it with 'let'",
+    );
+}
+
+#[test]
+fn an_own_let_field_assigned_outside_init_is_refused() {
+    let code = "
+class Frozen
+    let fixed int
+
+    fn poke()
+        self.fixed = 9
+";
+    type_checker_error_test(
+        code,
+        "Cannot assign to field 'fixed': its class declares it with 'let'",
+    );
+}

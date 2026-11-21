@@ -17,7 +17,7 @@ this file on every run. The harness prints it to stdout instead.
 | Task | What it does | Success | Invocations | Bytes read | Bytes written |
 |------|--------------|---------|-------------|------------|---------------|
 | a | build hello world from an empty directory | yes | 2 | 131 | 39 |
-| b | repair a broken program using check, explain and fix | yes | 5 | 2858 | 74 |
+| b | repair a broken program using check, explain and fix | yes | 5 | 3640 | 74 |
 | c | add a function and its test | yes | 4 | 702 | 199 |
 | d | extend a program with a stdlib module | yes | 3 | 1361 | 85 |
 | e | recover from a capability rejection | yes | 5 | 4675 | 118 |
@@ -26,7 +26,7 @@ this file on every run. The harness prints it to stdout instead.
 | h | repair a cascade with one root cause | yes | 4 | 2449 | 232 |
 | i | look up an API and edit through view and patch only | yes | 4 | 1477 | 97 |
 | j | recover from a runtime trap | yes | 5 | 1030 | 233 |
-| l | repair a file with four faults, three of which carry a repair | yes | 8 | 6507 | 1292 |
+| l | repair a file with four faults, three of which carry a repair | yes | 8 | 8158 | 1292 |
 | m | sort a list whose element type has no ordering | yes | 3 | 948 | 679 |
 | n | chain a list transform onto another transform's result | yes | 3 | 1510 | 433 |
 | o | apply the edit a diagnostic already named in its help | yes | 6 | 3186 | 219 |

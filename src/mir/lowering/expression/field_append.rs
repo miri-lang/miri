@@ -16,10 +16,11 @@
 use super::assignment_expr::{
     field_index, field_slot_type, finalize_assign_result, resolve_member_field_index,
 };
-use super::unshare::{lower_written_entry_place, path_root};
+use super::unshare::lower_written_entry_place;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
 use crate::ast::operator::{AssignmentOp, BinaryOp};
+use crate::ast::place_path::path_root;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;

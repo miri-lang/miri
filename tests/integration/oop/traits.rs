@@ -788,7 +788,7 @@ fn main()
     let n = 1
     c.inc(n)
     "#,
-        "expected mutable variable for 'out' parameter",
+        "'out' parameter 'n' is handed 'n', but 'n' is immutable",
     );
 }
 

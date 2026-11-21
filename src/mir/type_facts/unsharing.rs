@@ -12,6 +12,7 @@
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::Body;
 use crate::type_checker::context::TypeDefinition;
+use crate::type_checker::utils::ResourceTypes;
 
 /// How a value on a write's path is made its own before the write.
 pub enum Unsharing {
@@ -57,4 +58,23 @@ pub fn unsharing(body: &Body, ty: &Type) -> Option<Unsharing> {
 /// holding it until one writes it, and copied by that write.
 pub fn is_copied_on_write(body: &Body, ty: &Type) -> bool {
     unsharing(body, ty).is_some()
+}
+
+/// Whether a value of type `ty`, held in `body`, is a class instance that a
+/// second binding shares and that a write through either name changes for
+/// both: one that is no resource (`resources` says which types are) and
+/// that a write does not copy. A resource has one owner, moved on
+/// assignment, and a collection is copied on write, so neither is.
+///
+/// Class instances are shared on assignment today, so a slot inside one may
+/// be reached through another binding while a call writes it.
+pub fn is_shared_on_assignment(body: &Body, ty: &Type, resources: &ResourceTypes) -> bool {
+    let TypeKind::Custom(name, _) = &ty.kind else {
+        return false;
+    };
+    let definition = body.rc_classifier.definitions().get(name.as_str());
+    matches!(definition, Some(TypeDefinition::Class(_)))
+        && body.is_counted(&ty.kind)
+        && !is_copied_on_write(body, ty)
+        && !resources.holds(&ty.kind)
 }

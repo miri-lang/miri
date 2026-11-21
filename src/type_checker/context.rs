@@ -86,6 +86,8 @@ pub struct SymbolInfo {
     /// is a number written in the source, so beside another number it takes
     /// that number's type, as the literal it was written as would.
     pub untyped_constant: bool,
+    /// True if this symbol is the binding a `for` loop gives each element.
+    pub is_loop_binding: bool,
 }
 
 impl SymbolInfo {
@@ -115,6 +117,7 @@ impl SymbolInfo {
             module_scope: false,
             inferred_from: None,
             untyped_constant: false,
+            is_loop_binding: false,
         }
     }
 
@@ -829,6 +832,12 @@ pub struct Context {
 }
 
 impl Context {
+    /// Whether the code being checked runs on a device: a GPU function's
+    /// body, or the body of a `forall`.
+    pub fn is_device_code(&self) -> bool {
+        self.in_gpu_function || self.gpu_for_depth > 0
+    }
+
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],

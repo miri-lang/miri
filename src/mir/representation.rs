@@ -57,6 +57,20 @@ impl Representation {
         }
     }
 
+    /// Whether an `out` argument of this representation may be handed as the
+    /// address of the place holding it, so the callee writes that place in
+    /// place: a counted word, a value held as its bytes, or an optional, each
+    /// of which the place holds at the width the callee reads. A word nothing
+    /// counts may sit in a slot narrower than the word a shared generic body
+    /// reads it as, so it is copied into a slot of its own and back instead.
+    pub fn is_passed_out_by_address(&self) -> bool {
+        match &self.held {
+            Held::Word { is_counted, .. } => *is_counted,
+            Held::Bytes(_) | Held::Optional(_) => true,
+            Held::Nothing => false,
+        }
+    }
+
     /// This representation with reference counting left out: what a body
     /// that only hands values on to the runtime sees. A boxed optional is then
     /// one word like any other pointer.

@@ -190,6 +190,25 @@ impl Terminator {
         destination.into_iter().chain(out_args)
     }
 
+    /// Each field or element this terminator's call takes `out`, with its
+    /// position among the call's arguments ([`taken_places`]).
+    pub fn taken_places(&self) -> impl Iterator<Item = (usize, &Place)> {
+        let (args, modes): (&[Operand], &[ArgMode]) = match &self.kind {
+            TerminatorKind::Call {
+                args, arg_modes, ..
+            }
+            | TerminatorKind::VirtualCall {
+                args, arg_modes, ..
+            } => (args, arg_modes),
+            TerminatorKind::GpuLaunch { .. }
+            | TerminatorKind::Goto { .. }
+            | TerminatorKind::SwitchInt { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable => (&[], &[]),
+        };
+        taken_places(args, modes)
+    }
+
     pub fn successors(&self) -> Vec<BasicBlock> {
         match &self.kind {
             TerminatorKind::Goto { target } => vec![*target],
@@ -243,6 +262,38 @@ impl Terminator {
     }
 }
 
+/// Each field or element a call passing `args` in `modes` takes `out`, with
+/// its position among them: an argument passed `out` as a copy of a place
+/// reached through a projection, which a backend hands over by the address
+/// of its slot.
+pub fn taken_places<'a>(
+    args: &'a [Operand],
+    modes: &'a [ArgMode],
+) -> impl Iterator<Item = (usize, &'a Place)> + 'a {
+    (args.iter().enumerate())
+        .filter(move |(position, _)| arg_mode(modes, *position) == ArgMode::Out)
+        .filter_map(|(position, arg)| match arg {
+            Operand::Copy(place) if !place.projection.is_empty() => Some((position, place)),
+            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
+                None
+            }
+        })
+}
+
+/// Writes a call's `args`, comma-separated, each one passed `out` marked so.
+fn write_arguments(f: &mut fmt::Formatter<'_>, args: &[Operand], modes: &[ArgMode]) -> fmt::Result {
+    for (position, arg) in args.iter().enumerate() {
+        if position > 0 {
+            write!(f, ", ")?;
+        }
+        match arg_mode(modes, position) {
+            ArgMode::Out => write!(f, "out {arg}")?,
+            ArgMode::Borrowed | ArgMode::Owned | ArgMode::Donated => write!(f, "{arg}")?,
+        }
+    }
+    Ok(())
+}
+
 impl fmt::Display for Terminator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
@@ -263,17 +314,13 @@ impl fmt::Display for Terminator {
             TerminatorKind::Call {
                 func,
                 args,
+                arg_modes,
                 destination,
                 target,
                 ..
             } => {
                 write!(f, "{} = {}(", destination, func)?;
-                if let Some((first, rest)) = args.split_first() {
-                    write!(f, "{}", first)?;
-                    for arg in rest {
-                        write!(f, ", {}", arg)?;
-                    }
-                }
+                write_arguments(f, args, arg_modes)?;
                 write!(f, ") -> ")?;
                 if let Some(t) = target {
                     write!(f, "{}", t)
@@ -315,18 +362,13 @@ impl fmt::Display for Terminator {
             TerminatorKind::VirtualCall {
                 vtable_slot,
                 args,
-                arg_modes: _,
+                arg_modes,
                 param_types: _,
                 destination,
                 target,
             } => {
                 write!(f, "{} = vcall[{}](", destination, vtable_slot)?;
-                if let Some((first, rest)) = args.split_first() {
-                    write!(f, "{}", first)?;
-                    for arg in rest {
-                        write!(f, ", {}", arg)?;
-                    }
-                }
+                write_arguments(f, args, arg_modes)?;
                 write!(f, ") -> ")?;
                 if let Some(t) = target {
                     write!(f, "{}", t)

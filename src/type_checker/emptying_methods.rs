@@ -9,8 +9,8 @@
 //! out of an element that a runtime entry point declared to remove it
 //! ([`crate::runtime_effects::Removal`]) has since taken out, or what an
 //! emptying method hands back called on a place of `self`. The place is the
-//! whole receiver, or an element of a place of `self` at the index one of the
-//! method's parameters carries. The walk inferring it is the one inferring
+//! whole receiver, a field of it, or an element of a place of `self` at the
+//! index one of the method's parameters carries. The walk inferring it is the one inferring
 //! lending ([`super::lent_functions`]), worked out to the same fixpoint, so
 //! the compiler learns which method empties from its body alone, never from
 //! its name.
@@ -40,6 +40,8 @@ pub(crate) enum Emptied {
     Receiver,
     /// The element at the index its parameter `index` carries.
     Element { index: String },
+    /// The receiver's own field `name`.
+    Field { name: String },
 }
 
 /// What each emptying method of the program and its modules takes out of
@@ -83,20 +85,20 @@ fn is_named_in_a_repair(info: &MethodInfo, emptied: &Emptied) -> bool {
             info.params.as_slice(),
             [(name, ty)] if name == index && ty.kind == TypeKind::Int && !info.is_param_out(0)
         ),
+        Emptied::Field { .. } => false,
     }
 }
 
 /// What a method whose parameters are `params` takes out of its receiver by
 /// emptying `place`: the whole receiver when `place` is `self`, the element
-/// at a parameter's index when it is an element of a place of `self` there.
+/// at a parameter's index when it is an element of a place of `self` there,
+/// and a field of the receiver when it is `self.<field>`.
 ///
-/// TODO: a place of `self` that is no element at the method's index, such
-/// as `replace(self.slot, None)` or `self.slot.take()`, empties a field of
-/// the receiver and is not recorded. No refusal names a method taking a
-/// field out: whether a refusal of keeping what a getter of that field hands
-/// back should name it (as it names a collection's element-taking method)
-/// is still to be decided, and `replace` accepts a field path only once
-/// `out` takes one.
+/// TODO: a field is recorded but never named in a repair
+/// ([`is_named_in_a_repair`]): whether a refusal of keeping what a getter of
+/// that field hands back should name the method taking it out, as it names a
+/// collection's element-taking method, is still to be decided. A field of a
+/// field of `self` (`self.inner.slot`) is not recorded.
 pub(crate) fn emptied_at(place: &Expression, params: &HashSet<String>) -> Option<Emptied> {
     if let ExpressionKind::Index(base, index) = &place.node {
         let index = parameter_named(index, params).filter(|_| is_rooted_at_receiver(base))?;
@@ -104,10 +106,20 @@ pub(crate) fn emptied_at(place: &Expression, params: &HashSet<String>) -> Option
             index: index.to_string(),
         });
     }
-    let ExpressionKind::Identifier(name, _) = &place.node else {
-        return None;
-    };
-    (name == RECEIVER_PARAM_NAME).then_some(Emptied::Receiver)
+    if let ExpressionKind::Member(base, field) = &place.node {
+        let ExpressionKind::Identifier(field, _) = &field.node else {
+            return None;
+        };
+        return is_receiver(base).then(|| Emptied::Field {
+            name: field.clone(),
+        });
+    }
+    is_receiver(place).then_some(Emptied::Receiver)
+}
+
+/// Whether `expr` is `self` itself.
+fn is_receiver(expr: &Expression) -> bool {
+    matches!(&expr.node, ExpressionKind::Identifier(name, _) if name == RECEIVER_PARAM_NAME)
 }
 
 /// The parameter among `params` that `expr` names.
@@ -125,3 +137,6 @@ pub(crate) fn parameter_named<'e>(
 pub(crate) fn is_rooted_at_receiver(expr: &Expression) -> bool {
     place_spelling(expr).is_some_and(|spelled| is_spelled_under(&spelled, RECEIVER_PARAM_NAME))
 }
+
+#[cfg(test)]
+mod tests;

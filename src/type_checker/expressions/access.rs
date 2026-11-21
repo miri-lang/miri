@@ -2975,7 +2975,7 @@ const METHOD_VALUE_HELP: &str =
 
 /// True when `obj_type` is a map: it is indexed by its key, whatever the key's
 /// type, so a range there names an entry rather than a slice.
-fn is_indexed_by_key(obj_type: &Type) -> bool {
+pub(crate) fn is_indexed_by_key(obj_type: &Type) -> bool {
     matches!(
         &obj_type.kind,
         TypeKind::Custom(name, _)

@@ -185,7 +185,7 @@ fn make() String
 fn main()
     let old = replace(make(), "b")
 "#,
-        "expected mutable variable for 'out' parameter 'place', but got a non-variable expression",
+        "'out' parameter 'place' is handed 'make()', the result of a call, which no variable holds",
     );
 }
 

@@ -1518,9 +1518,13 @@ impl Pipeline {
         before_abi: Option<&[(String, mir::Body)]>,
         mode: &str,
     ) -> Result<(), CompilerError> {
-        let definitions = pipeline_result.type_checker.type_definitions();
+        let type_checker = &pipeline_result.type_checker;
+        let program = (
+            type_checker.type_definitions(),
+            type_checker.ownership_instantiations(),
+        );
         let report = mir::verify::verify_backend_bodies(
-            definitions,
+            program,
             &lowered.bodies,
             &lowered.facts,
             before_abi,

@@ -22,6 +22,7 @@
 //! across objects, which this syntactic check does not attempt.
 
 use crate::ast::captures::collect_lambda_captures;
+use crate::ast::place_path::path_root;
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
@@ -83,7 +84,7 @@ impl TypeChecker {
                 (e, format!("an element of '{}'", place_text(collection)?))
             }
         };
-        let root_expr = place_root(base)?;
+        let root_expr = path_root(base);
         let ExpressionKind::Identifier(root, _) = &root_expr.node else {
             return None;
         };
@@ -236,14 +237,6 @@ fn cycle_diagnostic(holding: Holding, root: &str, described: &str) -> (String, S
 fn cycle_free_storage_help() -> String {
     "store a different object, or keep the link outside the object, in a collection its owner holds"
         .to_string()
-}
-
-/// The binding a place written as fields and elements of it starts from.
-fn place_root(expr: &Expression) -> Option<&Expression> {
-    if let ExpressionKind::Member(base, _) | ExpressionKind::Index(base, _) = &expr.node {
-        return place_root(base);
-    }
-    matches!(expr.node, ExpressionKind::Identifier(_, _)).then_some(expr)
 }
 
 /// A place written as a binding and field names (`self.on_tick`), as text;

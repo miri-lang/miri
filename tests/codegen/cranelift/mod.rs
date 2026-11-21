@@ -15,6 +15,7 @@ pub mod inliner;
 pub mod layout;
 pub mod loop_invariants;
 pub mod optional_layout;
+pub mod out_places;
 pub mod predicates;
 pub mod rc;
 pub mod slot_promotion;

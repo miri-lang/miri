@@ -1225,6 +1225,21 @@ impl TypeChecker {
         }
     }
 
+    /// The symbol a `for` loop binds one of its variables to, of type `ty`.
+    fn loop_binding_info(&self, ty: Type, is_mutable: bool) -> SymbolInfo {
+        SymbolInfo {
+            is_loop_binding: true,
+            ..SymbolInfo::new(
+                ty,
+                is_mutable,
+                false,
+                MemberVisibility::Public,
+                self.modules.current_module.clone(),
+                None,
+            )
+        }
+    }
+
     fn bind_single_loop_variable(
         &mut self,
         decl: &VariableDeclaration,
@@ -1243,14 +1258,7 @@ impl TypeChecker {
         let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
         context.define(
             decl.name.clone(),
-            SymbolInfo::new(
-                var_type,
-                is_mutable,
-                false,
-                MemberVisibility::Public,
-                self.modules.current_module.clone(),
-                None,
-            ),
+            self.loop_binding_info(var_type, is_mutable),
         );
     }
 
@@ -1306,25 +1314,11 @@ impl TypeChecker {
 
         context.define(
             decls[0].name.clone(),
-            SymbolInfo::new(
-                key_type,
-                is_mutable_0,
-                false,
-                MemberVisibility::Public,
-                self.modules.current_module.clone(),
-                None,
-            ),
+            self.loop_binding_info(key_type, is_mutable_0),
         );
         context.define(
             decls[1].name.clone(),
-            SymbolInfo::new(
-                val_type,
-                is_mutable_1,
-                false,
-                MemberVisibility::Public,
-                self.modules.current_module.clone(),
-                None,
-            ),
+            self.loop_binding_info(val_type, is_mutable_1),
         );
     }
 
@@ -1340,17 +1334,7 @@ impl TypeChecker {
     ) {
         for (decl, ty) in decls.iter().zip([element_type.clone(), second_type]) {
             let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
-            context.define(
-                decl.name.clone(),
-                SymbolInfo::new(
-                    ty,
-                    is_mutable,
-                    false,
-                    MemberVisibility::Public,
-                    self.modules.current_module.clone(),
-                    None,
-                ),
-            );
+            context.define(decl.name.clone(), self.loop_binding_info(ty, is_mutable));
         }
     }
 

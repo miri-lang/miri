@@ -355,7 +355,10 @@ fn backend_report(
         .frontend_script(PROGRAM)
         .expect("the program checks");
     verify_backend_bodies(
-        result.type_checker.type_definitions(),
+        (
+            result.type_checker.type_definitions(),
+            result.type_checker.ownership_instantiations(),
+        ),
         bodies,
         facts,
         Some(lowered),

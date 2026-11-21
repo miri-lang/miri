@@ -22,7 +22,8 @@
 //! settles it; a store into one is still refused, as is one that a body fails to
 //! settle within [`MAX_BODY_PASSES`].
 
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::expression::Expression;
+use crate::ast::place_path::path_root_name;
 use crate::ast::types::Type;
 use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::diagnostics::DiagnosticCollector;
@@ -138,7 +139,7 @@ impl TypeChecker {
         if !self.binding_refinements.open {
             return false;
         }
-        let Some(info) = root_binding(place).and_then(|name| context.resolve_info(name)) else {
+        let Some(info) = path_root_name(place).and_then(|name| context.resolve_info(name)) else {
             return false;
         };
         let Some(init_id) = info.inferred_from else {
@@ -164,15 +165,5 @@ impl TypeChecker {
         self.binding_refinements.refined.insert(init_id, refined);
         self.binding_refinements.pending = true;
         true
-    }
-}
-
-/// The name of the binding a stored-into place is part of: the binding itself,
-/// or the one an index or field store reaches into.
-fn root_binding(place: &Expression) -> Option<&str> {
-    match &place.node {
-        ExpressionKind::Identifier(name, _) => Some(name),
-        ExpressionKind::Index(base, _) | ExpressionKind::Member(base, _) => root_binding(base),
-        _ => None,
     }
 }

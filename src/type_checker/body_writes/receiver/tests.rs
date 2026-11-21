@@ -537,3 +537,65 @@ fn a_method_building_releasing_or_lent_to_a_container_that_replaces_is_refused()
         vec!["Slot.drop", "Slot.equals", "Slot.hash", "Slot.init"]
     );
 }
+
+/// What a parsed program's calls are known to do when the first argument of
+/// every call to `take` binds an `out` parameter.
+fn binding_take_out(runtime: &RuntimeEffects) -> Callees<'_> {
+    Callees {
+        runtime,
+        binds_out: &binds_take_out,
+    }
+}
+
+fn binds_take_out(callee: &Expression, _: &[Expression], index: usize) -> bool {
+    matches!(&callee.node, ExpressionKind::Identifier(name, _) if name == "take") && index == 0
+}
+
+/// A class handing a field and an element of `self` to `take`, and a field
+/// of `self` to `look`.
+const HOLDER: &str = r#"
+fn take(place int?, new int?) int?
+    return new
+
+fn look(place int?) int?
+    return place
+
+class Holder
+    var slot int?
+    var cells [int?]
+
+    fn take_slot() int?
+        return take(self.slot, None)
+
+    fn take_cell(i int) int?
+        return take(self.cells[i], None)
+
+    fn peek_slot() int?
+        return look(self.slot)
+"#;
+
+/// The receiver writers of `source` when `callees` says what its calls bind,
+/// as `Class.method`, sorted.
+fn writers_binding(source: &str, callees: &Callees) -> Vec<String> {
+    let program = parse(source);
+    let writes = ReceiverWrites::of(program.body.iter(), written_name, callees);
+    let mut names: Vec<String> = (writes.writers.iter())
+        .map(|(class, method)| format!("{class}.{method}"))
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_field_or_element_of_self_handed_to_an_out_parameter_writes_the_receiver() {
+    let runtime = list_runtime();
+    let found = writers_binding(HOLDER, &binding_take_out(&runtime));
+    assert_eq!(found, vec!["Holder.take_cell", "Holder.take_slot"]);
+}
+
+#[test]
+fn a_field_or_element_of_self_handed_to_a_parameter_not_out_only_reads_the_receiver() {
+    let runtime = list_runtime();
+    let found = writers_binding(HOLDER, &runtime_only(&runtime));
+    assert!(found.is_empty(), "{found:?}");
+}

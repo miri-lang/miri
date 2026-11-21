@@ -57,10 +57,10 @@ use std::ops::Range;
 
 use super::parameters::{is_written, writes_argument, writes_receiver};
 use super::{
-    argument_value, binding_name, path_root, unlabelled, BodyWrites, Extent, Mention, Recorded,
-    Role,
+    argument_value, binding_name, unlabelled, BodyWrites, Extent, Mention, Recorded, Role,
 };
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::place_path::{path_links, path_root};
 use crate::ast::statement::Statement;
 use crate::ast::types::Type;
 use crate::error::syntax::Span;
@@ -212,11 +212,8 @@ impl<'b> WriteIndex<'b> {
             }) => argument_value(&arguments[index]).0,
             Some(Role::Assigned { .. }) | None => return,
         };
-        let mut step = top;
-        while let ExpressionKind::Member(inner, _) | ExpressionKind::Index(inner, _) = &step.node {
-            self.written_steps.insert(address(step));
-            step = inner;
-        }
+        let (_, links) = path_links(top);
+        (self.written_steps).extend(links.iter().map(|link| address(link.place())));
     }
 }
 

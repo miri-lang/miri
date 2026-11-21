@@ -58,6 +58,7 @@ use super::ModuleId;
 use crate::ast::captures::collect_lambda_captures;
 
 mod copy_sites;
+mod kept_defaults;
 mod lending;
 
 /// Why `value.drop()` is refused on a receiver the scope does not own.
@@ -1619,6 +1620,8 @@ impl<'a> UseAfterMoveChecker<'a> {
             self.refuse_a_kept_resource_passed_again(passed, &fn_name, &consumed_before, consumed);
             return;
         }
+        let summaries = (method_summary.as_ref(), free_fn_summary.as_ref());
+        self.refuse_kept_defaults((callee, args, &fn_name), summaries);
         self.consume_call_arguments(
             callee,
             args,

@@ -37,6 +37,7 @@ mod kept_parameters;
 pub mod kernel_launch;
 pub mod loops;
 pub mod method_dispatch;
+mod out_places;
 pub mod reduce_gpu;
 pub mod requests;
 mod runtime_writes;

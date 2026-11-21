@@ -451,11 +451,15 @@ pub fn function_type_signature(
     call_conv: CallConv,
     ptr_type: cl_types::Type,
 ) -> Signature {
-    let declared = function
-        .params
-        .iter()
-        .filter_map(|param| written_component_type(&param.typ))
-        .map(|param_type| passing_of(&param_type, values, ptr_type));
+    // An `out` parameter is the address of the caller's slot whatever it
+    // holds, as the body taking it declares it ([`body_signature`]).
+    let declared = function.params.iter().filter_map(|param| {
+        let param_type = written_component_type(&param.typ)?;
+        Some(match passing_of(&param_type, values, ptr_type) {
+            Passing::Word(_) if param.is_out => Passing::Word(ptr_type),
+            passing @ (Passing::Word(_) | Passing::ByAddress) => passing,
+        })
+    });
     let params: Vec<Passing> = leading.iter().copied().chain(declared).collect();
     let result = match function
         .return_type

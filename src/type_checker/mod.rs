@@ -105,6 +105,7 @@ pub mod utils;
 pub mod value_class;
 mod value_demand;
 pub(crate) mod vtable_selectors;
+pub(crate) mod writable_places;
 
 use context::{Context, SymbolInfo, TypeDefinition};
 use diagnostics::DiagnosticCollector;

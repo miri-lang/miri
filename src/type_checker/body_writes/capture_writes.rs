@@ -21,7 +21,8 @@ use std::rc::Rc;
 
 use super::parameters::is_written;
 use super::{argument_value, BodyWrites, Mention, Role};
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::expression::Expression;
+use crate::ast::place_path::path_links;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{CapturedBinding, Context};
 use crate::type_checker::TypeChecker;
@@ -122,14 +123,11 @@ fn is_lost_write(
 /// Whether a step of the path `role` writes holds a reference, so the write
 /// reaches the object that reference names rather than the closure's copy.
 fn writes_through_reference(role: Role<'_>, checker: &TypeChecker, context: &Context) -> bool {
-    let mut place = written_place(role);
-    while let Some(inner) = place.and_then(step_base) {
-        if checker.holds_by_reference(inner, context) {
-            return true;
-        }
-        place = Some(inner);
-    }
-    false
+    let Some(place) = written_place(role) else {
+        return false;
+    };
+    let (_, links) = path_links(place);
+    (links.iter()).any(|link| checker.holds_by_reference(link.holder(), context))
 }
 
 /// The place `role` writes.
@@ -141,14 +139,6 @@ fn written_place(role: Role<'_>) -> Option<&Expression> {
             arguments, index, ..
         } => arguments.get(index).map(|arg| argument_value(arg).0),
     }
-}
-
-/// The value the path step `place` steps into, when it is a field or element.
-fn step_base(place: &Expression) -> Option<&Expression> {
-    if let ExpressionKind::Member(base, _) | ExpressionKind::Index(base, _) = &place.node {
-        return Some(base);
-    }
-    None
 }
 
 impl TypeChecker {

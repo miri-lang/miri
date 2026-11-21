@@ -43,6 +43,7 @@
 //! - Generic type instantiation
 
 use crate::ast::factory as ast_factory;
+use crate::ast::place_path::path_root_name;
 use crate::ast::statement::BindingResidency;
 use crate::ast::types::{Type, TypeKind, ORDERING_TRAIT_NAME};
 use crate::ast::MemberVisibility;
@@ -56,6 +57,7 @@ use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::instantiation_requirements::WrittenLiterals;
 use crate::type_checker::operators::{missing_range_ordering_message, RangeMembershipRefusal};
 use crate::type_checker::type_mismatch::{MismatchExtras, TypeSides};
+use crate::type_checker::writable_places::{let_to_var_repair, Refusal};
 use crate::type_checker::TypeChecker;
 
 /// True for the numeric arithmetic operators (`+`, `-`, `*`, `/`, `%`) — the
@@ -923,15 +925,14 @@ impl TypeChecker {
         let ExpressionKind::Member(obj, prop) = &member_expr.node else {
             return ast_factory::make_type(TypeKind::Error);
         };
-        if !self.is_mutable_expression(obj, context) {
-            self.report_immutable_write_through(
-                obj,
-                "Cannot assign to field of immutable variable",
-                span,
-                context,
-            );
-        }
         let element = self.infer_member(obj, prop, member_expr.span, context);
+        let store = Store {
+            target: member_expr,
+            holder: obj,
+            refusal: "Cannot assign to field of immutable variable",
+            span,
+        };
+        self.refuse_store_through_immutable(store, context);
         self.refuse_element_store_into_fixed_value(obj, span);
         element
     }
@@ -945,17 +946,65 @@ impl TypeChecker {
         let ExpressionKind::Index(obj, index) = &index_expr.node else {
             return ast_factory::make_type(TypeKind::Error);
         };
-        if !self.is_mutable_expression(obj, context) {
-            self.report_immutable_write_through(
-                obj,
-                "Cannot assign to element of immutable variable",
-                span,
-                context,
-            );
-        }
         let element = self.infer_index(obj, index, index_expr.span, context);
+        let store = Store {
+            target: index_expr,
+            holder: obj,
+            refusal: "Cannot assign to element of immutable variable",
+            span,
+        };
+        self.refuse_store_through_immutable(store, context);
         self.refuse_element_store_into_fixed_value(obj, span);
         element
+    }
+
+    /// Refuses the store `store` when no write may land in its target
+    /// ([`TypeChecker::writable_place`]): the binding its path starts at is
+    /// immutable, or a field on the path is declared with `let`, which only
+    /// the declaring class's `init` sets, on its own receiver. A target that
+    /// is no path from a binding is refused as an immutable one; a step the
+    /// path takes that is no field or list element (a map entry, a tuple
+    /// slot, a character, a device buffer's element) is left to the checks
+    /// that know it.
+    fn refuse_store_through_immutable(&mut self, store: Store<'_>, context: &Context) {
+        let starts_at_a_binding = path_root_name(store.target)
+            .is_some_and(|name| name == "self" || context.resolve_info(name).is_some());
+        match self.writable_place(store.target, context) {
+            Ok(_) | Err(Refusal::Entry(_) | Refusal::DeviceResident(_) | Refusal::TupleSlot(_)) => {
+            }
+            Err(Refusal::ImmutableField(_)) if self.inits_own_field(store.target, context) => {}
+            Err(Refusal::ImmutableField(field)) => self.report_error_with_help(
+                DiagnosticCode::TypImmutabilityViolation,
+                format!("Cannot assign to field '{field}': its class declares it with 'let'"),
+                store.span,
+                format!("declare the field '{field}' with 'var' in its class"),
+            ),
+            Err(Refusal::NotAPlace) if starts_at_a_binding => {}
+            Err(Refusal::NotAPlace | Refusal::ImmutableRoot(..)) => self
+                .report_immutable_write_through(store.holder, store.refusal, store.span, context),
+        }
+    }
+
+    /// Whether `target` is `self.field`, a field the class whose `init` is
+    /// being checked declares itself: the one place a `let` field is set.
+    fn inits_own_field(&self, target: &Expression, context: &Context) -> bool {
+        let ExpressionKind::Member(holder, prop) = &target.node else {
+            return false;
+        };
+        let (ExpressionKind::Identifier(receiver, _), ExpressionKind::Identifier(field, _)) =
+            (&holder.node, &prop.node)
+        else {
+            return false;
+        };
+        let Some(class_name) = context.current_class.as_deref() else {
+            return false;
+        };
+        let definition = (context.resolve_type_definition(class_name))
+            .or_else(|| self.type_table.global_type_definitions.get(class_name));
+        receiver == "self"
+            && context.current_function.as_deref() == Some("init")
+            && matches!(definition, Some(TypeDefinition::Class(class))
+                if class.fields.iter().any(|(declared, _)| declared == field))
     }
 
     /// Refuses a store into one element of `obj` when `obj` is a tuple or a
@@ -991,7 +1040,7 @@ impl TypeChecker {
         span: Span,
         context: &Context,
     ) {
-        let repair = written_through(target)
+        let repair = path_root_name(target)
             .filter(|name| *name != "self" && !context.is_mutable(name))
             .and_then(|name| let_to_var_repair(name, context));
         match repair {
@@ -1253,36 +1302,6 @@ pub(crate) fn is_number_literal(expr: &Expression) -> bool {
     }
 }
 
-/// The `let` keyword of the binding `name` resolves to, rewritten as `var`.
-///
-/// A constant is not repaired into a `var`: it is a different declaration
-/// form, so rewriting the keyword would not compile. A binding with no
-/// recorded keyword — a parameter, or a statement binding several names —
-/// has none to rewrite.
-fn let_to_var_repair(name: &str, context: &Context) -> Option<RepairRequest> {
-    if context.is_constant(name) {
-        return None;
-    }
-    let info = context.resolve_info(name)?;
-    Some(RepairRequest::LetToVar {
-        keyword_start: info.declaration_keyword_start?,
-        module_scope: info.module_scope,
-        is_public: matches!(info.visibility, MemberVisibility::Public),
-    })
-}
-
-/// The binding a field or element access is reached through: the name at the
-/// root of a chain of members and indexes.
-fn written_through(target: &Expression) -> Option<&str> {
-    if let ExpressionKind::Identifier(name, _) = &target.node {
-        return Some(name);
-    }
-    if let ExpressionKind::Member(object, _) | ExpressionKind::Index(object, _) = &target.node {
-        return written_through(object);
-    }
-    None
-}
-
 /// The refusal of a store into one element of a tuple, and its help.
 const TUPLE_ELEMENT_STORE: (&str, &str) = (
     "Cannot assign to an element of a tuple: a tuple's elements are fixed when it is built",
@@ -1294,3 +1313,13 @@ const STRING_CHARACTER_STORE: (&str, &str) = (
     "Cannot assign to a character of a string: a string's characters are fixed when it is built",
     "build a new string, e.g. with 'replace' or an f-string, and assign it to the variable",
 );
+
+/// A store into a field or an element, as an assignment writes it: the whole
+/// target, the value it is taken from, the refusal when that value's binding
+/// is immutable, and where the assignment is.
+struct Store<'e> {
+    target: &'e Expression,
+    holder: &'e Expression,
+    refusal: &'static str,
+    span: Span,
+}

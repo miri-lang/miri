@@ -33,6 +33,7 @@ use super::generic_method_calls::{bound_by_position, GenericMethodSite};
 use super::kept_parameters::{
     hand_over_kept_arguments, release_after_kept_call, slot_call_convention, KeptCall,
 };
+use super::out_places::{Restores, TakenArguments};
 use super::written_receiver::{lower_pending_receiver, Receiver};
 use super::{apply_generic_sub, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
@@ -234,6 +235,9 @@ fn resolve_in_trait_hierarchy(
 pub(super) struct LoweredMethodCall {
     pub args: Vec<Operand>,
     pub written_count: usize,
+    /// What the call leaves to store back into the fields and elements it
+    /// takes `out` once it returns.
+    pub restores: Restores,
 }
 
 /// A method call dispatched through a vtable slot: the slot, its operands
@@ -277,6 +281,7 @@ pub(super) fn emit_virtual_method_call(
     let LoweredMethodCall {
         args: mut call_args,
         written_count,
+        restores,
     } = call;
     let mut arg_modes =
         super::dispatch::build_method_arg_modes(method_info, written_count, call_args.len());
@@ -298,6 +303,7 @@ pub(super) fn emit_virtual_method_call(
         span,
     ));
     ctx.set_current_block(target_bb);
+    restores.store_back(ctx)?;
     if let Some(local) = receiver_temp.filter(|local| !handed.moved.contains(local)) {
         ctx.emit_temp_drop(local, handover.arg_watermark, span);
     }
@@ -309,20 +315,25 @@ pub(super) fn emit_virtual_method_call(
 /// allocator. The arguments are lowered first and the receiver made the
 /// call's own after them, so no argument runs between the receiver's check
 /// and the call.
+///
+/// A field or an element an `out` parameter takes is made the call's own
+/// last, after the receiver, right before the call.
 fn method_call_args(
     ctx: &mut LoweringContext,
     receiver: Receiver<'_>,
-    user_args: MethodArguments<'_>,
+    (user_args, span): (MethodArguments<'_>, Span),
     method_info: &MethodInfo,
     arg_types: &[Type],
-) -> Result<Vec<Operand>, LoweringError> {
-    let arguments = lower_method_args(ctx, user_args, method_info, arg_types)?;
-    let mut call_args = vec![receiver.make_own(ctx)?];
-    call_args.extend(arguments);
+) -> Result<(Vec<Operand>, Restores), LoweringError> {
+    let (mut slots, taken) = lower_method_args(ctx, user_args, method_info, arg_types)?;
+    let receiver = receiver.make_own(ctx)?;
+    let restores = taken.make_own(ctx, &mut slots)?;
+    let mut call_args = vec![receiver];
+    call_args.extend(super::dispatch::operands_in_parameter_order(slots, span)?);
     if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
         call_args.push(Operand::Copy(Place::new(alloc_local)));
     }
-    Ok(call_args)
+    Ok((call_args, restores))
 }
 
 /// A statically dispatched method call: the body it names, its operands
@@ -370,6 +381,7 @@ pub(super) fn emit_static_method_call(
     let LoweredMethodCall {
         args: mut call_args,
         written_count,
+        restores,
     } = call;
     let mut arg_modes =
         super::dispatch::build_method_arg_modes(method_info, written_count, call_args.len());
@@ -388,6 +400,7 @@ pub(super) fn emit_static_method_call(
     let func = Operand::function(symbol, span);
     let place = destination.clone();
     super::dispatch::emit_call_terminator(ctx, func, call_args, arg_modes, Vec::new(), place, span);
+    restores.store_back(ctx)?;
     if let Some(local) = receiver_temp.filter(|local| !handed.moved.contains(local)) {
         ctx.emit_temp_drop(local, handover.arg_watermark, span);
     }
@@ -683,6 +696,7 @@ pub(crate) fn emit_held_call_to(
     let lowered = LoweredMethodCall {
         args,
         written_count,
+        restores: Restores::none(),
     };
     let handover = KeptCall {
         span,
@@ -992,9 +1006,12 @@ fn emit_method_call(
     (self_op, obj_temp_local, obj_watermark): (Receiver<'_>, Option<Local>, usize),
     (destination, op, arg_types): (&Place, &Operand, &[Type]),
 ) -> Result<Option<Operand>, LoweringError> {
+    let user_args = (m.args, *m.span);
+    let (args, restores) = method_call_args(ctx, self_op, user_args, m.method_info, arg_types)?;
     let call = LoweredMethodCall {
-        args: method_call_args(ctx, self_op, m.args, m.method_info, arg_types)?,
+        args,
         written_count: m.args.written.len(),
+        restores,
     };
     let is_super = matches!(&m.obj.node, ExpressionKind::Super);
     if !is_super {
@@ -1209,12 +1226,16 @@ fn trait_receiver_substitution(
 /// function call's is. An `out` argument is the caller's own place and is
 /// passed as it is, and so is one whose parameter type still names a type
 /// parameter nothing here binds.
+///
+/// A field or an element an `out` parameter takes is lowered up to the call
+/// ([`TakenArguments::take`]) and returned beside the slots, its slot left
+/// empty, for the caller to make the call's own right before it.
 fn lower_method_args(
     ctx: &mut LoweringContext,
     args: MethodArguments<'_>,
     method_info: &MethodInfo,
     arg_types: &[Type],
-) -> Result<Vec<Operand>, LoweringError> {
+) -> Result<MethodArgumentSlots, LoweringError> {
     let names: Vec<&str> = method_info
         .params
         .iter()
@@ -1222,9 +1243,18 @@ fn lower_method_args(
         .collect();
     let bound = crate::ast::expression::bind_arguments_to_parameters(args.written, &names);
     let mut slots = Vec::with_capacity(args.written.len());
+    let mut taken = TakenArguments::default();
     for (written, (position, value)) in bound.into_iter().enumerate() {
+        let is_out = method_info.is_param_out(position);
+        let pre_lowered = args.lowered.get(written);
+        if is_out && pre_lowered.is_some() {
+            return Err(pre_lowered_out_argument(position, value.span));
+        }
+        if taken.take(ctx, (position, is_out), value)? {
+            continue;
+        }
         let watermark = ctx.body.local_decls.len();
-        let op = match args.lowered.get(written) {
+        let op = match pre_lowered {
             Some(lowered) => lowered.clone(),
             None => super::sequencing::lower_operand(ctx, value)?,
         };
@@ -1239,9 +1269,45 @@ fn lower_method_args(
         };
         super::dispatch::place_at_parameter(&mut slots, position, op);
     }
-    let span = args.written.first().map(|arg| arg.span).unwrap_or_default();
-    super::dispatch::operands_in_parameter_order(slots, span)
+    Ok((slots, taken))
 }
+
+/// The internal error for an argument lowered before the call that binds the
+/// `out` parameter at `position`: the call would hand it over as the `out`
+/// place without taking it, so the callee would write a copy of no place.
+fn pre_lowered_out_argument(position: usize, span: Span) -> LoweringError {
+    LoweringError::internal(
+        DiagnosticCode::MirCustomLoweringError,
+        format!("an argument lowered before the call binds the `out` parameter at {position}, which the call must take as a place"),
+        span,
+    )
+}
+
+/// A static method call's operands in parameter order, each passed as it is
+/// written, and what the call leaves to store back into the fields and
+/// elements it takes `out` once it returns. A static method takes a place as
+/// an instance method does ([`lower_method_args`]), made the call's own after
+/// every other argument; there is no receiver to make its own first.
+pub(super) fn static_method_call_args(
+    ctx: &mut LoweringContext,
+    args: &[Expression],
+    method_info: &MethodInfo,
+    span: Span,
+) -> Result<(Vec<Operand>, Restores), LoweringError> {
+    let written = MethodArguments {
+        written: args,
+        lowered: &[],
+    };
+    let (mut slots, taken) = lower_method_args(ctx, written, method_info, &[])?;
+    let restores = taken.make_own(ctx, &mut slots)?;
+    let operands = super::dispatch::operands_in_parameter_order(slots, span)?;
+    Ok((operands, restores))
+}
+
+/// A method call's written arguments, each at the parameter it binds, and
+/// the fields and elements `out` parameters take, still to be made the
+/// call's own.
+type MethodArgumentSlots = (Vec<Option<Operand>>, TakenArguments);
 
 /// Whether `ty` names a type every part of which is known here: no type
 /// parameter left unbound, and no name the program does not declare.

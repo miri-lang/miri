@@ -28,7 +28,7 @@ fn inc(x out int)
 
 inc(5)
 "#,
-        "non-variable expression",
+        "'out' parameter 'x' is handed a value, which no variable holds",
     );
 }
 

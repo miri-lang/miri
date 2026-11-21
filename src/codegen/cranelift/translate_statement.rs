@@ -20,7 +20,10 @@ use crate::codegen::cranelift::value_abi::{
 };
 use crate::codegen::cranelift::value_locals::ValueBuild;
 use crate::error::CodegenError;
+use crate::mir::place_type::PlaceTypes;
+use crate::mir::representation::Representation;
 use crate::mir::symbol::Symbol;
+use crate::mir::terminator::taken_places;
 use crate::mir::value_arguments::call_written_roots;
 use crate::mir::{
     arg_mode, AggregateKind, ArgMode, BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue,
@@ -501,7 +504,7 @@ impl<'a> FunctionTranslator<'a> {
         let layout = type_ctx.value_layout(&dest_ty.kind).ok_or_else(|| {
             CodegenError::Internal(format!("`{place}` holds no value as its bytes"))
         })?;
-        let address = Self::held_place_address(builder, ctx, place, locals, type_ctx)?;
+        let address = Self::slot_address(builder, ctx, place, locals, type_ctx)?;
         let target = ValueBuild {
             address,
             layout: &layout,
@@ -1046,11 +1049,13 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Translate every call argument and the call's destination.
     ///
-    /// A word argument is widened to the width the callee was declared with,
-    /// and a scalar `out` argument is passed as a slot read back after the
-    /// call: `out_slots` pairs each such slot with its caller-side local. A
-    /// value argument held as its bytes is passed as an address, and a value
-    /// result goes through a return slot.
+    /// A word argument is widened to the width the callee was declared with.
+    /// An `out` argument naming a whole local is passed as a slot read back
+    /// after the call: `out_slots` pairs each such slot with its caller-side
+    /// local. One naming a field or an element is passed as the address of
+    /// that slot, which the callee writes in place. A value argument held as
+    /// its bytes is passed as an address, and a value result goes through a
+    /// return slot.
     fn prepare_call(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1071,9 +1076,21 @@ impl<'a> FunctionTranslator<'a> {
         let written: Vec<Local> =
             call_written_roots(operands.args, operands.arg_modes, operands.destination).collect();
 
+        let mut taken = taken_places(operands.args, operands.arg_modes).peekable();
         for (i, arg) in operands.args.iter().enumerate() {
+            let is_value = type_ctx.values.operand_value(arg)?.is_some();
+            let taken_place = taken.next_if(|(position, _)| *position == i);
+            if let Some((_, place)) = taken_place {
+                if !is_value {
+                    let address =
+                        Self::out_place_address(builder, ctx, (i, arg), place, locals, type_ctx)?;
+                    call.values.push(address);
+                    call.passings.push(Passing::Word(type_ctx.ptr_type));
+                    continue;
+                }
+            }
             let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx, None)?;
-            if type_ctx.values.operand_value(arg)?.is_some() {
+            if is_value {
                 let mode = arg_mode(operands.arg_modes, i);
                 let address = Self::value_argument(val, mode, is_runtime)?;
                 Self::refuse_exposed_value_argument(
@@ -1093,6 +1110,9 @@ impl<'a> FunctionTranslator<'a> {
                     call.out_slots.push((addr, local));
                     addr
                 }
+                None if arg_mode(operands.arg_modes, i) == ArgMode::Out => {
+                    return Err(unpassed_out_argument(i, arg));
+                }
                 None => {
                     let is_unsigned = Self::operand_is_unsigned(arg, type_ctx)?;
                     let declared = predeclared_sig.as_ref();
@@ -1105,6 +1125,42 @@ impl<'a> FunctionTranslator<'a> {
                 .push(Passing::Word(builder.func.dfg.value_type(val)));
         }
         Ok(call)
+    }
+
+    /// The address of the slot the `out` argument `arg`, at `position`,
+    /// names: the field or element `place` the callee writes in place. A
+    /// place reached through a dereference is refused: its slot is not one
+    /// the caller's value holds.
+    fn out_place_address(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        (position, arg): (usize, &Operand),
+        place: &Place,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<cranelift_codegen::ir::Value, CodegenError> {
+        if place.projection.contains(&PlaceElem::Deref) {
+            return Err(unpassed_out_argument(position, arg));
+        }
+        // A slot holding a word nothing counts may be narrower than the word
+        // the callee reads, so lowering copies such a value in and out; one
+        // reaching here would be read and written at the wrong width.
+        let types = type_ctx.values.body().map(PlaceTypes::of);
+        let ty = types
+            .and_then(|types| types.declared(place))
+            .ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "`out` argument {position}, `{place}`, is passed by its address, but its type \
+                 cannot be derived"
+                ))
+            })?;
+        if !Representation::of(&ty.kind, type_ctx.layout_scope()).is_passed_out_by_address() {
+            return Err(CodegenError::Internal(format!(
+                "`out` argument {position}, `{place}`, is passed by its address, but a slot of \
+                 its type is copied in and out"
+            )));
+        }
+        Self::slot_address(builder, ctx, place, locals, type_ctx)
     }
 
     /// Look up `func_name`'s pre-existing module declaration so later call
@@ -2225,4 +2281,15 @@ impl<'p> ProjectedKind<'p> {
         }
         Ok(&self.kind)
     }
+}
+
+/// The internal error for the `out` argument `arg`, at `position`, that is
+/// neither a whole local, passed as a slot read back after the call, nor a
+/// place the backend hands over by address. Passing its value instead would
+/// let the callee's write land in a copy the caller never reads.
+fn unpassed_out_argument(position: usize, arg: &Operand) -> CodegenError {
+    CodegenError::Internal(format!(
+        "`out` argument {position}, `{arg}`, is neither a whole local nor a place passed by \
+         its address"
+    ))
 }

@@ -63,6 +63,10 @@ use crate::type_checker::DeclaredFunction;
 use crate::type_checker::{CalleeKind, TypeChecker};
 use std::collections::HashMap;
 
+mod out_arguments;
+
+use out_arguments::CallPlaces;
+
 impl TypeChecker {
     /// Infers the return type of a function or constructor call.
     ///
@@ -499,11 +503,11 @@ impl TypeChecker {
 
     /// Dispatches to function or constructor call based on the function type.
     #[allow(clippy::too_many_arguments)]
-    fn infer_call_dispatch(
+    fn infer_call_dispatch<'e>(
         &mut self,
         func_type: &Type,
-        callee: CalledFunction<'_>,
-        positional_args: &[(&Expression, Type)],
+        callee: CalledFunction<'e>,
+        positional_args: &[(&'e Expression, Type)],
         named_args: HashMap<String, (&Expression, Type, Span)>,
         span: Span,
         context: &mut Context,
@@ -546,6 +550,8 @@ impl TypeChecker {
                     named_args,
                     span,
                     call_id,
+                    out_taker: self.out_taker(func),
+                    receiver: called_receiver(func),
                 };
                 self.infer_function_type_call(func_data, callee, site, context)
             }
@@ -2162,12 +2168,17 @@ impl TypeChecker {
             });
         }
         let mut named_args = site.named_args;
+        let parameters_site = OutSite {
+            span: site.span,
+            taker: site.out_taker,
+            receiver: site.receiver,
+        };
         self.validate_function_parameters(
             func_data,
             site.positional_args,
             &mut named_args,
             generic_map,
-            site.span,
+            parameters_site,
             context,
         );
         let return_type = self.declared_return_type(func_data, site.span, context);
@@ -2237,20 +2248,21 @@ impl TypeChecker {
         )
     }
 
-    fn validate_function_parameters(
+    fn validate_function_parameters<'e>(
         &mut self,
         func_data: &crate::ast::types::FunctionTypeData,
-        positional_args: &[(&Expression, Type)],
-        named_args: &mut HashMap<String, (&Expression, Type, Span)>,
+        positional_args: &[(&'e Expression, Type)],
+        named_args: &mut HashMap<String, (&'e Expression, Type, Span)>,
         generic_map: &mut std::collections::HashMap<String, Type>,
-        span: Span,
+        site: OutSite<'e>,
         context: &mut Context,
     ) {
+        let span = site.span;
         if func_data.generics.is_some() {
             self.bind_generics_from_arguments(func_data, positional_args, named_args, generic_map);
         }
         let mut pos_iter = positional_args.iter();
-        let mut seen_out_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut places = CallPlaces::default();
 
         for param in &func_data.params {
             let param_type = self.reading_declared_signature(span, |checker| {
@@ -2301,16 +2313,18 @@ impl TypeChecker {
                     self.validate_out_parameter(
                         &param.name,
                         arg_expr,
-                        &concrete_param_type,
-                        &arg_type,
-                        span,
-                        &mut seen_out_vars,
+                        (&concrete_param_type, &arg_type),
+                        site,
+                        &mut places,
                         context,
                     );
                 } else if !self.accepts_value_at(&concrete_param_type, &arg_type, arg_expr, context)
                 {
                     let mismatch = (&concrete_param_type, arg_type);
                     self.report_argument_mismatch(&param.name, mismatch, arg_expr, span);
+                }
+                if let (false, Some(arg)) = (param.is_out, arg_expr) {
+                    places.lend(arg);
                 }
 
                 if let Some(arg_e) = arg_expr {
@@ -2350,6 +2364,7 @@ impl TypeChecker {
                 span,
             );
         }
+        self.refuse_lent_holders(&places, site.receiver);
     }
 
     /// Bind the callee's type parameters from every argument the call passes
@@ -2591,19 +2606,23 @@ impl TypeChecker {
         self.record_elements_a_call_uses(callee, container_ty, context);
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn validate_out_parameter(
+    fn validate_out_parameter<'e>(
         &mut self,
         param_name: &str,
-        arg_expr: Option<&Expression>,
-        param_type: &Type,
-        arg_type: &Type,
-        span: Span,
-        seen_out_vars: &mut std::collections::HashSet<String>,
+        arg_expr: Option<&'e Expression>,
+        (param_type, arg_type): (&Type, &Type),
+        site: OutSite<'e>,
+        places: &mut CallPlaces<'e>,
         context: &Context,
     ) {
-        let arg_span = arg_expr.map(|e| e.span).unwrap_or(span);
-        self.validate_out_argument_variable(param_name, arg_expr, seen_out_vars, arg_span, context);
+        let span = site.span;
+        if let Some(arg) = arg_expr {
+            let out_site = OutSite {
+                span: arg.span,
+                ..site
+            };
+            self.validate_out_argument_place(param_name, arg, places, out_site, context);
+        }
         let agrees = self.out_types_agree(param_type, arg_type, context);
         self.validate_out_parameter_type(
             param_name,
@@ -2634,50 +2653,17 @@ impl TypeChecker {
             && size(param_size) == size(arg_size)
     }
 
-    /// Validates that an out parameter argument is a mutable variable.
-    fn validate_out_argument_variable(
-        &mut self,
-        param_name: &str,
-        arg_expr: Option<&Expression>,
-        seen_out_vars: &mut std::collections::HashSet<String>,
-        arg_span: Span,
-        context: &Context,
-    ) {
-        match arg_expr.map(|e| &e.node) {
-            Some(ExpressionKind::Identifier(var_name, _)) if var_name == "self" => {
-                self.refuse_replacing_an_instance(arg_span, context);
-            }
-            Some(ExpressionKind::Identifier(var_name, _)) => {
-                if !context.is_mutable(var_name) {
-                    self.report_error(DiagnosticCode::TypImmutabilityViolation,
-                        format!(
-                            "expected mutable variable for 'out' parameter '{}': '{}' is immutable (declare with 'var')",
-                            param_name, var_name
-                        ),
-                        arg_span,
-                    );
-                }
-                if !seen_out_vars.insert(var_name.clone()) {
-                    self.report_error(
-                        DiagnosticCode::TypOutParameterMisuse,
-                        format!(
-                            "same variable passed twice as 'out': '{}' appears more than once",
-                            var_name
-                        ),
-                        arg_span,
-                    );
-                }
-            }
-            Some(_) => {
-                self.report_error(DiagnosticCode::TypFunctionSignature,
-                    format!(
-                        "expected mutable variable for 'out' parameter '{}', but got a non-variable expression",
-                        param_name
-                    ),
-                    arg_span,
-                );
-            }
-            None => {}
+    /// Who a call to `func` hands its `out` arguments to.
+    fn out_taker(&self, func: &Expression) -> OutTaker {
+        let named = match &func.node {
+            ExpressionKind::Member(_, member) => member.id,
+            _ => func.id,
+        };
+        let kind = (self.fn_analysis.callee_kinds.get(&func.id))
+            .or_else(|| self.fn_analysis.callee_kinds.get(&named));
+        match kind {
+            Some(CalleeKind::Runtime | CalleeKind::Intrinsic) => OutTaker::Builtin,
+            Some(CalleeKind::Program | CalleeKind::VariantConstructor) | None => OutTaker::Lowered,
         }
     }
 
@@ -3954,6 +3940,41 @@ struct CallSite<'a, 'e> {
     named_args: HashMap<String, (&'e Expression, Type, Span)>,
     span: Span,
     call_id: usize,
+    out_taker: OutTaker,
+    /// The value a method call is made on, which the call lends beside its
+    /// arguments.
+    receiver: Option<&'e Expression>,
+}
+
+/// The value the method `func` names is called on: `h` in `h.update(…)`;
+/// `None` for a callee that is no member.
+fn called_receiver(func: &Expression) -> Option<&Expression> {
+    let ExpressionKind::Member(receiver, _) = &func.node else {
+        return None;
+    };
+    Some(receiver)
+}
+
+/// Where a call's arguments, or one `out` argument, are written, who the
+/// call hands its `out` arguments to, and the receiver it lends beside them
+/// when it calls a method.
+#[derive(Clone, Copy)]
+struct OutSite<'e> {
+    span: Span,
+    taker: OutTaker,
+    receiver: Option<&'e Expression>,
+}
+
+/// Who a call hands its `out` arguments to, as far as which places it may
+/// take.
+#[derive(Clone, Copy)]
+enum OutTaker {
+    /// A function, a method or a function value this compilation lowers,
+    /// which takes a field or an element by the address of its slot.
+    Lowered,
+    /// A runtime entry point or a compiler intrinsic, which takes only a
+    /// whole variable.
+    Builtin,
 }
 
 /// The bounds `func_data` declares on its type parameters, read while its

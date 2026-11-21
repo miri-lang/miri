@@ -297,7 +297,10 @@ fn backend_lines_after(mutate: impl FnOnce(&mut Body)) -> Vec<String> {
         .frontend_script(CLOSURE_PROGRAM)
         .expect("the program checks");
     verify_backend_bodies(
-        result.type_checker.type_definitions(),
+        (
+            result.type_checker.type_definitions(),
+            result.type_checker.ownership_instantiations(),
+        ),
         &bodies,
         &facts,
         None,

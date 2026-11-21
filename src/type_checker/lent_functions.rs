@@ -992,6 +992,7 @@ impl<'w> BodyWalk<'w> {
                     index: index.to_string(),
                 })
             }
+            Emptied::Field { .. } => None,
         }
     }
 

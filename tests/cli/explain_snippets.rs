@@ -887,7 +887,6 @@ const NO_HELP_EMITTED: &[&str] = &[
     "MER_TYP_050",
     "MER_TYP_052",
     "MER_TYP_053",
-    "MER_TYP_054",
     "MER_TYP_055",
     "MER_TYP_056",
     "MER_TYP_059",
@@ -895,7 +894,6 @@ const NO_HELP_EMITTED: &[&str] = &[
     "MER_TYP_062",
     "MER_TYP_064",
     "MER_TYP_065",
-    "MER_TYP_066",
     "MER_TYP_067",
     "MER_TYP_068",
 ];

@@ -17,7 +17,7 @@ fn inc(x out int)
 let n = 5
 inc(n)
 "#,
-        "expected mutable variable for 'out' parameter",
+        "'out' parameter 'x' is handed 'n', but 'n' is immutable: it is declared with 'let'",
     );
 }
 
@@ -51,7 +51,7 @@ fn inc(x out int)
 
 inc(5)
 "#,
-        "expected mutable variable for 'out' parameter",
+        "'out' parameter 'x' is handed a value, which no variable holds",
     );
 }
 

@@ -33,6 +33,7 @@
 //! a collection is a value.
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::place_path::{path_links, PathLink};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
@@ -55,6 +56,9 @@ use crate::runtime_fns::rt;
 enum Step<'e> {
     /// The binding the path starts at.
     Root(Local, Type),
+    /// A method's own receiver, which its caller made the body's own, as the
+    /// root of a place the body hands to an `out` parameter.
+    Receiver(Local, Type),
     /// The value the path starts at when no binding holds it: anything but a
     /// binding, a field, an element or `super`.
     Temporary(&'e Expression, Type),
@@ -70,6 +74,7 @@ impl Step<'_> {
     fn ty(&self) -> &Type {
         match self {
             Step::Root(_, ty)
+            | Step::Receiver(_, ty)
             | Step::Temporary(_, ty)
             | Step::Field(_, ty)
             | Step::Element(_, ty)
@@ -198,6 +203,9 @@ pub(crate) fn lower_written_entry_place(
 enum LoweredStep {
     /// The value the path starts at.
     Root(Type),
+    /// A method's own receiver the path starts at, which is the body's own
+    /// already and is never copied.
+    Receiver(Type),
     Field(usize, Type),
     Element(Local, Type),
     /// The entry of a map under a key already lowered.
@@ -233,7 +241,7 @@ impl LoweredPath {
         let mut place = self.root.clone();
         for step in &self.steps {
             match step {
-                LoweredStep::Root(_) => {}
+                LoweredStep::Root(_) | LoweredStep::Receiver(_) => {}
                 LoweredStep::Field(idx, _) => place.projection.push(PlaceElem::Field(*idx)),
                 LoweredStep::Element(index, _) => place.projection.push(PlaceElem::index(*index)),
                 LoweredStep::Entry(key, value_ty) => {
@@ -259,6 +267,7 @@ impl LoweredPath {
         for step in self.steps {
             let ty = match step {
                 LoweredStep::Root(ty) => ty,
+                LoweredStep::Receiver(_) => continue,
                 LoweredStep::Field(idx, ty) => {
                     place.projection.push(PlaceElem::Field(idx));
                     ty
@@ -284,6 +293,137 @@ impl LoweredPath {
             temporary: self.temporary,
         })
     }
+
+    /// The path as a call takes it `out`: a field or an element of a
+    /// binding. A path through a map's entry, or one starting at a value no
+    /// binding holds, is a broken invariant, reported rather than lowered
+    /// into a write nobody reads.
+    fn into_taken(self, span: Span) -> Result<TakenPath, LoweringError> {
+        if self.temporary.is_some() {
+            return Err(untaken_place(span, "starts at a value no binding holds"));
+        }
+        let taken = |elem, ty| TakenStep {
+            elem,
+            ty,
+            is_own_already: false,
+        };
+        let steps = (self.steps.into_iter())
+            .map(|step| match step {
+                LoweredStep::Root(ty) => Ok(taken(None, ty)),
+                LoweredStep::Receiver(ty) => Ok(TakenStep {
+                    elem: None,
+                    ty,
+                    is_own_already: true,
+                }),
+                LoweredStep::Field(idx, ty) => Ok(taken(Some(PlaceElem::Field(idx)), ty)),
+                LoweredStep::Element(index, ty) => Ok(taken(Some(PlaceElem::index(index)), ty)),
+                LoweredStep::Entry(..) => Err(untaken_place(span, "reaches an entry of a map")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(TakenPath {
+            root: self.root,
+            steps,
+        })
+    }
+
+    /// Copies each index the path is reached through that a binding the
+    /// body declared before the path, `watermark`, holds into a fresh temp, so
+    /// a call writing that binding through another `out` argument does not
+    /// move the place it takes.
+    fn hold_indexes(&mut self, ctx: &mut LoweringContext, watermark: usize, span: Span) {
+        for step in &mut self.steps {
+            let LoweredStep::Element(index, _) = step else {
+                continue;
+            };
+            if index.0 >= watermark {
+                continue;
+            }
+            let ty = ctx.body.local_decls[index.0].ty.clone();
+            let held = ctx.push_temp(ty, span);
+            ctx.push_statement(Statement {
+                kind: StatementKind::Assign(
+                    Place::new(held),
+                    Rvalue::Use(Operand::Copy(Place::new(*index))),
+                ),
+                span,
+            });
+            *index = held;
+        }
+    }
+}
+
+/// A field or an element a call takes `out`, every index of its path
+/// computed: the binding it starts at and each step down to the slot, the
+/// root first. Made the caller's own right before the call, and again
+/// before the value the call left is stored back when it was copied in.
+#[derive(Clone)]
+pub(crate) struct TakenPath {
+    root: Place,
+    steps: Vec<TakenStep>,
+}
+
+/// One step of a [`TakenPath`]: the projection it takes (none for the
+/// root), the type of the value it reaches, and whether that value is the
+/// body's own already, as a method's receiver its caller made own is.
+#[derive(Clone)]
+struct TakenStep {
+    elem: Option<PlaceElem>,
+    ty: Type,
+    is_own_already: bool,
+}
+
+impl TakenPath {
+    /// The type of each value the path passes through above its slot, the
+    /// binding it starts at first.
+    pub(crate) fn enclosing_types(&self) -> impl Iterator<Item = &Type> {
+        let above = self.steps.split_last().map(|(_, above)| above);
+        above.unwrap_or_default().iter().map(|step| &step.ty)
+    }
+
+    /// The slot the path names and the type of the value it holds, read as
+    /// it is: nothing above it is made the program's own, for a read of the
+    /// value the slot holds before the call takes it.
+    pub(crate) fn slot(&self) -> Option<(Place, &Type)> {
+        let (slot, _) = self.steps.split_last()?;
+        let mut place = self.root.clone();
+        place
+            .projection
+            .extend(self.steps.iter().filter_map(|step| step.elem.clone()));
+        Some((place, &slot.ty))
+    }
+
+    /// Makes every value on the path above its slot the program's own,
+    /// outermost first, and answers the slot with its type. The value in the
+    /// slot is left as it is, for the callee to write or replace.
+    pub(crate) fn make_own_enclosing(
+        &self,
+        ctx: &mut LoweringContext,
+        span: Span,
+    ) -> Result<(Place, Type), LoweringError> {
+        let Some((slot, above)) = self.steps.split_last() else {
+            return Err(untaken_place(span, "names no step"));
+        };
+        let mut place = self.root.clone();
+        for step in above {
+            place.projection.extend(step.elem.clone());
+            let unshared = unsharing(&ctx.body, &step.ty).filter(|_| !step.is_own_already);
+            if let Some(unsharing) = unshared {
+                emit_unshare(ctx, &place, &step.ty, unsharing, span)?;
+            }
+        }
+        place.projection.extend(slot.elem.clone());
+        Ok((place, slot.ty.clone()))
+    }
+}
+
+/// The internal error for an `out` argument at `span`, whose path `problem`
+/// says why no call can take it.
+fn untaken_place(span: Span, problem: &str) -> LoweringError {
+    LoweringError::internal(
+        DiagnosticCode::MirValidationFailed,
+        format!("an `out` argument's path {problem}, which the type checker refuses"),
+        span,
+    )
 }
 
 /// Lowers the code `obj`, the value a write goes into, computes before the
@@ -294,12 +434,49 @@ pub(crate) fn lower_written_path(
     ctx: &mut LoweringContext,
     obj: &Expression,
 ) -> Result<Option<LoweredPath>, LoweringError> {
+    lower_path(ctx, obj, Roots::Written)
+}
+
+/// Lowers the code `obj`, a field or an element a call takes `out`,
+/// computes before the call — every index, each one a binding holds copied
+/// into a fresh temp — and checks nothing; `None` when `obj` is not a path
+/// from a binding. The path may start at the method's own receiver, which
+/// the caller made the body's own and which is never copied
+/// ([`TakenPath::make_own_enclosing`]).
+pub(crate) fn lower_taken_path(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+) -> Result<Option<TakenPath>, LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    let Some(mut path) = lower_path(ctx, obj, Roots::Taken)? else {
+        return Ok(None);
+    };
+    path.hold_indexes(ctx, watermark, obj.span);
+    path.into_taken(obj.span).map(Some)
+}
+
+/// Which bindings a path may start at.
+#[derive(Clone, Copy)]
+enum Roots {
+    /// A binding a write may replace: never a method's copied-on-write
+    /// receiver, which a write checks unique instead.
+    Written,
+    /// A binding a call takes a field or an element of: a method's own
+    /// receiver included.
+    Taken,
+}
+
+fn lower_path(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+    roots: Roots,
+) -> Result<Option<LoweredPath>, LoweringError> {
     // Reference counts exist on the host only; a GPU body writes in place.
     if ctx.body.is_gpu() {
         return Ok(None);
     }
     let mut steps = Vec::new();
-    if !collect_steps(ctx, obj, &mut steps)? {
+    if !collect_steps(ctx, obj, roots, &mut steps)? {
         return Ok(None);
     }
     let Some((root, temporary)) = lower_path_root(ctx, &steps)? else {
@@ -309,6 +486,7 @@ pub(crate) fn lower_written_path(
     for step in steps {
         lowered.push(match step {
             Step::Root(_, ty) | Step::Temporary(_, ty) => LoweredStep::Root(ty),
+            Step::Receiver(_, ty) => LoweredStep::Receiver(ty),
             Step::Field(idx, ty) => LoweredStep::Field(idx, ty),
             Step::Element(index, ty) => LoweredStep::Element(lower_index_local(ctx, index)?, ty),
             Step::Entry(key, map_ty, value_ty) => lower_entry_key(ctx, key, map_ty, value_ty)?,
@@ -360,7 +538,7 @@ fn lower_path_root(
     steps: &[Step],
 ) -> Result<Option<(Place, Option<TemporaryRoot>)>, LoweringError> {
     Ok(match steps.first() {
-        Some(Step::Root(root, _)) => Some((Place::new(*root), None)),
+        Some(Step::Root(root, _) | Step::Receiver(root, _)) => Some((Place::new(*root), None)),
         Some(Step::Temporary(root, ty)) => {
             let temporary = lower_temporary_root(ctx, root, ty)?;
             Some((Place::new(temporary.local), Some(temporary)))
@@ -404,43 +582,6 @@ fn lower_temporary_root(
     Ok(TemporaryRoot::new(local, watermark))
 }
 
-/// One field or element step of a written path, read off the expression
-/// that takes it.
-pub(crate) enum PathLink<'e> {
-    /// `object.prop`, the whole expression beside it.
-    Member(&'e Expression, &'e Expression),
-    /// `collection[index]`, the whole expression beside them.
-    Index(&'e Expression, &'e Expression, &'e Expression),
-}
-
-/// The expression a written path starts at, and the field and element steps
-/// taken from it, innermost first. The one reading of a path's shape that
-/// both lowering a write ([`collect_steps`]) and finding the parameters a body
-/// writes (`lowering::written_parameters`) go through.
-pub(crate) fn path_links(expr: &Expression) -> (&Expression, Vec<PathLink<'_>>) {
-    let mut links = Vec::new();
-    let mut root = expr;
-    loop {
-        if let ExpressionKind::Member(inner, prop) = &root.node {
-            links.push(PathLink::Member(prop, root));
-            root = inner;
-        } else if let ExpressionKind::Index(collection, index) = &root.node {
-            links.push(PathLink::Index(collection, index, root));
-            root = collection;
-        } else {
-            break;
-        }
-    }
-    links.reverse();
-    (root, links)
-}
-
-/// The expression a written path starts at: `expr` with every field and
-/// element step taken off.
-pub(crate) fn path_root(expr: &Expression) -> &Expression {
-    path_links(expr).0
-}
-
 /// Reads the path `expr` names into `steps`, outermost first. False when any
 /// part of it is something a write cannot be routed through here: a binding
 /// a write may not replace, a member that is not a field, an element of a
@@ -449,16 +590,17 @@ pub(crate) fn path_root(expr: &Expression) -> &Expression {
 fn collect_steps<'e>(
     ctx: &LoweringContext,
     expr: &'e Expression,
+    roots: Roots,
     steps: &mut Vec<Step<'e>>,
 ) -> Result<bool, LoweringError> {
     let (root, links) = path_links(expr);
-    let Some(root) = root_of_path(ctx, root)? else {
+    let Some(root) = root_of_path(ctx, root, roots)? else {
         return Ok(false);
     };
     steps.push(root);
     for link in links {
         let step = match link {
-            PathLink::Member(prop, member) => field_step(ctx, steps, prop, member),
+            PathLink::Member(_, prop, member) => field_step(ctx, steps, prop, member),
             PathLink::Index(collection, index, element) => {
                 indexed_step(ctx, collection, index, element)
             }
@@ -476,9 +618,10 @@ fn collect_steps<'e>(
 fn root_of_path<'e>(
     ctx: &LoweringContext,
     root: &'e Expression,
+    roots: Roots,
 ) -> Result<Option<Step<'e>>, LoweringError> {
     if let ExpressionKind::Identifier(name, _) = &root.node {
-        return root_step(ctx, name, root.span);
+        return root_step(ctx, name, roots, root.span);
     }
     if matches!(root.node, ExpressionKind::Super) {
         return Ok(None);
@@ -519,6 +662,7 @@ fn indexed_step<'e>(
 fn root_step<'e>(
     ctx: &LoweringContext,
     name: &str,
+    roots: Roots,
     span: Span,
 ) -> Result<Option<Step<'e>>, LoweringError> {
     let Some(&local) = ctx.variable_map.get(name) else {
@@ -531,7 +675,10 @@ fn root_step<'e>(
     let is_parameter = (1..=ctx.body.arg_count).contains(&local.0);
     if is_parameter && is_copied_on_write(&ctx.body, &decl.ty) {
         if ctx.body.signature.receiver == Some(local) {
-            return Ok(None);
+            return Ok(match roots {
+                Roots::Written => None,
+                Roots::Taken => Some(Step::Receiver(local, decl.ty.clone())),
+            });
         }
         if ctx.body.is_lent_param(local) {
             return Err(lent_parameter_write(name, span));

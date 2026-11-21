@@ -50,6 +50,8 @@ pub mod option_coercion;
 pub mod option_take;
 pub mod out_captures;
 pub mod out_parameter;
+pub mod out_places;
+pub mod out_places_refused;
 pub mod owned_parameters;
 pub mod parameter_writes;
 pub mod places_handed_to_keepers;

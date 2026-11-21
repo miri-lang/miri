@@ -13,6 +13,7 @@
 //! cannot call a closure.
 
 use crate::ast::expression::{Expression, ExpressionKind, LeftHandSideExpression};
+use crate::ast::place_path::path_root_name;
 use crate::ast::statement::{Statement, StatementKind};
 use crate::gpu_target::GpuAtomicOp;
 
@@ -166,7 +167,7 @@ impl WriteWalker<'_> {
             | LeftHandSideExpression::Member(e)
             | LeftHandSideExpression::Index(e) => e,
         };
-        if let Some(name) = place_root(target) {
+        if let Some(name) = path_root_name(target) {
             (self.sink)(name, BufferWrite::Store);
         }
         if let ExpressionKind::Index(base, index) = &target.node {
@@ -185,41 +186,5 @@ impl WriteWalker<'_> {
             }
         }
         args.iter().for_each(|arg| self.expression(arg));
-    }
-}
-
-/// The variable a place expression is rooted at: `buf` for `buf`, `buf[i]`,
-/// `buf[i].x` and `buf[i][j]`; `None` for a place rooted at anything else.
-fn place_root(place: &Expression) -> Option<&str> {
-    match &place.node {
-        ExpressionKind::Identifier(name, _) => Some(name),
-        ExpressionKind::Index(base, _) | ExpressionKind::Member(base, _) => place_root(base),
-        ExpressionKind::Literal(_)
-        | ExpressionKind::Binary(_, _, _)
-        | ExpressionKind::Logical(_, _, _)
-        | ExpressionKind::Unary(_, _)
-        | ExpressionKind::Assignment(_, _, _)
-        | ExpressionKind::Conditional(_, _, _, _)
-        | ExpressionKind::Range(_, _, _)
-        | ExpressionKind::Guard(_, _)
-        | ExpressionKind::Call(_, _)
-        | ExpressionKind::ImportPath(_, _)
-        | ExpressionKind::Type(_, _)
-        | ExpressionKind::GenericType(_, _, _)
-        | ExpressionKind::TypeDeclaration(_, _, _, _)
-        | ExpressionKind::EnumValue(_, _)
-        | ExpressionKind::StructMember(_, _)
-        | ExpressionKind::Lambda(_)
-        | ExpressionKind::List(_)
-        | ExpressionKind::Array(_, _)
-        | ExpressionKind::Map(_)
-        | ExpressionKind::Tuple(_)
-        | ExpressionKind::Set(_)
-        | ExpressionKind::Match(_, _)
-        | ExpressionKind::FormattedString(..)
-        | ExpressionKind::NamedArgument(_, _)
-        | ExpressionKind::Super
-        | ExpressionKind::Block(_, _)
-        | ExpressionKind::Cast(_, _) => None,
     }
 }

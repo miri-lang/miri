@@ -31,6 +31,14 @@
 //! call, a release that may run a drop hook, and a runtime call that calls a
 //! closure or may release an element whose release runs a hook.
 //!
+//! A field or element a call takes `out` is written by the callee in place,
+//! through its address, so every value a write copies on the way to it — the
+//! root and each field and element above the place — must be known, on every
+//! path into the call, to hold a block nothing else holds. Once the call
+//! returns, the place and everything under it are forgotten like anything
+//! handed to program code: the callee may have kept a second name of what it
+//! wrote.
+//!
 //! A runtime write keeps the place it writes known and forgets only what is
 //! reached through it: the runtime keeps no reference to what it writes in
 //! place ([`RuntimeEffect::writes_in_place`], pinned by the contract test
@@ -59,7 +67,10 @@ pub fn verify_unshared_writes(
     body: &Body,
     ownership: &OwnershipFacts,
 ) -> Vec<VerificationViolation> {
-    if body.is_gpu() || !body.basic_blocks.iter().any(ends_in_runtime_call) {
+    let is_checked = |data: &crate::mir::BasicBlockData| {
+        ends_in_runtime_call(data) || taken_places(data).next().is_some()
+    };
+    if body.is_gpu() || !body.basic_blocks.iter().any(is_checked) {
         return Vec::new();
     }
     let model = Model::of(body, ownership);
@@ -75,6 +86,14 @@ fn ends_in_runtime_call(data: &crate::mir::BasicBlockData) -> bool {
         data.terminator.as_ref().map(|terminator| &terminator.kind),
         Some(TerminatorKind::Call { func, .. }) if func.called_runtime_name().is_some()
     )
+}
+
+/// Each field or element the call ending `data` takes `out`: a place the
+/// callee writes in place through its address.
+fn taken_places(data: &crate::mir::BasicBlockData) -> impl Iterator<Item = &Place> {
+    (data.terminator.iter())
+        .flat_map(|terminator| terminator.taken_places())
+        .map(|(_, place)| place)
 }
 
 /// One thing known at a point of the body.
@@ -223,13 +242,82 @@ impl<'a> Model<'a> {
         facts
     }
 
-    /// Every runtime write `data`, at `block`, makes of a value not known
-    /// unshared there, given the facts on entry.
+    /// Every place the call ending `data`, at `block`, writes in place
+    /// through a value not known unshared there, given the facts on entry.
     fn block_violations(
         &self,
         block: usize,
         data: &crate::mir::BasicBlockData,
         mut facts: Facts,
+    ) -> Vec<VerificationViolation> {
+        for statement in &data.statements {
+            self.step(statement, &mut facts);
+        }
+        let mut found = self.taken_place_violations(block, data, &facts);
+        found.extend(self.runtime_write_violations(block, data, &facts));
+        found
+    }
+
+    /// Every field or element the call ending `data`, at `block`, takes
+    /// `out` through a value a write copies that is not known unshared
+    /// there, given the facts before the call. The callee writes the place in
+    /// place, so each such value on the way to it must be the body's own.
+    fn taken_place_violations(
+        &self,
+        block: usize,
+        data: &crate::mir::BasicBlockData,
+        facts: &Facts,
+    ) -> Vec<VerificationViolation> {
+        let mut found = Vec::new();
+        for taken in taken_places(data) {
+            let mut holder = Place::new(taken.local);
+            for step in &taken.projection {
+                if let Some(message) = self.holder_violation(block, taken, &holder, facts) {
+                    found.push(VerificationViolation {
+                        local: taken.local,
+                        local_name: local_display_name(self.body, taken.local),
+                        message,
+                    });
+                }
+                holder.projection.push(step.clone());
+            }
+        }
+        found
+    }
+
+    /// What is wrong with `holder`, a value above the place `taken` that the
+    /// call ending `block` takes `out`, given the facts before the call: its
+    /// type cannot be derived, or a write copies it and it is not known
+    /// unshared.
+    fn holder_violation(
+        &self,
+        block: usize,
+        taken: &Place,
+        holder: &Place,
+        facts: &Facts,
+    ) -> Option<String> {
+        let Some(ty) = self.places.declared(holder) else {
+            return Some(format!(
+                "bb{block} takes `{taken}` out for a call, but the type of `{holder}`, which \
+                 holds it, cannot be derived"
+            ));
+        };
+        let is_unshared = facts.contains(&Fact::Unshared(holder.clone()));
+        (is_copied_on_write(self.body, &ty) && !is_unshared).then(|| {
+            format!(
+                "bb{block} takes `{taken}` out for a call while `{holder}`, which holds it, may \
+                 be held by another name"
+            )
+        })
+    }
+
+    /// Every runtime write the call ending `data`, at `block`, makes of a
+    /// value not known unshared there, given the facts before the call.
+    fn runtime_write_violations(
+        &self,
+        block: usize,
+        data: &crate::mir::BasicBlockData,
+        facts: &Facts,
     ) -> Vec<VerificationViolation> {
         let Some(TerminatorKind::Call { func, args, .. }) =
             data.terminator.as_ref().map(|terminator| &terminator.kind)
@@ -240,9 +328,6 @@ impl<'a> Model<'a> {
         else {
             return Vec::new();
         };
-        for statement in &data.statements {
-            self.step(statement, &mut facts);
-        }
         (args.iter().enumerate())
             .filter(|(position, _)| effect.writes_in_place(*position))
             .filter_map(|(_, arg)| arg.place())

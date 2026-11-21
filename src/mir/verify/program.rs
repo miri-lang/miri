@@ -10,7 +10,7 @@ use crate::ast::BuiltinCollectionKind;
 use crate::mir::facts::{ProgramFacts, StaleFact};
 use crate::mir::symbol::Symbol;
 use crate::type_checker::context::{ClassDefinition, TypeDefinition};
-use crate::type_checker::utils::Instantiations;
+use crate::type_checker::utils::{Instantiations, ResourceTypes};
 
 /// The type table the verifiers read declarations from.
 type TypeDefinitions = HashMap<String, TypeDefinition>;
@@ -178,19 +178,22 @@ pub fn verify_program(
 ///
 /// These checks hold of a body whatever spelling the element and closure ABI
 /// gave its runtime calls, so they run after it: the accesses emitted without
-/// a bounds check, the readback fences, the names a pattern binds, the
-/// collections a loop leaves unchanged, and the operands each closure is
-/// built from against the captures its body reads. Every other verifier reads
-/// the body as lowered, in [`verify_program`]. `lowered` is each body before the ABI
+/// a bounds check, the readback fences, the names a pattern binds, the places
+/// each call takes `out`, the collections a loop leaves unchanged, and the
+/// operands each closure is built from against the captures its body reads.
+/// Every other verifier reads the body as lowered, in [`verify_program`]. `lowered` is each body before the ABI
 /// passes ran, in the same order, when they did: each body is then checked to
-/// differ from it only by the ABI's own expansions.
+/// differ from it only by the ABI's own expansions. `instantiations` are
+/// the generic class instantiations the type checker decided ownership over,
+/// which whether a type is a resource is rebuilt from.
 pub fn verify_backend_bodies(
-    definitions: &TypeDefinitions,
+    (definitions, instantiations): (&TypeDefinitions, &Instantiations),
     bodies: &[(String, crate::mir::Body)],
     facts: &ProgramFacts,
     lowered: Option<&[(String, crate::mir::Body)]>,
 ) -> Result<ProgramReport, StaleFact> {
     let harmless_calls = harmless_calls_after_rc(definitions, bodies);
+    let resources = ResourceTypes::of(definitions, instantiations);
     let mut found = super::verify_closure_captures(bodies);
     for (index, (((name, body), harmless), facts)) in bodies
         .iter()
@@ -203,6 +206,7 @@ pub fn verify_backend_bodies(
         violations.extend(super::verify_cross_residency_readback(body));
         violations.extend(super::verify_bound_names(body));
         violations.extend(super::verify_function_projections(body));
+        violations.extend(super::verify_out_places(body, &resources));
         violations.extend(super::verify_stable_collections(
             body,
             ownership,

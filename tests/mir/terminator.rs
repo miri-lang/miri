@@ -232,3 +232,59 @@ fn a_runtime_call_passes_each_argument_as_its_callee_declares() {
         vec![ArgMode::Owned, ArgMode::Donated, ArgMode::Borrowed]
     );
 }
+
+/// `_3 = f(<args>)` with each argument passed by its mode.
+fn call_with_modes(args: Vec<Operand>, arg_modes: Vec<ArgMode>) -> Terminator {
+    Terminator::new(
+        TerminatorKind::Call {
+            func: Operand::function(miri::mir::symbol::Symbol::entry(), Span::default()),
+            args,
+            arg_modes,
+            arg_handles: Vec::new(),
+            flags: miri::mir::CallFlags::default(),
+            destination: Place::new(Local(3)),
+            target: Some(BasicBlock(1)),
+        },
+        Span::default(),
+    )
+}
+
+fn element(list: usize, index: usize) -> Place {
+    Place {
+        local: Local(list),
+        projection: vec![miri::mir::PlaceElem::index(Local(index))],
+    }
+}
+
+#[test]
+fn a_call_prints_each_out_argument_marked_out() {
+    let call = call_with_modes(
+        vec![
+            Operand::Copy(element(1, 2)),
+            Operand::Copy(Place::new(Local(4))),
+        ],
+        vec![ArgMode::Out, ArgMode::Borrowed],
+    );
+    let printed = call.to_string();
+    assert!(printed.contains("(out _1[_2], _4)"), "{printed}");
+}
+
+#[test]
+fn a_virtual_call_prints_each_out_argument_marked_out() {
+    let call = Terminator::new(
+        TerminatorKind::VirtualCall {
+            vtable_slot: 0,
+            args: vec![
+                Operand::Copy(Place::new(Local(1))),
+                Operand::Copy(Place::new(Local(2))),
+            ],
+            arg_modes: vec![ArgMode::Borrowed, ArgMode::Out],
+            param_types: Vec::new(),
+            destination: Place::new(Local(3)),
+            target: Some(BasicBlock(1)),
+        },
+        Span::default(),
+    );
+    let printed = call.to_string();
+    assert!(printed.contains("(_1, out _2)"), "{printed}");
+}

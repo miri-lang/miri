@@ -23,6 +23,7 @@ pub mod node;
 pub mod normalize;
 pub mod operator;
 pub mod pattern;
+pub mod place_path;
 pub mod program;
 pub mod script;
 pub mod statement;

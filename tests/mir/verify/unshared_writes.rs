@@ -971,3 +971,124 @@ fn the_host_array_a_readback_fills_is_not_checked() {
     ];
     assert_clean(&body_of(&locals, 0, blocks));
 }
+
+/// A call to a function of the program taking `taken` `out`, its only
+/// argument.
+fn program_taking(taken: Place, dest: usize, target: usize) -> TerminatorKind {
+    TerminatorKind::Call {
+        func: Operand::function(Symbol::entry(), span()),
+        args: vec![copy(taken)],
+        arg_modes: vec![miri::mir::ArgMode::Out],
+        arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
+        destination: local(dest),
+        target: Some(BasicBlock(target)),
+    }
+}
+
+/// Locals: 0 void, 1 `[[int]]`, 2 int, 3 void, 4 `[int]`, 5 void.
+fn nested_list_locals() -> Vec<TypeKind> {
+    vec![
+        TypeKind::Void,
+        list_of(list()),
+        int(),
+        TypeKind::Void,
+        list(),
+        TypeKind::Void,
+    ]
+}
+
+/// `_1` from `first`, `_2 = 0`, then `f(out _1[_2])`.
+fn element_taken_out(first: TerminatorKind) -> Body {
+    let blocks = vec![
+        block(Vec::new(), first),
+        block(vec![set(2, 0)], program_taking(element(1, 2), 3, 2)),
+        returning(Vec::new()),
+    ];
+    body_of(&nested_list_locals(), 0, blocks)
+}
+
+#[test]
+fn an_element_taken_out_of_a_list_just_built_is_clean() {
+    assert_clean(&element_taken_out(runtime(
+        rt::LIST_NEW,
+        vec![constant(8)],
+        1,
+        1,
+    )));
+}
+
+#[test]
+fn an_element_taken_out_of_a_list_another_name_may_hold_is_flagged() {
+    let body = element_taken_out(program(Vec::new(), 1, 1));
+    assert_one_finding(&body, "_1", "takes `_1[_2]` out");
+}
+
+#[test]
+fn a_field_taken_out_of_a_struct_just_built_is_clean() {
+    let built = Rvalue::Aggregate(AggregateKind::Struct(ty(bag())), vec![moved(local(3))]);
+    let blocks = vec![
+        block(Vec::new(), runtime(rt::LIST_NEW, vec![constant(8)], 3, 1)),
+        block(
+            vec![assign(local(1), built)],
+            program_taking(field(1, 0), 4, 2),
+        ),
+        returning(Vec::new()),
+    ];
+    assert_clean(&body_of(&bag_locals(), 0, blocks));
+}
+
+#[test]
+fn a_field_taken_out_of_a_struct_another_name_may_hold_is_flagged() {
+    let blocks = vec![
+        block(Vec::new(), program(Vec::new(), 1, 1)),
+        block(Vec::new(), program_taking(field(1, 0), 4, 2)),
+        returning(Vec::new()),
+    ];
+    assert_one_finding(&body_of(&bag_locals(), 0, blocks), "_1", "takes `_1.0` out");
+}
+
+#[test]
+fn a_field_taken_out_of_a_class_instance_needs_no_proof_of_the_instance() {
+    let mut kinds = bag_locals();
+    kinds[1] = crate_class();
+    let blocks = vec![
+        block(Vec::new(), program(Vec::new(), 1, 1)),
+        block(Vec::new(), program_taking(field(1, 0), 4, 2)),
+        returning(Vec::new()),
+    ];
+    assert_clean(&body_of(&kinds, 0, blocks));
+}
+
+/// `_1 = new; _4 = new; _2 = 0; _1[_2] = move _4; <taken>; push(_1[_2], 7)`,
+/// with `<taken>` a call taking `_1[_2]` out when `is_taken`.
+fn element_pushed_after(is_taken: bool) -> Body {
+    let stored = assign(element(1, 2), Rvalue::Use(moved(local(4))));
+    let push_block = if is_taken { 4 } else { 3 };
+    let mut blocks = vec![
+        block(Vec::new(), runtime(rt::LIST_NEW, vec![constant(8)], 1, 1)),
+        block(Vec::new(), runtime(rt::LIST_NEW, vec![constant(8)], 4, 2)),
+    ];
+    let after_store = if is_taken {
+        blocks.push(block(
+            vec![set(2, 0), stored],
+            program_taking(element(1, 2), 3, 3),
+        ));
+        Vec::new()
+    } else {
+        vec![set(2, 0), stored]
+    };
+    blocks.push(block(after_store, push(element(1, 2), 5, push_block)));
+    blocks.push(returning(Vec::new()));
+    body_of(&nested_list_locals(), 0, blocks)
+}
+
+#[test]
+fn an_element_stored_unshared_and_pushed_is_clean() {
+    assert_clean(&element_pushed_after(false));
+}
+
+#[test]
+fn an_element_taken_out_is_no_longer_known_unshared_after_the_call() {
+    assert_one_finding(&element_pushed_after(true), "_1[_2]", rt::LIST_PUSH);
+}
