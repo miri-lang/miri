@@ -1273,11 +1273,13 @@ fn moves_place_into_an_aggregate(rvalue: &Rvalue, place: &Place) -> bool {
 /// right after it as such a move, the local's own reference going into the
 /// slot; a retain before the store pays for the local, as
 /// [`moves_place_into_an_aggregate`] credits it.
-fn aggregate_taken_locals(rvalue: &Rvalue) -> Vec<Local> {
+fn aggregate_taken_locals(body: &Body, rvalue: &Rvalue) -> Vec<Local> {
     let Rvalue::Aggregate(_, operands) = rvalue else {
         return Vec::new();
     };
-    operands.iter().filter_map(bare_local_moved).collect()
+    (operands.iter())
+        .filter_map(|operand| bare_local_moved(body, operand))
+        .collect()
 }
 
 /// Whether an operand reads exactly `place`, however it is spelled.
@@ -1329,8 +1331,8 @@ fn apply_statement(
             if takes_no_reference(body, dest, rvalue) {
                 return;
             }
-            let taken = aggregate_taken_locals(rvalue);
-            for consumed in consumed_bare_locals(rvalue).into_iter().chain(taken) {
+            let taken = aggregate_taken_locals(body, rvalue);
+            for consumed in consumed_bare_locals(body, rvalue).into_iter().chain(taken) {
                 release(body, &Place::new(consumed), tracked, state, violations);
             }
         }
@@ -1596,9 +1598,16 @@ fn rvalue_is_owning(rvalue: &Rvalue) -> bool {
     }
 }
 
-fn bare_local_moved(operand: &Operand) -> Option<Local> {
+/// The local whose reference a `move` of `operand` hands on: a whole local,
+/// or an optional held as its payload's own pointer whose payload it moves.
+fn bare_local_moved(body: &Body, operand: &Operand) -> Option<Local> {
     match operand {
-        Operand::Move(place) if place.projection.is_empty() => Some(place.local),
+        Operand::Move(place)
+            if place.projection.is_empty()
+                || crate::mir::option_layout::is_nullable_pointer_payload(place, body) =>
+        {
+            Some(place.local)
+        }
         Operand::Move(_) | Operand::Copy(_) | Operand::Constant(_) | Operand::Function(_) => None,
     }
 }
@@ -1614,7 +1623,7 @@ fn bare_local_moved(operand: &Operand) -> Option<Local> {
 /// the container rather than to a local, so a store made without one is copying a
 /// value that was already owned. Consuming there would report the still-rightful
 /// owner's later release as one release too many.
-fn consumed_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
+fn consumed_bare_locals(body: &Body, rvalue: &Rvalue) -> Vec<Local> {
     match rvalue {
         Rvalue::Cast(operand, _) => operand.bare_local().into_iter().collect(),
         Rvalue::Use(_)
@@ -1625,7 +1634,7 @@ fn consumed_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(_, _)
-        | Rvalue::AtomicOp { .. } => moved_bare_locals(rvalue),
+        | Rvalue::AtomicOp { .. } => moved_bare_locals(body, rvalue),
     }
 }
 
@@ -1636,9 +1645,9 @@ fn consumed_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
 /// of its own from its operands, so a local it names is not counted as handed
 /// to the destination here; what an aggregate stores is counted by the rule
 /// for stores above.
-fn moved_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
+fn moved_bare_locals(body: &Body, rvalue: &Rvalue) -> Vec<Local> {
     match rvalue {
-        Rvalue::Use(operand) => bare_local_moved(operand).into_iter().collect(),
+        Rvalue::Use(operand) => bare_local_moved(body, operand).into_iter().collect(),
         Rvalue::Cast(_, _)
         | Rvalue::UnaryOp(_, _)
         | Rvalue::BinaryOp(_, _, _)

@@ -59,6 +59,7 @@
 
 use super::drop_flags::{DropFlags, Partitioned};
 use super::{local_display_name, VerificationViolation};
+use crate::mir::option_layout::is_nullable_pointer_payload;
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
@@ -127,7 +128,7 @@ struct Effect {
     uses: Vec<(Local, Touch)>,
     moves: Vec<Local>,
     rebinds: Vec<Local>,
-    projected_moves: Vec<Local>,
+    projected_moves: Vec<Place>,
     /// The locals a moved end ends.
     moved_ends: Vec<Local>,
 }
@@ -157,7 +158,7 @@ impl Visitor for Effect {
                 if place.projection.is_empty() {
                     self.moves.push(place.local);
                 } else {
-                    self.projected_moves.push(place.local);
+                    self.projected_moves.push(place.clone());
                 }
             }
             Operand::Copy(place) => self.read_place(place),
@@ -181,7 +182,7 @@ impl Visitor for Effect {
 }
 
 /// What `kind`, a statement of block `here`, does to the locals it mentions.
-fn statement_effect(kind: &StatementKind, here: BasicBlock) -> Effect {
+fn statement_effect(body: &Body, kind: &StatementKind, here: BasicBlock) -> Effect {
     let mut effect = Effect::default();
     match kind {
         StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue) => {
@@ -197,6 +198,12 @@ fn statement_effect(kind: &StatementKind, here: BasicBlock) -> Effect {
         }
         StatementKind::StorageDead(_, _) | StatementKind::Nop => {}
     }
+    let (whole, projected) = (effect.projected_moves.drain(..))
+        .partition(|place| is_nullable_pointer_payload(place, body));
+    effect.projected_moves = projected;
+    effect
+        .moves
+        .extend(whole.into_iter().map(|place: Place| place.local));
     effect
 }
 
@@ -222,7 +229,10 @@ fn block_effects(body: &Body, block: usize) -> Vec<(Site, Effect)> {
                 block,
                 statement: Some(index),
             };
-            (site, statement_effect(&statement.kind, BasicBlock(block)))
+            (
+                site,
+                statement_effect(body, &statement.kind, BasicBlock(block)),
+            )
         })
         .chain(std::iter::once((
             Site {
@@ -245,7 +255,7 @@ struct Finding {
 /// Apply `effect` at `site` to `moved`, handing each use of a moved local to
 /// `found`.
 fn apply(effect: &Effect, site: Site, moved: &mut Moved, found: &mut impl FnMut(Finding)) {
-    for &local in &effect.projected_moves {
+    for local in effect.projected_moves.iter().map(|place| place.local) {
         found(Finding {
             local,
             moved_at: site,

@@ -64,6 +64,7 @@
 
 use crate::mir::block::BasicBlock;
 use crate::mir::facts::OwnershipFacts;
+use crate::mir::option_layout::is_nullable_pointer_payload;
 use crate::mir::place::{Local, PlaceContext};
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::{Statement, StatementKind};
@@ -258,9 +259,11 @@ fn move_dying_sources(body: &mut Body, kept: KeptPairs) -> bool {
 
 /// The positions of one retain, the copy it funds and the release it cancels
 /// against, for a copy of a local dying right after it.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct DyingTransfer {
-    local: Local,
+    /// The place the copy reads: the local, or the payload of an optional
+    /// held as its payload's own pointer.
+    source: Place,
     retain: usize,
     copy: usize,
     release: usize,
@@ -277,12 +280,12 @@ fn dying_source_transfer(body: &Body, block: usize, kept: KeptPairs) -> Option<D
             let StatementKind::IncRef(retained) = &statement.kind else {
                 return None;
             };
-            let local = retained.projection.is_empty().then_some(retained.local)?;
+            let local = released_with(body, retained)?;
             if !is_transferable_source(body, local, kept) {
                 return None;
             }
             let copy = next_mention(statements, local, retain + 1)?;
-            if !transfers_local(&statements[copy], local) {
+            if !transfers_local(&statements[copy], retained) {
                 return None;
             }
             let release = copy + 1 + dying_release(&statements[copy + 1..], local)?;
@@ -295,12 +298,21 @@ fn dying_source_transfer(body: &Body, block: usize, kept: KeptPairs) -> Option<D
                 )
             });
             (!releases_between).then_some(DyingTransfer {
-                local,
+                source: retained.clone(),
                 retain,
                 copy,
                 release,
             })
         })
+}
+
+/// The local whose release a retain of `retained` cancels against: the
+/// local itself, retained whole, or an optional held as its payload's own
+/// pointer whose payload is retained, since releasing that optional releases
+/// exactly its payload.
+fn released_with(body: &Body, retained: &Place) -> Option<Local> {
+    (retained.projection.is_empty() || is_nullable_pointer_payload(retained, body))
+        .then_some(retained.local)
 }
 
 /// Whether `local` is one the body owns and releases, and no borrow involves.
@@ -318,9 +330,11 @@ fn next_mention(statements: &[Statement], local: Local, start: usize) -> Option<
     (start..statements.len()).find(|&at| statement_mentions(&statements[at], local))
 }
 
-/// Whether `statement` stores `local` whole into a destination not naming it:
-/// as the value itself, or as one operand of an aggregate naming it once.
-fn transfers_local(statement: &Statement, local: Local) -> bool {
+/// Whether `statement` stores `source` whole into a destination not naming
+/// its local: as the value itself, or as one operand of an aggregate naming
+/// the local once.
+fn transfers_local(statement: &Statement, source: &Place) -> bool {
+    let local = source.local;
     let (StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue)) =
         &statement.kind
     else {
@@ -336,9 +350,17 @@ fn transfers_local(statement: &Statement, local: Local) -> bool {
     });
     let is_stored_whole_once = naming
         .next()
-        .is_some_and(|operand| operand.bare_local() == Some(local))
+        .is_some_and(|operand| reads_place(operand, source))
         && naming.next().is_none();
     is_stored_whole_once && !names_dest
+}
+
+/// Whether `operand` reads `place` as it is.
+fn reads_place(operand: &Operand, place: &Place) -> bool {
+    match operand {
+        Operand::Copy(read) | Operand::Move(read) => read == place,
+        Operand::Constant(_) | Operand::Function(_) => false,
+    }
 }
 
 /// The local an assignment stores into.
@@ -362,8 +384,8 @@ fn apply_transfer(statements: &mut Vec<Statement>, transfer: DyingTransfer) {
         &mut statements[transfer.copy].kind
     {
         for operand in stored_operands_mut(rvalue) {
-            if operand.bare_local() == Some(transfer.local) {
-                *operand = Operand::Move(Place::new(transfer.local));
+            if reads_place(operand, &transfer.source) {
+                *operand = Operand::Move(transfer.source.clone());
             }
         }
     }

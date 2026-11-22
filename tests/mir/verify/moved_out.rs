@@ -453,3 +453,54 @@ fn a_kept_argument_whose_move_is_turned_into_a_copy_is_flagged() {
     assert_eq!(found[0].local, h, "{text}");
     assert!(text.contains("ended as moved"), "{text}");
 }
+
+/// A body like [`host_body`] whose local 1 is a `String?`, held as its
+/// payload's own pointer, and local 2 a string.
+fn optional_payload_body(statements: Vec<Statement>) -> Body {
+    let mut body = Body::new(0, span(), ExecutionModel::Cpu);
+    body.new_local(LocalDecl::new(Type::new(TypeKind::Void, span()), span()));
+    let optional = Type::new(TypeKind::Option(Box::new(string_ty())), span());
+    body.new_local(LocalDecl::new(optional, span()));
+    body.new_local(LocalDecl::new(string_ty(), span()));
+    body.basic_blocks
+        .push(block(statements, TerminatorKind::Return));
+    body
+}
+
+fn payload_of(local: usize) -> Place {
+    Place {
+        local: Local(local),
+        projection: vec![miri::mir::place::PlaceElem::Field(0)],
+    }
+}
+
+#[test]
+fn moving_the_payload_of_an_optional_held_as_its_pointer_moves_the_optional() {
+    let body = optional_payload_body(vec![
+        assign(2, Operand::Move(payload_of(1))),
+        decref(1),
+        decref(2),
+    ]);
+    assert_one_finding(&body, &["bb0[0]", "bb0[1]", "released"]);
+}
+
+#[test]
+fn moving_the_payload_of_an_optional_and_ending_it_is_accepted() {
+    let body = optional_payload_body(vec![
+        assign(2, Operand::Move(payload_of(1))),
+        storage_dead(1),
+        decref(2),
+    ]);
+    assert_clean(&body);
+}
+
+#[test]
+fn moving_a_field_of_a_value_other_than_an_optional_is_flagged() {
+    let mut body = optional_payload_body(vec![
+        assign(2, Operand::Move(payload_of(1))),
+        storage_dead(1),
+        decref(2),
+    ]);
+    body.local_decls[1].ty = string_ty();
+    assert_one_finding(&body, &["projection"]);
+}

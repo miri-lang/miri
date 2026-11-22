@@ -187,6 +187,20 @@ pub fn is_nullable_pointer_optional(kind: &TypeKind, scope: LayoutScope<'_>) -> 
     layers.boxed == 0 && layers.inline == 0 && layers.innermost_nullable_pointer
 }
 
+/// Whether `place` is the payload of an optional `body` holds in a local of
+/// its own as its payload's own pointer ([`is_nullable_pointer_optional`]):
+/// the one projection a `move` may name, since that payload is the optional's
+/// only reference and moving it hands on the optional's.
+pub fn is_nullable_pointer_payload(place: &crate::mir::Place, body: &crate::mir::Body) -> bool {
+    matches!(
+        place.projection.as_slice(),
+        [crate::mir::place::PlaceElem::Field(0)]
+    ) && is_nullable_pointer_optional(
+        &body.local_decls[place.local.0].ty.kind,
+        body.layout_scope(),
+    )
+}
+
 /// The type the alias `kind` names stands for, with the alias's parameters
 /// replaced by the arguments `kind` is written with, followed through chained
 /// aliases. `None` when `kind` names no alias, or when the chain is a cycle.

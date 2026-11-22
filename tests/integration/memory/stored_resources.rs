@@ -387,3 +387,26 @@ fn main()
         "removed 1\nreleased 1\npopped 3\nreleased 3\nleft 1\nreleased 2",
     );
 }
+
+#[test]
+fn the_payload_of_a_matched_result_handed_to_a_keeper_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn shelve(t Token) Slot
+    return Slot(held: Some(t))
+
+fn main()
+    var l = List<Token>()
+    l.push(Token(id: 1))
+    match l.remove_at(0)
+        Some(t)
+            let _s = shelve(t)
+            println("shelved")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "shelved\nreleased 1\nafter",
+    );
+}
