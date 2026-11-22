@@ -10,7 +10,7 @@
 use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::ptr;
 
-use crate::element_bytes::{fits_slot, require_fits_slot, write_slot};
+use crate::element_bytes::{fits_slot, read_slot, require_fits_slot, write_slot};
 use crate::element_order::ElementOrder;
 use crate::rc::{alloc_with_rc, free_with_rc};
 
@@ -818,25 +818,45 @@ pub mod ffi {
     ///
     /// If `elem_drop_fn` is set, calls it on the removed element pointer so that
     /// managed elements have their RC decremented on removal. Use
-    /// `miri_rt_list_take_at` where the element is handed to a caller instead.
+    /// `miri_rt_list_take_out` where the element is handed to a caller instead.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_remove(ptr: *mut MiriList, index: usize) -> u8 {
         remove_at_index(ptr, index, true)
     }
 
-    /// Removes the element at the given index without releasing it, handing the
-    /// list's own reference to the caller.
-    /// Returns true (1) if successful, false (0) if the index was out of bounds.
+    /// Moves the element at `index` out of the list into the caller's
+    /// `payload`-byte storage at `out`, closing the gap behind it.
     ///
-    /// A caller that reads the element out and then removes it holds a pointer
-    /// the list is about to drop: releasing it here would free the value while
-    /// that read is still live. Transferring the reference instead leaves the
-    /// element with exactly one owner, the caller, which releases it as usual.
+    /// The list's reference goes with the element, so the caller owns it and
+    /// nothing is retained or released: a value whose release runs a drop
+    /// hook keeps one holder throughout. An index past the end, which the
+    /// standard library checks before calling, writes a zero element and
+    /// leaves the list as it was.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_list_take_at(ptr: *mut MiriList, index: usize) -> u8 {
-        remove_at_index(ptr, index, false)
+    pub unsafe extern "C" fn miri_rt_list_take_out(
+        ptr: *mut MiriList,
+        index: usize,
+        out: *mut u8,
+        payload: usize,
+    ) {
+        guard::guard_check(ptr as *mut u8);
+        let Some(list) = ptr.as_ref() else {
+            read_slot(out, ptr::null(), payload, 0);
+            return;
+        };
+        if index >= list.len {
+            read_slot(out, ptr::null(), payload, 0);
+            return;
+        }
+        read_slot(
+            out,
+            list.data.add(index * list.elem_size),
+            payload,
+            list.elem_size,
+        );
+        remove_at_index(ptr, index, false);
     }
 
     /// Drop the element at `index` out of the list, releasing it only when the

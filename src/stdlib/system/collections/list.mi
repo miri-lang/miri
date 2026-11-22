@@ -51,6 +51,10 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Indexed<T>, C
     @removes("l, index")
     runtime "core" fn miri_rt_list_remove(l Self, index int) bool
     @writes("l")
+    @removes("l, index")
+    @returns_element
+    runtime "core" fn miri_rt_list_take_out(l Self, index int) T
+    @writes("l")
     @removes("l")
     runtime "core" fn miri_rt_list_clear(l Self)
     @writes("l")
@@ -117,15 +121,12 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Indexed<T>, C
 
     /// Removes and returns the last element, or None if the list is empty.
     ///
-    /// Reading the element out takes a reference of its own, so the list
-    /// releases the one it held as the element leaves it.
+    /// The element moves out with the list's own reference, so the caller
+    /// is its one holder.
     public fn pop() T?
         let len = self.length()
         if len == 0: return None
-        let last = len - 1
-        let item = self[last]
-        miri_rt_list_remove(self, last)
-        return item
+        return miri_rt_list_take_out(self, len - 1)
 
     /// Returns the element at the given index.
     @index_bounds_check("index")
@@ -144,15 +145,13 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Indexed<T>, C
     /// Removes and returns the element at the given index, or None when the
     /// index is negative or past the end.
     ///
-    /// Reading the element out takes a reference of its own, so the list
-    /// releases the one it held as the element leaves it.
+    /// The element moves out with the list's own reference, so the caller
+    /// is its one holder.
     @index_bounds_check("index")
     public fn remove_at(index int) T?
         if index < 0: return None
         if index >= self.length(): return None
-        let item = self[index]
-        miri_rt_list_remove(self, index)
-        return item
+        return miri_rt_list_take_out(self, index)
 
     /// Removes the first occurrence of the given item from the list.
     /// Returns true if an item was removed, false otherwise.

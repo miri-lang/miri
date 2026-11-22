@@ -814,11 +814,26 @@ fn lower_match_subject(
         Operand::Constant(_) | Operand::Function(_) => None,
     };
     let ty = resolve_type(ctx.type_checker, subject);
-    let local = ctx.push_temp(ctx.instantiated_type(&ty), subject.span);
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(Place::new(local), Rvalue::Use(subject_op)),
-        span: subject.span,
-    });
+    // A temporary the subject itself made and nothing else reads — a call's
+    // result — is the subject: copying it would give a resource it holds a
+    // second holder for the whole match.
+    let made_here = match &subject_op {
+        Operand::Copy(place) | Operand::Move(place) => (place.projection.is_empty()
+            && ctx.is_released_by_expression(place.local, watermark))
+        .then_some(place.local),
+        Operand::Constant(_) | Operand::Function(_) => None,
+    };
+    let local = match made_here {
+        Some(local) => local,
+        None => {
+            let local = ctx.push_temp(ctx.instantiated_type(&ty), subject.span);
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(Place::new(local), Rvalue::Use(subject_op)),
+                span: subject.span,
+            });
+            local
+        }
+    };
     Ok(MatchSubject {
         local,
         ty,

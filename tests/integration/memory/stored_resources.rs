@@ -366,3 +366,24 @@ fn main()
         "Use of Moved Value",
     );
 }
+
+#[test]
+fn removing_a_resource_from_a_list_hands_the_caller_its_only_reference() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var l = List<Token>()
+    l.push(Token(id: 1))
+    l.push(Token(id: 2))
+    l.push(Token(id: 3))
+    if let Some(t) = l.remove_at(0)
+        println(f"removed {t.id}")
+    if let Some(t) = l.pop()
+        println(f"popped {t.id}")
+    println(f"left {l.length()}")
+"#,
+        ),
+        "removed 1\nreleased 1\npopped 3\nreleased 3\nleft 1\nreleased 2",
+    );
+}

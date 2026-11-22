@@ -943,7 +943,8 @@ impl<'w> BodyWalk<'w> {
 
     /// What the body returning `value` takes out of `self`: a binding read
     /// out of an element of it a runtime entry point has taken out, what a
-    /// replacing call hands back of a place of it, or what an emptying
+    /// replacing call hands back of a place of it, the element a runtime
+    /// entry point takes out of it and hands back, or what an emptying
     /// method called on a place of it hands back.
     fn taken_out(&self, value: &Expression) -> Option<Emptied> {
         if let ExpressionKind::Identifier(name, _) = &value.node {
@@ -954,8 +955,10 @@ impl<'w> BodyWalk<'w> {
             return None;
         };
         if let ExpressionKind::Identifier(function, _) = &callee.node {
-            let at = *self.facts.replacing.get(function)?;
-            return emptied_at(argument_value(args.get(at)?), &self.params);
+            if let Some(&at) = self.facts.replacing.get(function) {
+                return emptied_at(argument_value(args.get(at)?), &self.params);
+            }
+            return self.element_handed_back_by(function, args);
         }
         let ExpressionKind::Member(receiver, method) = &callee.node else {
             return None;
@@ -964,6 +967,21 @@ impl<'w> BodyWalk<'w> {
             return None;
         };
         self.emptied_through(receiver, method, args)
+    }
+
+    /// What the runtime entry point `entry`, called with `args`, hands back
+    /// of `self`: the element at the index a parameter carries, when the
+    /// entry point takes that element out of the receiver and returns it.
+    fn element_handed_back_by(&self, entry: &str, args: &[Expression]) -> Option<Emptied> {
+        let effect = self.facts.effects.get(entry)?;
+        let removal = effect.removes.filter(|_| effect.returns_element_value())?;
+        let container = argument_value(args.get(removal.container)?);
+        let index = argument_value(args.get(removal.index?)?);
+        let index =
+            parameter_named(index, &self.params).filter(|_| is_rooted_at_receiver(container))?;
+        Some(Emptied::Element {
+            index: index.to_string(),
+        })
     }
 
     /// What the call of `method` on `receiver` with `args` takes out of
