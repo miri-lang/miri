@@ -18,8 +18,7 @@
 //! every parameter instead, and its callers keep releasing a consumed
 //! argument after the call:
 //!
-//! - a constructor and a drop hook, which building and releasing an
-//!   instance runs;
+//! - a drop hook, which releasing an instance runs;
 //! - a method a container's runtime thunk calls ([`ThunkBodies`]), which the
 //!   runtime hands borrowed elements. One keeping a resource it is handed is
 //!   refused where it is declared ([`thunk_keeper_refusal`]);
@@ -38,6 +37,8 @@
 //!
 //! A method's receiver is a parameter like any other: a method keeping its
 //! instance — storing it, returning it, handing it to a keeper — owns it.
+//! A constructor's receiver is the instance its caller is building, which
+//! stays the caller's; the parameters it keeps it owns as any method does.
 //! The table lists the parameters a method keeps in the order a call passes
 //! its operands, the receiver first ([`KeptSlots`]).
 //!
@@ -573,7 +574,9 @@ fn kept_method_positions(
     let function = FunctionId::method(owner, &decl.name);
     let summary = facts.escape_summaries.get(&function)?;
     let receiver = (!method.is_static).then(|| {
-        summary.directly_escapes(0) && !facts.restored.replaces_receiver(owner, &decl.name)
+        !method.is_constructor
+            && summary.directly_escapes(0)
+            && !facts.restored.replaces_receiver(owner, &decl.name)
     });
     let params = (decl.explicit_params().iter().enumerate())
         .map(|(index, param)| summary.directly_escapes(index + 1) && is_held_whole(param))
@@ -640,11 +643,10 @@ fn slot_method<'d>(
 }
 
 /// Whether every call to the method `decl`, registered as `method`, passes
-/// its operands one way: not a constructor or a drop hook, which building
-/// and releasing an instance runs, and not a method declaring type
-/// parameters of its own.
+/// its operands one way: not a drop hook, which releasing an instance runs,
+/// and not a method declaring type parameters of its own.
 fn has_one_convention(decl: &FunctionDeclarationData, method: &MethodInfo) -> bool {
-    !method.is_constructor && !decl.is_drop_hook() && !method.declares_type_parameters()
+    !decl.is_drop_hook() && !method.declares_type_parameters()
 }
 
 /// Whether `decl` has one body every call runs: a host function with a body

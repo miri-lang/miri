@@ -225,3 +225,86 @@ fn main()
         "1\ntag 1\ncleared",
     );
 }
+
+#[test]
+fn a_constructor_storing_a_resource_takes_it_over() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+class Holder
+    var t Token
+    fn init(t Token)
+        self.t = t
+
+fn main()
+    let t = Token(id: 1)
+    if true
+        let _h = Holder(t)
+        println("built")
+    println("after")
+"#,
+        ),
+        "built\nreleased 1\nafter",
+    );
+}
+
+#[test]
+fn a_constructor_only_reading_a_resource_leaves_its_release_to_the_call() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+class Reader
+    public var id int
+    fn init(t Token)
+        self.id = t.id
+
+fn main()
+    let t = Token(id: 1)
+    let r = Reader(t)
+    println(f"read {r.id}")
+"#,
+        ),
+        "released 1\nread 1",
+    );
+}
+
+#[test]
+fn an_inherited_constructor_storing_a_resource_takes_it_over() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+class Base
+    var t Token
+    fn init(t Token)
+        self.t = t
+
+class Derived extends Base
+
+fn main()
+    let d = Derived(Token(id: 1))
+    println("built")
+"#,
+        ),
+        "built\nreleased 1",
+    );
+}
+
+#[test]
+fn a_generic_constructor_storing_a_resource_takes_it_over() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+class Cell<T>
+    var value T
+    fn init(value T)
+        self.value = value
+
+fn main()
+    let t = Token(id: 1)
+    let c = Cell<Token>(t)
+    println("built")
+"#,
+        ),
+        "built\nreleased 1",
+    );
+}

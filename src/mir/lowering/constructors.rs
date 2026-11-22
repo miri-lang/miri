@@ -25,6 +25,7 @@ use crate::type_checker::value_class::LayoutScope;
 
 use super::dispatch::resolve_inherited_method;
 use super::helpers::coerce_rvalue_in;
+use super::kept_parameters::{hand_over_kept_arguments, release_after_kept_call, KeptCall};
 use super::method_dispatch::{instantiated_callee, InstantiatedCallee};
 use super::variable::canonical_declared_type;
 use super::{
@@ -32,6 +33,7 @@ use super::{
     LoweringContext,
 };
 use crate::ast::implicit_methods::INIT_METHOD_NAME;
+use crate::mir::ArgMode;
 use std::collections::HashMap;
 
 /// Lowers a struct constructor call to an Aggregate rvalue.
@@ -352,7 +354,7 @@ pub fn lower_class_constructor(
             ctx,
             span,
             instance_ty,
-            init_symbol,
+            (&init_class, init_symbol),
             &all_fields,
             &init_params,
             args,
@@ -438,7 +440,7 @@ fn lower_class_with_init(
     ctx: &mut LoweringContext,
     span: &Span,
     instance_ty: Type,
-    init_symbol: Symbol,
+    (init_class, init_symbol): (&str, Symbol),
     all_fields: &[(String, crate::type_checker::context::FieldInfo)],
     init_params: &[(String, Type)],
     args: &[Expression],
@@ -473,38 +475,94 @@ fn lower_class_with_init(
         };
         super::dispatch::place_at_parameter(&mut slots, position, op);
     }
-    let mut call_args = vec![Operand::Copy(destination)];
-    call_args.extend(super::dispatch::operands_in_parameter_order(slots, *span)?);
+    let mut params = super::dispatch::operands_in_parameter_order(slots, *span)?;
+    let init = InitCall {
+        owner: init_class,
+        symbol: init_symbol,
+        instance: destination,
+        params: init_params,
+        args,
+        arg_watermark: init_arg_watermark,
+    };
+    emit_init_call(ctx, init, &mut params, *span)?;
+    Ok(result_op)
+}
+
+/// The call a constructor makes to the `init` its class runs.
+struct InitCall<'a> {
+    /// The class declaring the `init`.
+    owner: &'a str,
+    symbol: Symbol,
+    /// The instance being built, which the call lends `init` as its receiver.
+    instance: Place,
+    /// The parameters `init` declares, at the types the call passes them.
+    params: &'a [(String, Type)],
+    /// The arguments as written.
+    args: &'a [Expression],
+    /// The first local lowering the arguments made.
+    arg_watermark: usize,
+}
+
+/// Emits the call to `init`, passing the instance being built and the
+/// argument operands `params`, in parameter order. `init` owns each resource
+/// parameter it keeps, as any method does; the instance itself is the
+/// caller's and always lent. What the call takes over is handed it as a
+/// direct call hands it ([`hand_over_kept_arguments`]), and every argument
+/// temporary it does not take is released once it returns.
+fn emit_init_call(
+    ctx: &mut LoweringContext,
+    init: InitCall<'_>,
+    params: &mut [Operand],
+    span: Span,
+) -> Result<(), LoweringError> {
+    let void_dest = ctx.push_temp(Type::new(TypeKind::Void, span), span);
+    let operand_types = std::iter::once(&ctx.body.local_decls[init.instance.local.0].ty)
+        .chain(init.params.iter().map(|(_, ty)| ty))
+        .cloned()
+        .collect::<Vec<_>>();
+    let kept_all = (ctx.type_checker)
+        .kept_parameters_of_method_at((init.owner, INIT_METHOD_NAME), &operand_types);
+    let kept = kept_all.get(1..).unwrap_or_default();
+    let call = KeptCall {
+        span,
+        receiver: None,
+        kept,
+        args: init.args,
+        arg_watermark: init.arg_watermark,
+        destination: void_dest,
+    };
+    let mut param_modes = Vec::new();
+    let handed = hand_over_kept_arguments(ctx, &call, params, &mut param_modes)?;
+    let arg_locals = super::dispatch::operand_locals(params);
+
+    let mut call_args = vec![Operand::Copy(init.instance)];
+    call_args.extend(params.iter().cloned());
     if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
         call_args.push(Operand::Copy(Place::new(alloc_local)));
     }
-
-    let func_op = Operand::function(init_symbol, *span);
-
-    let void_ty = Type::new(TypeKind::Void, *span);
-    let void_dest = ctx.push_temp(void_ty, *span);
+    let arg_modes = if param_modes.is_empty() {
+        Vec::new()
+    } else {
+        std::iter::once(ArgMode::Borrowed)
+            .chain(param_modes)
+            .collect()
+    };
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(crate::mir::Terminator::new(
         crate::mir::TerminatorKind::Call {
-            func: func_op,
-            args: call_args.clone(),
-            arg_modes: Vec::new(),
+            func: Operand::function(init.symbol, span),
+            args: call_args,
+            arg_modes,
             arg_handles: Vec::new(),
             flags: crate::mir::CallFlags::default(),
             destination: Place::new(void_dest),
             target: Some(target_bb),
         },
-        *span,
+        span,
     ));
     ctx.set_current_block(target_bb);
-
-    for arg_op in call_args.iter().skip(1) {
-        if let Operand::Copy(place) | Operand::Move(place) = arg_op {
-            ctx.emit_temp_drop(place.local, init_arg_watermark, *span);
-        }
-    }
-
-    Ok(result_op)
+    release_after_kept_call(ctx, &call, &arg_locals, &handed, span);
+    Ok(())
 }
 
 fn lower_class_without_init(
