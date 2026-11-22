@@ -100,9 +100,14 @@ fn exec_miri(command: &str, input: &str, program_args: &[&str]) -> CompilerResul
     for attempt in 1..=max_attempts {
         let mut cmd = miri_cmd();
         cmd.env("RUST_BACKTRACE", "1")
-            // TODO: also run under MIRI_HEAP_GUARD. The leak check counts the
-            // reference-count balance, so an allocation that is never retained
-            // and never released leaves it even and leaks unseen.
+            // The leak check counts every block: those the runtime allocates
+            // with a count header and those compiled code lays out itself
+            // (class instances, tuples, enum payloads, closure environments).
+            // TODO: also set MIRI_HOOK_CHECK=1 here. It fails today because
+            // a resource handed to a collection, a constructed value, a
+            // reassigned binding or a field is retained rather than moved, and
+            // an element or field of a resource is read through a retained
+            // temporary.
             .env("MIRI_LEAK_CHECK", "1")
             // Findings are fatal: every program the suite compiles is verifier
             // corpus, so an RC seam introduced anywhere fails the test that

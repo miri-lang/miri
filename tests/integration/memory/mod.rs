@@ -37,6 +37,7 @@ pub mod kept_imported_calls;
 pub mod kept_operator_and_loop_calls;
 pub mod kept_receivers;
 pub mod kept_virtual_calls;
+pub mod leak_check;
 pub mod lent_field_arguments;
 pub mod lent_function_parameters;
 pub mod loop_headers_across_calls;

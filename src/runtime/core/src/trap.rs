@@ -55,6 +55,9 @@ pub(crate) mod code {
     pub(crate) const NOT_STEPPABLE: &str = "MER_RT_019";
     /// A program's calls nested deeper than its stack.
     pub(crate) const STACK_OVERFLOW: &str = "MER_RT_020";
+    /// A block whose release runs a drop hook given a second holder, caught
+    /// by a checked build's increment check.
+    pub(crate) const HOOKED_BLOCK_SHARED: &str = "MER_RT_021";
 }
 
 /// The sentences a trap reports for the faults the host and a GPU kernel

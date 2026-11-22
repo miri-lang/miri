@@ -10,8 +10,11 @@
 //! This module provides helpers for allocation and deallocation with
 //! this layout, so every heap type uses the same convention.
 //!
-//! When the `MIRI_LEAK_CHECK` environment variable is set to `1`, a global
-//! allocation counter tracks alloc/free pairs and reports leaks at exit.
+//! When the `MIRI_LEAK_CHECK` environment variable is set to `1`, two global
+//! balances track alloc/free pairs and report leaks at exit: one for blocks
+//! allocated here with a reference-count header, one for the blocks compiled
+//! code allocates itself (class instances, tuples, enum payloads, closure
+//! environments).
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 
@@ -24,6 +27,12 @@ pub const RC_HEADER_SIZE: usize = crate::abi_layout::COUNT_WORDS * std::mem::siz
 /// Global counter for RC-tracked heap objects (strings, lists, arrays, classes, …).
 /// Incremented on alloc, decremented on free. Non-zero at exit → leak or double-free.
 static RC_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
+
+/// Global counter for the blocks compiled code allocates itself and reports
+/// through [`miri_rt_class_alloc_track`] and [`miri_rt_class_free_track`].
+/// Non-zero at exit → a class instance, tuple, enum payload or closure
+/// environment was never released, or was released twice.
+static INLINE_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
 
 /// Nothing to do where the runtime registers its exit handlers from a
 /// load-time initialiser (see `alloc_count`): they are in place before compiled
@@ -74,9 +83,10 @@ pub(crate) fn report_leak_check_at_exit() {
 
     // Then check for leaks
     let rc_balance = RC_ALLOC_BALANCE.load(Ordering::Relaxed);
-    if rc_balance != 0 {
+    let inline_balance = INLINE_ALLOC_BALANCE.load(Ordering::Relaxed);
+    if rc_balance != 0 || inline_balance != 0 {
         // Use a raw write to stderr to avoid Rust's buffered I/O flushing issues.
-        let msg = format!("MIRI_LEAK_CHECK: leaked {rc_balance} RC allocation(s)\n");
+        let msg = leak_report(rc_balance, inline_balance);
         // `_exit` below skips the profiler's atexit handler too; a leak
         // leaves the heap sound enough to write its record.
         crate::profile::finish();
@@ -87,6 +97,24 @@ pub(crate) fn report_leak_check_at_exit() {
             libc::_exit(99);
         }
     }
+}
+
+/// The exit report for unbalanced counters: one line per balance that is not
+/// zero, so a test can tell which kind of block was left behind.
+fn leak_report(rc_balance: isize, inline_balance: isize) -> String {
+    let mut msg = String::new();
+    if rc_balance != 0 {
+        msg.push_str(&format!(
+            "MIRI_LEAK_CHECK: leaked {rc_balance} RC allocation(s)\n"
+        ));
+    }
+    if inline_balance != 0 {
+        msg.push_str(&format!(
+            "MIRI_LEAK_CHECK: leaked {inline_balance} inline block(s) \
+             (class instance, tuple, enum payload or closure environment)\n"
+        ));
+    }
+    msg
 }
 
 /// Allocates `[RC=1][payload]` and returns a pointer to the payload.
@@ -161,6 +189,10 @@ pub unsafe fn copy_reference(referenced: usize, clone_fn: usize) -> usize {
 ///
 /// # Safety
 /// `ptr` must have been allocated via `alloc_with_rc`.
+///
+/// `#[track_caller]` so the hooked-block check names the intrinsic that made
+/// the increment.
+#[track_caller]
 pub unsafe fn incref(ptr: *mut u8) {
     if ptr.is_null() {
         return;
@@ -169,6 +201,8 @@ pub unsafe fn incref(ptr: *mut u8) {
     let rc = *rc_ptr;
     if !crate::abi_layout::is_immortal(rc) {
         *rc_ptr = rc.saturating_add(1);
+        let by = crate::hooked_blocks::Increment::Runtime(std::panic::Location::caller());
+        crate::hooked_blocks::check_retain(ptr, by);
     }
 }
 
@@ -310,8 +344,9 @@ pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
 /// Leaks one block of the kind compiled code allocates itself — a class
 /// instance, a closure environment — for testing the heap guard's leak report.
 ///
-/// The block is reported to the guard as a class block and never released, so
-/// under `MIRI_HEAP_GUARD=1` the exit handler reports it as leaked. It once
+/// The block is reported as a class block and never released, so under
+/// `MIRI_LEAK_CHECK=1` or `MIRI_HEAP_GUARD=1` the exit handler reports it as
+/// leaked. It once
 /// unbalanced a closure-only counter that no longer exists; the name is kept
 /// because a runtime function's name, once declared to the stdlib, is never
 /// changed.
@@ -350,6 +385,9 @@ pub unsafe extern "C" fn miri_rt_class_alloc_track(ptr: *mut u8) {
     // here as null and must be ignored rather than recorded.
     if !ptr.is_null() {
         crate::alloc_count::increment_inline_count();
+        if is_counted() {
+            INLINE_ALLOC_BALANCE.fetch_add(1, Ordering::Relaxed);
+        }
     }
     crate::guard::guard_alloc_raw(ptr, AllocKind::Class);
 }
@@ -366,6 +404,10 @@ pub unsafe extern "C" fn miri_rt_class_alloc_track(ptr: *mut u8) {
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_class_free_track(ptr: *mut u8) {
     crate::guard::resolve_tracking_state();
+    if !ptr.is_null() && is_counted() {
+        INLINE_ALLOC_BALANCE.fetch_sub(1, Ordering::Relaxed);
+    }
+    crate::hooked_blocks::forget_block(ptr);
     crate::guard::guard_free_raw(ptr);
 }
 

@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 127
+## Error fixtures (`fail/`) — 128
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -76,6 +76,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_RT_017 | Triggers MER_RT_017: a test helper hands a writing method's check a receiver two references hold. |
 | MER_RT_019 | Triggers MER_RT_019: a range of strings starts at a computed bound of two characters. |
 | MER_RT_020 | Triggers MER_RT_020: a function that always calls itself outgrows the stack. |
+| MER_RT_021 | Triggers MER_RT_021: a test helper gives a value whose release runs a drop hook a second holder. |
 | MER_TAR_002 | Triggers MER_TAR_002: Unsupported Operation in GPU Code. |
 | MER_TAR_005 | Triggers MER_TAR_005: Invalid GPU Parallel Construct. |
 | MER_TAR_006 | Triggers MER_TAR_006: GPU Residency Violation. |
@@ -161,7 +162,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 136
+## Accepted fixtures (`pass/`) — 137
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -232,6 +233,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_RT_017 | Accepted counterpart of MER_RT_017: a writer called on a shared list copies it first, so its receiver arrives unique. |
 | MER_RT_019 | Accepted counterpart of MER_RT_019: a computed bound of one character steps by code point. |
 | MER_RT_020 | Accepted counterpart of MER_RT_020: the recursion stops at a base case inside the stack. |
+| MER_RT_021 | Accepted counterpart of MER_RT_021: a resource moved from binding to binding keeps one holder, and its hook runs once. |
 | MER_TAR_002 | Accepted counterpart of MER_TAR_002: Unsupported Operation in GPU Code does not fire. |
 | MER_TAR_005 | Accepted counterpart of MER_TAR_005: Invalid GPU Parallel Construct does not fire. |
 | MER_TYP_002 | Correct type in variable initialization - string assigned to string |

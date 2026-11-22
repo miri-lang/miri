@@ -1,0 +1,7 @@
+// expect: MER_RT_021
+// command: run
+// summary: Triggers MER_RT_021: a test helper gives a value whose release runs a drop hook a second holder.
+use system.testing
+
+fn main()
+    simulate_shared_hooked_block()

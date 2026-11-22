@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::utils::{miri_build, miri_check, miri_check_json, miri_run, miri_run_project};
+use crate::utils::{
+    miri_build, miri_check, miri_check_json, miri_run, miri_run_project, miri_run_with_env,
+};
 
 /// Checks whether the output contains an error header in either format:
 /// - `error:` (plain, no error code)
@@ -261,9 +263,10 @@ pub fn assert_runtime_error(code: &str, expected_error: &str) {
 /// MIRI_LEAK_CHECK leak message in stderr containing `expected_fragment`.
 ///
 /// Use this to verify that the leak detector fires for specific leak scenarios
-/// (e.g. a reference cycle that keeps a list alive). It counts only blocks
-/// allocated with a reference-count header; a leaked class block or closure
-/// environment is seen by the heap guard instead (`assert_heap_guard_detects`).
+/// (e.g. a reference cycle that keeps a list alive). It counts the blocks
+/// allocated with a reference-count header and, separately, the blocks
+/// compiled code lays out itself: a class instance, tuple, enum payload or
+/// closure environment.
 pub fn assert_leak_detected(code: &str, expected_fragment: &str) {
     let result = miri_run(code);
 
@@ -305,12 +308,30 @@ pub fn assert_runtime_crash(code: &str) {
     }
 }
 
+/// Assert that `code` prints `expected` under `MIRI_HOOK_CHECK=1`, the check
+/// that a value whose release runs a drop hook never gains a second holder,
+/// with the leak check on as in every run.
+pub fn assert_hook_check_output(code: &str, expected: &str) {
+    let result = miri_run_with_env(code, "MIRI_HOOK_CHECK", "1");
+    if !result.success {
+        panic!(
+            "Expected the program to run with one holder per hooked value, but it failed:\n{}",
+            result.output()
+        );
+    }
+    if !result.output().contains(expected) {
+        panic!(
+            "Expected output '{}' not found in output:\n{}",
+            expected,
+            result.output()
+        );
+    }
+}
+
 /// Assert that the code compiles and runs cleanly under MIRI_HEAP_GUARD=1.
 ///
 /// The heap guard sanitizer must not produce any error output for correct code.
 pub fn assert_heap_guard_ok(code: &str) {
-    use crate::utils::miri_run_with_env;
-
     let result = miri_run_with_env(code, "MIRI_HEAP_GUARD", "1");
 
     if !result.success {
@@ -336,8 +357,6 @@ pub fn assert_heap_guard_ok(code: &str) {
 /// program computed anything; a read of freed memory that happens to print the
 /// right bytes and one that prints garbage look the same to it.
 pub fn assert_heap_guard_output(code: &str, expected: &str) {
-    use crate::utils::miri_run_with_env;
-
     let result = miri_run_with_env(code, "MIRI_HEAP_GUARD", "1");
 
     if !result.success || result.stderr.contains("MIRI_HEAP_GUARD:") {
@@ -361,8 +380,6 @@ pub fn assert_heap_guard_output(code: &str, expected: &str) {
 /// silent on correct code, this one proves it actually fires. Without both, a
 /// guard that never activates would look indistinguishable from a clean run.
 pub fn assert_heap_guard_detects(code: &str, expected_fragments: &[&str]) {
-    use crate::utils::miri_run_with_env;
-
     let result = miri_run_with_env(code, "MIRI_HEAP_GUARD", "1");
 
     if result.success {
@@ -399,8 +416,6 @@ pub fn assert_heap_guard_detects(code: &str, expected_fragments: &[&str]) {
 /// the runtime's tracking state and skips the reporting hooks. This helper is
 /// the coverage for that path.
 pub fn assert_runs_untracked(code: &str, expected: &str) {
-    use crate::utils::miri_run_with_env;
-
     let result = miri_run_with_env(code, "MIRI_LEAK_CHECK", "0");
 
     if !result.success {
@@ -571,8 +586,6 @@ pub fn assert_project_compiler_error(files: &[(&str, &str)], expected_error: &st
 ///
 /// Returns a parsed allocation count from the `MIRI_ALLOC_COUNT:` stderr line.
 pub fn assert_allocation_count(code: &str, expected_count: usize) {
-    use crate::utils::miri_run_with_env;
-
     let result = miri_run_with_env(code, "MIRI_ALLOC_COUNT", "1");
 
     if !result.success {
@@ -652,8 +665,6 @@ pub fn assert_allocation_count(code: &str, expected_count: usize) {
 /// 2. Does NOT print any MIRI_ALLOC_COUNT line
 /// 3. Leak detection still works normally
 pub fn assert_allocation_count_disabled(code: &str) {
-    use crate::utils::miri_run_with_env;
-
     // Run with MIRI_LEAK_CHECK=1 (the default) but no MIRI_ALLOC_COUNT
     let result = miri_run_with_env(code, "MIRI_LEAK_CHECK", "1");
 
@@ -765,8 +776,6 @@ pub fn parse_alloc_count_breakdown_with_env(
 
 /// Get just the total allocation count from a program
 pub fn get_allocation_count_value(code: &str) -> usize {
-    use crate::utils::miri_run_with_env;
-
     let result = miri_run_with_env(code, "MIRI_ALLOC_COUNT", "1");
 
     if !result.success {

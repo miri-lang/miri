@@ -1,0 +1,12 @@
+// summary: Accepted counterpart of MER_RT_021: a resource moved from binding to binding keeps one holder, and its hook runs once.
+// expect-stdout: 1
+// expect-stdout: released 1
+class Token
+    public var id int
+    fn drop(self)
+        println(f"released {self.id}")
+
+fn main()
+    let t = Token(id: 1)
+    let moved = t
+    println(f"{moved.id}")

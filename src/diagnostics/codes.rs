@@ -1407,7 +1407,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
-    // RT — Runtime traps and assertion failures (20 codes: 001-020)
+    // RT — Runtime traps and assertion failures (21 codes: 001-021)
     "RT",
     "001",
     RtDivisionByZero,
@@ -1545,6 +1545,13 @@ diagnostics!(
     "020",
     RtStackOverflow,
     "Stack Overflow",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "RT",
+    "021",
+    RtHookedValueShared,
+    "Hooked Value Shared",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

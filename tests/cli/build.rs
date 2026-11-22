@@ -829,12 +829,14 @@ fn main()
 
 /// The runtime symbols compiled code reaches only to serve a check or a
 /// counter: the tracking state it tests and the hooks behind that test.
-const CHECK_HOOKS: [&str; 7] = [
+const CHECK_HOOKS: [&str; 9] = [
     "miri_rt_tracking_state",
     "miri_rt_rc_is_shared",
     "miri_rt_class_alloc_track",
     "miri_rt_class_free_track",
     "miri_rt_release_check",
+    "miri_rt_hooked_block_mark",
+    "miri_rt_retain_check",
     "miri_rt_rc_stats_dup",
     "miri_rt_rc_stats_free",
 ];

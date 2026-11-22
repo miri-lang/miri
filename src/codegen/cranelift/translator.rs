@@ -2547,6 +2547,43 @@ impl<'a> FunctionTranslator<'a> {
         })
     }
 
+    /// Calls `miri_rt_retain_check(ptr)`, while the runtime is tracking, after
+    /// an increment of `ptr`'s count, so the runtime can stop the program when
+    /// the increment gave a block whose release runs a drop hook a second
+    /// holder.
+    pub(crate) fn emit_retain_check(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+    ) -> Result<(), CodegenError> {
+        Self::emit_tracked_pointer_hook(builder, ctx, rt::RETAIN_CHECK, ptr)
+    }
+
+    /// Calls the runtime hook `name`, which takes one pointer and returns
+    /// nothing, while the runtime asks to observe.
+    pub(crate) fn emit_tracked_pointer_hook(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        name: &'static str,
+        ptr: Value,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = builder.func.dfg.value_type(ptr);
+        Self::emit_tracked(builder, ctx, |builder, ctx| {
+            Self::call_cached_func(
+                builder,
+                ctx.module,
+                &mut ctx.cached_funcs,
+                CallSite {
+                    name,
+                    param_types: &[ptr_type],
+                    return_types: &[],
+                    args: &[ptr],
+                },
+            )?;
+            Ok(())
+        })
+    }
+
     /// Calls the runtime hook `name`, which takes nothing and returns nothing,
     /// while the runtime asks to observe: the `MIRI_RC_STATS` counters.
     pub(crate) fn emit_rc_stats_hook(

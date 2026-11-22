@@ -13,11 +13,12 @@ use std::sync::OnceLock;
 
 /// Every environment variable that asks the runtime to check or count what
 /// compiled code does with the heap.
-const CHECK_VARIABLES: [&str; 4] = [
+const CHECK_VARIABLES: [&str; 5] = [
     "MIRI_HEAP_GUARD",
     "MIRI_LEAK_CHECK",
     "MIRI_ALLOC_COUNT",
     "MIRI_RC_STATS",
+    "MIRI_HOOK_CHECK",
 ];
 
 /// Set when the program's entry point reported that it was compiled without
@@ -44,6 +45,14 @@ pub fn is_alloc_count_enabled() -> bool {
 /// Whether the allocation-balance check was asked for.
 pub fn is_leak_check_enabled() -> bool {
     !checks_compiled_out() && is_requested("MIRI_LEAK_CHECK")
+}
+
+/// Whether the check that a block whose release runs a drop hook keeps one
+/// holder was asked for via MIRI_HOOK_CHECK=1.
+/// Read once: compiled code asks at every hooked block it builds.
+pub fn is_hook_check_enabled() -> bool {
+    static REQUESTED: OnceLock<bool> = OnceLock::new();
+    !checks_compiled_out() && *REQUESTED.get_or_init(|| is_requested("MIRI_HOOK_CHECK"))
 }
 
 /// Called once, first thing, by the entry point of a release build, whose

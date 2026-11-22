@@ -39,6 +39,7 @@ pub mod fs;
 pub mod guard;
 pub mod handler_config;
 pub mod hash;
+pub mod hooked_blocks;
 pub mod int128;
 pub mod io;
 pub mod list;

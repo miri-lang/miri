@@ -813,6 +813,7 @@ impl<'a> FunctionTranslator<'a> {
 
         let payload_ptr =
             Self::alloc_aggregate_payload(builder, ctx, ptr_type, ptr_size, total_size)?;
+        Self::mark_hooked_block(builder, ctx, kind, payload_ptr, type_ctx)?;
         if is_tuple {
             let count = builder.ins().iconst(ptr_type, translated.len() as i64);
             builder
@@ -1217,6 +1218,39 @@ impl<'a> FunctionTranslator<'a> {
     ///
     /// The vtable is the instantiation's own, named by the arguments `ty`
     /// carries; `generate_vtables` defines it from the same answer.
+    /// Marks a class or enum instance whose type has a drop hook, while the
+    /// runtime tracks, so the runtime can stop the program if the block ever
+    /// gains a second holder. Whether the type has a hook is the type facts'
+    /// answer; this only executes it.
+    fn mark_hooked_block(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        kind: &AggregateKind,
+        payload_ptr: Value,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let name = match kind {
+            AggregateKind::Class(ty) => match &ty.kind {
+                TypeKind::Custom(name, _) => name.as_str(),
+                _ => return Ok(()),
+            },
+            AggregateKind::Enum(name, _) => name,
+            AggregateKind::Tuple(_)
+            | AggregateKind::Array
+            | AggregateKind::Struct(_)
+            | AggregateKind::List
+            | AggregateKind::FormattedString
+            | AggregateKind::Set
+            | AggregateKind::Map
+            | AggregateKind::Option(_)
+            | AggregateKind::Closure(_, _) => return Ok(()),
+        };
+        if !type_ctx.facts.has_drop_hook(name) {
+            return Ok(());
+        }
+        Self::emit_tracked_pointer_hook(builder, ctx, rt::HOOKED_BLOCK_MARK, payload_ptr)
+    }
+
     fn class_vtable_symbol(kind: &AggregateKind, type_ctx: &TypeCtx) -> Option<String> {
         let AggregateKind::Class(ty) = kind else {
             return None;

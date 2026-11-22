@@ -349,6 +349,28 @@ fn test_a_block_the_heap_guard_finds_used_after_release_is_reported_as_use_after
     );
 }
 
+const SHARED_HOOKED_BLOCK: &str =
+    "use system.testing\n\nfn main()\n    simulate_shared_hooked_block()\n";
+
+#[test]
+fn test_a_hooked_block_given_a_second_holder_is_reported_as_shared() {
+    let (envelope, status, stdout) = run_envelope(SHARED_HOOKED_BLOCK, false);
+    assert_eq!(envelope["ok"], false, "{}", stdout);
+    assert_eq!(
+        envelope["diagnostics"][0]["code"], "MER_RT_021",
+        "the shared hooked block carries no code of its own: {}",
+        stdout
+    );
+    assert!(
+        envelope["stderrTail"]
+            .as_str()
+            .is_some_and(|tail| tail.contains("gained a second holder")),
+        "the check's own report is missing: {}",
+        stdout
+    );
+    assert_eq!(status, Some(1), "{}", stdout);
+}
+
 #[test]
 fn test_without_the_heap_guard_the_use_after_free_helper_reads_nothing() {
     let (envelope, status, stdout) = run_envelope(USE_AFTER_FREE, false);

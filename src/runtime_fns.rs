@@ -37,8 +37,8 @@ pub const RUNTIME_SYMBOL_PREFIX: &str = "miri_rt_";
 /// Constants for all `miri_rt_*` runtime symbols.
 pub mod rt {
     // Test-only simulations
-    /// Test-only: leaks one class block to verify the heap guard's leak report.
-    /// It now leaks a class block rather than unbalancing a closure counter;
+    /// Test-only: leaks one class block to verify the leak check's and the heap
+    /// guard's leak reports. It now leaks a class block rather than unbalancing a closure counter;
     /// the name is kept because runtime function names are write-once.
     pub const CLOSURE_SIMULATE_LEAK: &str = "miri_rt_test_simulate_closure_leak";
     /// Test-only: frees one allocation twice to verify the heap guard's
@@ -47,6 +47,9 @@ pub mod rt {
     /// Test-only: hands the receiver uniqueness check a block two references
     /// hold, to verify it stops the program.
     pub const SIMULATE_SHARED_RECEIVER: &str = "miri_rt_test_simulate_shared_receiver";
+    /// Test-only: gives a block whose release runs a drop hook a second
+    /// holder, to verify the increment check stops the program.
+    pub const SIMULATE_SHARED_HOOKED_BLOCK: &str = "miri_rt_test_simulate_shared_hooked_block";
     /// Test-only: hands the heap guard's entry check a released block, to
     /// verify it reports a use after free.
     pub const SIMULATE_USE_AFTER_FREE: &str = "miri_rt_test_simulate_use_after_free";
@@ -75,6 +78,14 @@ pub mod rt {
     /// Compiler-internal: lets the heap guard see an inline release before it
     /// reads the released block, not in stdlib. Paired with [`CLASS_FREE_TRACK`].
     pub const RELEASE_CHECK: &str = "miri_rt_release_check";
+    /// Compiler-internal: marks a block whose release runs a drop hook, so the
+    /// increment check can see it gain a second holder, not in stdlib. Called
+    /// only while the tracking state is on.
+    pub const HOOKED_BLOCK_MARK: &str = "miri_rt_hooked_block_mark";
+    /// Compiler-internal: stops the program when an increment compiled code
+    /// made raised a marked block past one, not in stdlib. Called only while
+    /// the tracking state is on. Paired with [`HOOKED_BLOCK_MARK`].
+    pub const RETAIN_CHECK: &str = "miri_rt_retain_check";
     /// Compiler-internal: counts an increment compiled code made, for
     /// `MIRI_RC_STATS`, not in stdlib. Called only while the tracking state is on.
     pub const RC_STATS_DUP: &str = "miri_rt_rc_stats_dup";
@@ -468,6 +479,7 @@ pub mod rt {
         CLOSURE_SIMULATE_LEAK,
         SIMULATE_DOUBLE_FREE,
         SIMULATE_SHARED_RECEIVER,
+        SIMULATE_SHARED_HOOKED_BLOCK,
         SIMULATE_USE_AFTER_FREE,
         SIMULATE_CLOSURE_OVER_RELEASE,
         SIMULATE_INLINE_OVER_RELEASE,
@@ -476,6 +488,8 @@ pub mod rt {
         CLASS_ALLOC_TRACK,
         CLASS_FREE_TRACK,
         RELEASE_CHECK,
+        HOOKED_BLOCK_MARK,
+        RETAIN_CHECK,
         RC_STATS_DUP,
         RC_STATS_FREE,
         RC_STATS_COW_COPY,

@@ -279,6 +279,7 @@ impl<'a> FunctionTranslator<'a> {
             .ins()
             .store(MemFlagsData::new(), new_rc, header_ptr, 0);
         Self::emit_rc_stats_hook(builder, ctx, rt::RC_STATS_DUP)?;
+        Self::emit_retain_check(builder, ctx, ptr)?;
         builder.ins().jump(merge_block, &[]);
 
         builder.seal_block(rc_block);

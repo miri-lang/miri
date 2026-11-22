@@ -181,6 +181,17 @@ bytes into a heap buffer of its own.
   first asks the guard about it. A block already released traps with `MER_RT_018`,
   naming where it was allocated and released; a header whose count no longer reads
   as one traps with `MER_RT_015`.
+- `MIRI_LEAK_CHECK=1` keeps two balances and reports either one that is not zero
+  at exit: `[RC][payload]` blocks allocated by `alloc_with_rc`, and the blocks
+  compiled code lays out itself (class instances, tuples, enum payloads, closure
+  environments), counted by `miri_rt_class_alloc_track` / `miri_rt_class_free_track`.
+- Under `MIRI_HOOK_CHECK=1`, in a build without `--release`, compiled code marks
+  each class or enum instance whose type has a drop hook (`miri_rt_hooked_block_mark`)
+  and every increment, compiled code's (`miri_rt_retain_check`) and the runtime's
+  own (`rc::incref`), asks whether it raised a marked block past one: a resource
+  has one holder, so that traps with `MER_RT_021`. The check is asked for, not
+  on under the leak check, because the compiler still retains a resource where
+  it should move it in several places.
 - **Poison mode.** In a build without `--release`, while `MIRI_LEAK_CHECK`,
   `MIRI_ALLOC_COUNT` or `MIRI_RC_STATS` is asked for or `MallocScribble` is set
   — so in every test run — the cache also fills each released block past those

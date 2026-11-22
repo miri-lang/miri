@@ -45,11 +45,11 @@ runtime "core" fn miri_rt_test_simulate_closure_leak()
 
 /// Leaks one class block, the kind of block a closure environment is.
 ///
-/// Under MIRI_HEAP_GUARD the exit handler reports the block as a leaked class
-/// allocation and the process exits with a failure. Closures have no leak
-/// counter of their own: a leaked closure environment is reported by the heap
-/// guard exactly as a leaked class instance is.
-@deprecated("run the program under MIRI_HEAP_GUARD=1, which reports a leaked closure environment as a leaked class block")
+/// Under MIRI_LEAK_CHECK the exit handler reports it as a leaked inline block,
+/// and under MIRI_HEAP_GUARD as a leaked class allocation; either way the
+/// process exits with a failure. Closures have no leak counter of their own: a
+/// leaked closure environment is reported exactly as a leaked class instance
+/// is.
 public fn simulate_closure_leak()
     miri_rt_test_simulate_closure_leak()
 
@@ -82,6 +82,16 @@ runtime "core" fn miri_rt_test_simulate_shared_receiver()
 /// written, in every build. Use in tests that verify the check fires.
 public fn simulate_shared_receiver()
     miri_rt_test_simulate_shared_receiver()
+
+runtime "core" fn miri_rt_test_simulate_shared_hooked_block()
+
+/// Gives a block whose release runs a drop hook a second holder.
+///
+/// The increment check stops the program with MER_RT_021 while the runtime
+/// tracks allocations, as it does under MIRI_LEAK_CHECK=1. Use in tests that
+/// verify the check fires.
+public fn simulate_shared_hooked_block()
+    miri_rt_test_simulate_shared_hooked_block()
 
 @closure("f, 0, none")
 runtime "core" fn miri_rt_test_simulate_closure_over_release(f fn() int)
