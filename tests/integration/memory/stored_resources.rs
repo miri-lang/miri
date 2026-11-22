@@ -1,0 +1,227 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+//! A resource has one owner, so storing it — in a variable, a field, an
+//! element or a collection — moves it there: its hook runs where the new
+//! holder lets it go, a later use of the old binding is refused, and no
+//! block whose release runs a hook ever has a second holder, which
+//! `MIRI_HOOK_CHECK=1` traps.
+
+use super::super::utils::*;
+use crate::utils::miri_run_with_env;
+
+const TOKEN: &str = r#"
+use system.collections.list
+
+class Token
+    public var id int
+    fn drop(self)
+        println(f"released {self.id}")
+
+class Slot
+    public var held Token?
+"#;
+
+fn with_token(program: &str) -> String {
+    format!("{TOKEN}{program}")
+}
+
+/// Run `code` with the hook check on, expecting `expected` and a clean exit.
+fn assert_one_holder_output(code: &str, expected: &str) {
+    let result = miri_run_with_env(code, "MIRI_HOOK_CHECK", "1");
+    assert!(
+        result.success,
+        "expected a clean run under MIRI_HOOK_CHECK=1:\n{}",
+        result.output()
+    );
+    assert_eq!(result.stdout.trim_end(), expected, "{}", result.stderr);
+}
+
+#[test]
+fn reassigning_a_variable_moves_the_resource_into_it() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    let t = Token(id: 1)
+    var u = Token(id: 2)
+    u = t
+    println("after move")
+    u = Token(id: 3)
+    println("after replace")
+"#,
+        ),
+        "released 2\nafter move\nreleased 1\nafter replace\nreleased 3",
+    );
+}
+
+#[test]
+fn a_resource_read_after_a_reassignment_moved_it_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    let t = Token(id: 1)
+    var u = Token(id: 2)
+    u = t
+    println(f"{t.id}")
+"#,
+        ),
+        "Use of Moved Value",
+    );
+}
+
+#[test]
+fn a_variable_assigned_to_itself_keeps_its_resource() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var u = Token(id: 1)
+    u = u
+    println(f"kept {u.id}")
+"#,
+        ),
+        "kept 1\nreleased 1",
+    );
+}
+
+#[test]
+fn a_resource_reassigned_on_one_branch_is_released_once_on_each_path() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn pick(take bool)
+    let t = Token(id: 1)
+    var u = Token(id: 2)
+    if take
+        u = t
+    println("picked")
+
+fn main()
+    pick(true)
+    pick(false)
+"#,
+        ),
+        "released 2\npicked\nreleased 1\npicked\nreleased 2\nreleased 1",
+    );
+}
+
+#[test]
+fn storing_a_resource_in_a_field_moves_it_there() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var s = Slot(held: None)
+    let w = Token(id: 4)
+    s.held = w
+    println("stored")
+    s.held = None
+    println("cleared")
+"#,
+        ),
+        "stored\nreleased 4\ncleared",
+    );
+}
+
+#[test]
+fn a_resource_read_after_a_field_store_moved_it_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    var s = Slot(held: None)
+    let w = Token(id: 4)
+    s.held = w
+    println(f"{w.id}")
+"#,
+        ),
+        "Use of Moved Value",
+    );
+}
+
+#[test]
+fn storing_a_resource_in_an_element_moves_it_there() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var l = List<Token>()
+    l.push(Token(id: 1))
+    let t = Token(id: 2)
+    l[0] = t
+    println("stored")
+    l.clear()
+    println("cleared")
+"#,
+        ),
+        "released 1\nstored\nreleased 2\ncleared",
+    );
+}
+
+#[test]
+fn pushing_a_resource_hands_the_list_its_only_reference() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    let t = Token(id: 1)
+    var l = List<Token>()
+    l.push(t)
+    println("pushed")
+    l.clear()
+    println("cleared")
+"#,
+        ),
+        "pushed\nreleased 1\ncleared",
+    );
+}
+
+#[test]
+fn reading_a_resource_element_or_field_borrows_it() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var l = List<Token>()
+    l.push(Token(id: 1))
+    println(f"{l[0].id}")
+    for t in l
+        println(f"each {t.id}")
+    let s = Slot(held: Token(id: 2))
+    if let Some(h) = s.held
+        println(f"held {h.id}")
+"#,
+        ),
+        "1\neach 1\nheld 2\nreleased 2\nreleased 1",
+    );
+}
+
+#[test]
+fn a_resource_cast_to_its_trait_as_it_is_stored_moves() {
+    assert_one_holder_output(
+        r#"
+use system.collections.list
+
+trait Named
+    fn name(self) int
+
+class Tag implements Named
+    public var id int
+    fn name(self) int
+        return self.id
+    fn drop(self)
+        println(f"tag {self.id}")
+
+fn main()
+    var l = List<Named>()
+    let t = Tag(id: 1)
+    l.push(t)
+    println(f"{l[0].name()}")
+    l.clear()
+    println("cleared")
+"#,
+        "1\ntag 1\ncleared",
+    );
+}

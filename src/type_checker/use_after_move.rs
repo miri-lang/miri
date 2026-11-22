@@ -1319,11 +1319,45 @@ impl<'a> UseAfterMoveChecker<'a> {
         consumed: &mut HashMap<String, ConsumedInfo>,
     ) {
         self.check_expr(rhs, consumed);
-        if let LeftHandSideExpression::Identifier(name_expr) = lhs {
-            if let ExpressionKind::Identifier(name, _) = &name_expr.node {
-                consumed.remove(name.as_str());
-                self.places.forget(name);
-            }
+        let target = lhs.expression();
+        let rebound = match lhs {
+            LeftHandSideExpression::Identifier(_) => named_binding(target),
+            LeftHandSideExpression::Member(_) | LeftHandSideExpression::Index(_) => None,
+        };
+        if rebound.is_none() || rebound != named_binding(rhs) {
+            self.consume_stored_binding(target, rhs, consumed);
+        }
+        if let Some(name) = rebound {
+            consumed.remove(name);
+            self.places.forget(name);
+        }
+    }
+
+    /// Marks the resource binding `value` names moved into the place
+    /// `target` an assignment stores it in, and records it for lowering to
+    /// end where it is stored: a resource has one owner, so storing it in a
+    /// variable, a field or an element moves it there.
+    fn consume_stored_binding(
+        &mut self,
+        target: &Expression,
+        value: &Expression,
+        consumed: &mut Consumed,
+    ) {
+        let Some(src) = named_binding(value) else {
+            return;
+        };
+        if !self.is_resource_expr(value) || self.gives_away_a_capture(src, value.span) {
+            return;
+        }
+        let info = ConsumedInfo {
+            by_fn: format!("assignment to '{}'", value_spelling(target)),
+            at_span: value.span,
+            chain: vec![],
+            open: None,
+        };
+        consumed.insert(src.to_string(), info);
+        if self.hands_on_its_reference(value) {
+            self.consumed_arguments.expressions.insert(value.id);
         }
     }
 

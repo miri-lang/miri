@@ -9,8 +9,10 @@
 //! record is not trusted. Each entry is checked again from the MIR, by an
 //! access classification of its own:
 //!
-//! - the local is one the body owns, holding a counted value with no drop hook
-//!   and no device buffer, and every definition of it copies a projected place;
+//! - the local is one the body owns, holding a counted value and no device
+//!   buffer, and every definition of it copies a projected place; a value
+//!   whose release runs a drop hook borrows like any other, its owner running
+//!   the hook;
 //! - that place is reached from a counted local the body owns, or a counted
 //!   parameter other than an `out` one — never a capture or a local whose
 //!   address is taken — through value steps and class fields only;
@@ -63,7 +65,6 @@ use crate::mir::place::PlaceContext;
 use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
 use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::type_facts::DropHookReach;
-use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{BasicBlock, Body, Local, Operand, Place, Rvalue, Statement, StatementKind};
 use crate::runtime_effects::RuntimeEffect;
@@ -216,11 +217,6 @@ impl Checker<'_> {
         }
         if !body.is_counted_local(local) || decl.device_handle.is_some() {
             return Some("it holds no counted host value".to_string());
-        }
-        let has_drop_hook = matches!(&decl.mir_ty,
-            MirType::Custom(name) if body.rc_classifier.runs_drop_hook(name));
-        if has_drop_hook {
-            return Some("its type has a drop hook".to_string());
         }
         if definitions_of(body, local).is_none() {
             return Some("a definition of it is not a copy of a projected place".to_string());

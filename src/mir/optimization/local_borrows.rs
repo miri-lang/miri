@@ -18,8 +18,7 @@
 //! `l` borrows when all of these hold:
 //!
 //! - **It reads.** `l` is a managed local the body owns, every definition of it
-//!   is a copy RC insertion would retain, it runs no drop hook and holds no device
-//!   buffer, and it is never rebound, released by hand, handed to a runtime
+//!   is a copy RC insertion would retain, it holds no device buffer, and it is never rebound, released by hand, handed to a runtime
 //!   entry point that keeps it, written through, passed `out`, or handed by
 //!   `move` to a position its callee owns: a move gives the callee the
 //!   caller's own reference, which a borrow does not hold.
@@ -79,7 +78,6 @@ use crate::mir::place::PlaceContext;
 use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
 use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::type_facts::DropHookReach;
-use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
     BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, Statement, StatementKind,
@@ -219,6 +217,7 @@ impl Settled<'_> {
         let mut answer = Some(true);
         let mut all_owners: Vec<Local> = Vec::new();
         let mut is_exposed = false;
+        let read_out_of = reads_out_of(reads, local);
         for (site, source) in reads.get(&local).into_iter().flatten() {
             let Some((owners, parent_exposed)) = self.owners_of(source.local) else {
                 answer = None;
@@ -230,6 +229,7 @@ impl Settled<'_> {
                 ownership: self.ownership,
                 owners: &owners,
                 noise: self.noise.filter(|_| read_exposed),
+                read_out_of: &read_out_of,
             };
             if (read_exposed && self.noise.is_none()) || !watch.stays(local, *site) {
                 answer = answer.and(Some(false));
@@ -278,6 +278,16 @@ impl Settled<'_> {
     }
 }
 
+/// The candidates every read of which reads out of `local`.
+fn reads_out_of(reads: &Reads, local: Local) -> HashSet<Local> {
+    (reads.iter())
+        .filter(|(&candidate, sources)| {
+            candidate != local && sources.iter().all(|(_, source)| source.local == local)
+        })
+        .map(|(&candidate, _)| candidate)
+        .collect()
+}
+
 fn definitions<'a>(ctx: &RcContext<'a>) -> &'a HashMap<String, TypeDefinition> {
     ctx.rc_classifier.definitions()
 }
@@ -307,13 +317,11 @@ fn borrowing_reads(body: &Body, ctx: &RcContext, managed_locals: &HashSet<Local>
     reads
 }
 
-/// Whether `local`'s release could only ever free memory: it runs no drop
-/// hook and holds no device buffer.
+/// Whether `local` holds no device buffer. A value whose release runs a
+/// drop hook borrows like any other: its owner keeps the one reference, and
+/// the hook runs where the owner lets it go, never where the borrow ends.
 fn is_plain_value(body: &Body, local: Local) -> bool {
-    let decl = &body.local_decls[local.0];
-    let has_drop_hook = matches!(&decl.mir_ty,
-        MirType::Custom(name) if body.rc_classifier.runs_drop_hook(name));
-    !has_drop_hook && decl.device_handle.is_none()
+    body.local_decls[local.0].device_handle.is_none()
 }
 
 /// Whether `root` holds a reference a borrow can rely on: a counted local the
@@ -585,6 +593,10 @@ struct Watch<'w> {
     /// finding each operation that may release a value another name holds,
     /// every one of which ends it.
     noise: Option<&'w BodyNoise<'w>>,
+    /// The candidates read only out of the borrow itself. Ending one
+    /// releases at most a reference to a value the borrow's owner still
+    /// holds, so it runs no drop hook and changes nothing the borrow reads.
+    read_out_of: &'w HashSet<Local>,
 }
 
 impl Watch<'_> {
@@ -641,6 +653,11 @@ impl Watch<'_> {
     fn is_changed_by(&self, statement: &Statement) -> bool {
         if ends_lent_parameter(self.body, self.ownership, statement) {
             return false;
+        }
+        if let StatementKind::StorageDead(place, _) = &statement.kind {
+            if place.projection.is_empty() && self.read_out_of.contains(&place.local) {
+                return false;
+            }
         }
         statement_changes(statement, self.owners)
             || self

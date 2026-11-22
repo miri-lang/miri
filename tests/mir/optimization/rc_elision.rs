@@ -834,13 +834,16 @@ mod owned_transfers {
         assert_eq!(rc_ops_on_l(&body), 2, "{body}");
     }
 
+    /// A resource handed to a call that owns it has one owner after the
+    /// call, the callee: the retain cancels against the caller's release, so
+    /// its hook runs where the callee lets it go.
     #[test]
-    fn an_argument_with_a_drop_hook_keeps_the_retain() {
+    fn an_argument_with_a_drop_hook_is_handed_over_by_move() {
         let resource = Type::new(TypeKind::Custom("Res".to_string(), None), span());
         let mut body = caller(resource, handing_over(vec![decref(1), storage_dead(1)]));
         body.rc_classifier = classifier_with_drop_hook("Res");
         elide_rc(&mut body, &OwnershipFacts::default());
-        assert_eq!(rc_ops_on_l(&body), 2, "{body}");
+        assert_eq!(rc_ops_on_l(&body), 0, "{body}");
     }
 }
 

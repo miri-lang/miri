@@ -95,11 +95,11 @@ fn main()
     var d = Node(3)
     b.next = d
     a.next = b
-    println(f"{walk(a, d)}")
+    println(f"{walk(a, a.next)}")
     println("end")
 "#,
         ),
-        "2\nend\ndrop 1\ndrop 2\ndrop 3",
+        "1\nend\ndrop 1\ndrop 2\ndrop 3",
     );
 }
 

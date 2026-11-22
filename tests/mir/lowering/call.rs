@@ -100,14 +100,12 @@ fn main()
         r#"
             let _0: void;
             let _1: void;
-            let _2: void;
 
             bb0: {
                 _1 = fn miri.do_something() -> bb1;
             }
 
             bb1: {
-                _2 = _1;
                 return;
             }
         "#,

@@ -70,6 +70,7 @@ pub mod runtime_writes;
 pub mod shared_receivers;
 pub mod stored_closures;
 pub mod stored_elements;
+pub mod stored_resources;
 pub mod temporaries;
 pub mod thunk_bodies;
 pub mod trait_coercion;

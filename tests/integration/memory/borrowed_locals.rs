@@ -191,8 +191,8 @@ fn read_after_index_assign() int
 println(f"{read_after_clear()} {read_after_push()} {read_after_index_assign()}")
 "#,
         "1 44 19",
-        4,
-        66,
+        3,
+        65,
     );
 }
 
@@ -292,8 +292,8 @@ fn run() String
 println(run())
 "#,
         "ay",
-        5,
-        38,
+        3,
+        36,
     );
 }
 
@@ -466,8 +466,8 @@ fn total() int
 println(f"{total()}")
 "#,
         "3",
-        4,
-        19,
+        2,
+        17,
     );
 }
 

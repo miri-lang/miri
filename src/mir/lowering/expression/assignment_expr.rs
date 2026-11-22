@@ -1077,7 +1077,45 @@ fn emit_gpu_upload(
     Ok(())
 }
 
+/// Lower an assignment. A resource binding the value names is moved into
+/// the target, so its binding ends where the assignment stores it.
 pub(crate) fn lower_assignment_expr(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let ExpressionKind::Assignment(lhs, op, rhs) = &expr.node else {
+        unreachable!()
+    };
+    if is_self_assignment(lhs, op, rhs) {
+        // `x = x` stores nothing new: the value is the variable's own.
+        return lower_expression(ctx, rhs, dest);
+    }
+    let assigned = lower_assignment_store(ctx, expr, dest)?;
+    crate::mir::lowering::variable::release_consumed_binding(ctx, rhs, expr.span)?;
+    Ok(assigned)
+}
+
+/// Whether the assignment `lhs op rhs` is a plain `x = x`.
+fn is_self_assignment(
+    lhs: &crate::ast::expression::LeftHandSideExpression,
+    op: &crate::ast::operator::AssignmentOp,
+    rhs: &Expression,
+) -> bool {
+    let crate::ast::expression::LeftHandSideExpression::Identifier(target) = lhs else {
+        return false;
+    };
+    let names = |expr: &Expression| match &expr.node {
+        ExpressionKind::Identifier(name, _) => Some(name.clone()),
+        _ => None,
+    };
+    matches!(op, crate::ast::operator::AssignmentOp::Assign)
+        && names(target).is_some()
+        && names(target) == names(rhs)
+}
+
+/// Lower the store an assignment makes into its target.
+fn lower_assignment_store(
     ctx: &mut LoweringContext,
     expr: &Expression,
     dest: Option<Place>,

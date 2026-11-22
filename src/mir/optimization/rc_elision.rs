@@ -234,9 +234,11 @@ fn retained_copy(stmts: &[Statement], i: usize) -> Option<(Local, Local)> {
 /// 2. the first mention of `x` after the retain is an assignment or rebinding
 ///    whose value is `x` itself or an aggregate naming `x` once, and whose
 ///    destination does not name `x`;
-/// 3. the next mention of `x` is `DecRef(x)`, with nothing released between —
-///    so the release the pair cancels was never the last one, and no drop hook
-///    moves — followed, with no mention of `x` between, by `StorageDead(x)` or
+/// 3. the next mention of `x` is `DecRef(x)`, with no release of the
+///    destination between — so the release the pair cancels was never the
+///    last one, and the destination still holds `x`'s reference when `x` dies:
+///    a release of another place between gives up a reference of its own —
+///    followed, with no mention of `x` between, by `StorageDead(x)` or
 ///    a rebinding of `x` that does not read it.
 ///
 /// Between the copy and that end `x` holds a reference the destination now
@@ -284,10 +286,12 @@ fn dying_source_transfer(body: &Body, block: usize, kept: KeptPairs) -> Option<D
                 return None;
             }
             let release = copy + 1 + dying_release(&statements[copy + 1..], local)?;
+            let destination = stored_destination(&statements[copy])?;
             let releases_between = statements[copy + 1..release].iter().any(|statement| {
                 matches!(
-                    statement.kind,
-                    StatementKind::DecRef(_) | StatementKind::Dealloc(_)
+                    &statement.kind,
+                    StatementKind::DecRef(place) | StatementKind::Dealloc(place)
+                        if place.local == destination
                 )
             });
             (!releases_between).then_some(DyingTransfer {
@@ -337,6 +341,20 @@ fn transfers_local(statement: &Statement, local: Local) -> bool {
     is_stored_whole_once && !names_dest
 }
 
+/// The local an assignment stores into.
+fn stored_destination(statement: &Statement) -> Option<Local> {
+    match &statement.kind {
+        StatementKind::Assign(dest, _) | StatementKind::Reassign(dest, _) => Some(dest.local),
+        StatementKind::StorageLive(_)
+        | StatementKind::StorageDead(..)
+        | StatementKind::IncRef(_)
+        | StatementKind::DecRef(_)
+        | StatementKind::Dealloc(_)
+        | StatementKind::ReadHeader(_)
+        | StatementKind::Nop => None,
+    }
+}
+
 /// Remove the retain and the release of `transfer` and spell its copy as a
 /// move of the local.
 fn apply_transfer(statements: &mut Vec<Statement>, transfer: DyingTransfer) {
@@ -354,16 +372,18 @@ fn apply_transfer(statements: &mut Vec<Statement>, transfer: DyingTransfer) {
 }
 
 /// The operands an rvalue stores into its destination as they are: the value
-/// of a use, or every operand of an aggregate. Every other rvalue computes a
-/// value of its own from what it reads.
+/// of a use, every operand of an aggregate, or the value a cast hands on — a
+/// counted value cast to a trait or a base class is the same block, and a
+/// cast of anything else is never retained, so never pairs. Every other
+/// rvalue computes a value of its own from what it reads.
 fn stored_operands(rvalue: &Rvalue) -> &[Operand] {
     match rvalue {
         Rvalue::Use(operand) => std::slice::from_ref(operand),
+        Rvalue::Cast(operand, _) => std::slice::from_ref(operand.as_ref()),
         Rvalue::Aggregate(_, operands) => operands,
         Rvalue::Ref(_)
         | Rvalue::BinaryOp(..)
         | Rvalue::UnaryOp(..)
-        | Rvalue::Cast(..)
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
@@ -375,11 +395,11 @@ fn stored_operands(rvalue: &Rvalue) -> &[Operand] {
 fn stored_operands_mut(rvalue: &mut Rvalue) -> &mut [Operand] {
     match rvalue {
         Rvalue::Use(operand) => std::slice::from_mut(operand),
+        Rvalue::Cast(operand, _) => std::slice::from_mut(operand.as_mut()),
         Rvalue::Aggregate(_, operands) => operands,
         Rvalue::Ref(_)
         | Rvalue::BinaryOp(..)
         | Rvalue::UnaryOp(..)
-        | Rvalue::Cast(..)
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
@@ -394,8 +414,9 @@ fn stored_operands_mut(rvalue: &mut Rvalue) -> &mut [Operand] {
 /// The pair `IncRef(L)` … `call f(L)` → `DecRef(L)` is cancelled when:
 ///
 /// 1. `L` is a whole local the body owns and releases — managed, not a
-///    parameter or a capture, holding no device buffer — whose type has no drop
-///    hook;
+///    parameter or a capture, holding no device buffer. A resource is no
+///    exception: the callee is its one owner after the call, so its hook runs
+///    where the callee lets it go;
 /// 2. the call passes `L` once, at a position it hands over, and names it
 ///    nowhere else: in another argument the callee would read a value the
 ///    owned side may already have freed or written;
@@ -536,8 +557,8 @@ fn passes_an_owned_argument(body: &Body) -> bool {
         .any(|(_, arg_modes)| arg_modes.iter().any(|mode| mode.hands_over_reference()))
 }
 
-/// Whether `local` is one the body owns and RC insertion releases, whose last
-/// release runs no drop hook. A borrowed local is never released.
+/// Whether `local` is one the body owns and RC insertion releases. A
+/// borrowed local is never released.
 fn is_released_by_body(body: &Body, ownership: &OwnershipFacts, local: Local) -> bool {
     let decl = &body.local_decls[local.0];
     local.0 > body.arg_count
@@ -545,7 +566,6 @@ fn is_released_by_body(body: &Body, ownership: &OwnershipFacts, local: Local) ->
         && !ownership.is_borrowed(local)
         && decl.device_handle.is_none()
         && body.is_counted_local(local)
-        && !type_has_destructor(local, &body.local_decls, &body.rc_classifier)
 }
 
 /// The position of `IncRef(local)` when it is the block's last mention of

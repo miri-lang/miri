@@ -24,8 +24,7 @@ fn main()
             let _1: int; // x
             let _2: bool;
             let _3: int;
-            let _4: int;
-            let _5: int; // y
+            let _4: int; // y
 
             bb0: {
                 StorageLive(_1);
@@ -41,14 +40,13 @@ fn main()
             bb2: {
                 _3 = Add(_1, const Integer(I8(1)));
                 _1 = _3;
-                _4 = _3;
                 goto bb4;
             }
 
             bb3: {
-                StorageLive(_5);
-                _5 = const Integer(I8(1));
-                StorageDead(_5);
+                StorageLive(_4);
+                _4 = const Integer(I8(1));
+                StorageDead(_4);
                 StorageDead(_1);
                 return;
             }

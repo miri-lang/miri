@@ -180,6 +180,18 @@ fn lower_expression_stmt(
 ) -> Result<(), LoweringError> {
     let rhs_watermark = ctx.body.local_decls.len();
     let operand = lower_expression(ctx, expr, None)?;
+    // A discarded whole value is released by the temporary of the statement
+    // holding it, and a binding the statement did not create (an
+    // assignment's value is its target) keeps holding it: copying it into
+    // another temporary only to release that would add a holder the source
+    // never named. A projection is still read, since reading an element
+    // checks its index.
+    if let Operand::Copy(place) = &operand {
+        if place.projection.is_empty() {
+            ctx.emit_temp_drop(place.local, rhs_watermark, expr.span);
+            return Ok(());
+        }
+    }
 
     // `operand.ty()` returns the base local's type and ignores projections.
     // For projected places like `a[0]` (returns Array instead of element type)
