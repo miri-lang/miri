@@ -557,9 +557,9 @@ impl ThunkKeeper {
 
 /// Which parameters the method `decl` of `owner`, registered as `method`,
 /// keeps, in operand order; `None` when it keeps none or has more than one
-/// calling convention ([`has_one_convention`]). A parameter declared `out` or optional is never kept: the
-/// first is the caller's binding, the second hands on no reference of its
-/// own. A receiver the method restores is the caller's binding as well.
+/// calling convention ([`has_one_convention`]). A parameter declared `out` is
+/// never kept: it is the caller's binding. A receiver the method restores
+/// is the caller's binding as well.
 ///
 /// The escape summary of a method numbers its receiver 0 and each parameter
 /// a caller supplies from 1, a static method's included.
@@ -700,19 +700,19 @@ fn is_declared_handed_on(param: &Parameter, facts: &KeepFacts<'_>) -> bool {
 }
 
 /// The type `param` declares, when it holds a whole value
-/// ([`is_held_whole`]).
+/// ([`is_held_whole`]): an optional one's payload type.
 fn held_kind(param: &Parameter) -> Option<&TypeKind> {
-    let ExpressionKind::Type(declared, false) = &param.typ.node else {
+    let ExpressionKind::Type(declared, _) = &param.typ.node else {
         return None;
     };
     is_held_whole(param).then_some(&declared.kind)
 }
 
-/// Whether `param` holds a whole value a call can hand over: declared
-/// neither `out`, the caller's own binding, nor optional, whose payload
-/// hands on no reference of its own.
+/// Whether `param` holds a whole value a call can hand over: not declared
+/// `out`, the caller's own binding. An optional one hands over its payload's
+/// reference.
 fn is_held_whole(param: &Parameter) -> bool {
-    matches!(&param.typ.node, ExpressionKind::Type(_, false)) && !param.is_out
+    matches!(&param.typ.node, ExpressionKind::Type(..)) && !param.is_out
 }
 
 /// Which argument positions a call through a function value of the type

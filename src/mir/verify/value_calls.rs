@@ -318,7 +318,7 @@ fn called_convention(
 fn convention_of(function: &FunctionTypeData, table: Table<'_>) -> Vec<bool> {
     (function.params.iter())
         .map(|param| {
-            let ExpressionKind::Type(declared, false) = &param.typ.node else {
+            let ExpressionKind::Type(declared, _) = &param.typ.node else {
                 return false;
             };
             !param.is_out && table.hands_on(&declared.kind)

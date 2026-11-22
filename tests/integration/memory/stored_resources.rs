@@ -308,3 +308,61 @@ fn main()
         "built\nreleased 1",
     );
 }
+
+#[test]
+fn a_constructor_storing_an_optional_resource_takes_it_over() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+class Shelf
+    var held Token?
+    fn init(held Token?)
+        self.held = held
+
+fn main()
+    let t = Token(id: 1)
+    if true
+        let _s = Shelf(Some(t))
+        println("built")
+    println("after")
+"#,
+        ),
+        "built\nreleased 1\nafter",
+    );
+}
+
+#[test]
+fn a_function_keeping_an_optional_resource_takes_it_over() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn shelve(t Token?) Slot
+    return Slot(held: t)
+
+fn main()
+    let u Token? = Some(Token(id: 2))
+    let s = shelve(u)
+    println("kept")
+"#,
+        ),
+        "kept\nreleased 2",
+    );
+}
+
+#[test]
+fn an_optional_resource_handed_to_a_keeper_cannot_be_used_again() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn shelve(t Token?) Slot
+    return Slot(held: t)
+
+fn main()
+    let u Token? = Some(Token(id: 2))
+    let s = shelve(u)
+    println(f"{u.is_some()}")
+"#,
+        ),
+        "Use of Moved Value",
+    );
+}

@@ -179,8 +179,8 @@ pub fn runs_drop_hook(
     false
 }
 
-/// Whether consuming a value of `kind` hands its reference on: its type runs
-/// a drop hook of its own, or it is held at a trait or at a class another
+/// Whether consuming a value of `kind` hands its reference on: an optional
+/// one when its payload does, else its type runs a drop hook of its own, or it is held at a trait or at a class another
 /// class extends and is a resource ([`ResourceTypes`]), a counted block its
 /// holder gives up whole. The one predicate both the consumption check and
 /// the owned parameters ([`super::kept_parameters`]) read. `resources`
@@ -190,6 +190,9 @@ pub(crate) fn hands_on_a_reference(
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
     resources: &ResourceTypes,
 ) -> bool {
+    if let TypeKind::Option(payload) = kind {
+        return hands_on_a_reference(&payload.kind, type_definitions, resources);
+    }
     let is_held_at_a_supertype = || {
         matches!(kind, TypeKind::Custom(name, _)
             if matches!(type_definitions.get(name), Some(TypeDefinition::Trait(_)))
