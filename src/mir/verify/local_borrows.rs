@@ -486,9 +486,7 @@ fn stays_over_range(
             return false;
         }
         pending.extend(
-            terminator
-                .successors()
-                .into_iter()
+            (body.successors_while_live(terminator, local).into_iter())
                 .filter(|successor| visited.insert(successor.0))
                 .map(|successor| (successor.0, 0)),
         );

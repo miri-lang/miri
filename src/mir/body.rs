@@ -10,8 +10,9 @@ use crate::mir::place::{Local, Place};
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::Statement;
 use crate::mir::symbol::Symbol;
-use crate::mir::terminator::Terminator;
+use crate::mir::terminator::{Discriminant, Terminator, TerminatorKind};
 use crate::mir::types::MirType;
+use crate::mir::Operand;
 use crate::type_checker::value_class::{LayoutScope, ValueLayout};
 use std::collections::HashSet;
 use std::fmt;
@@ -224,6 +225,39 @@ impl Body {
             }
         }
         counts
+    }
+
+    /// The blocks a path along which `binding` is live may go to from
+    /// `terminator`. A drop flag ([`FlagOf::Drop`]) is set right after its
+    /// binding is bound and cleared right after the binding's storage ends,
+    /// so while the binding is live a test of its flag never takes the edge
+    /// its `false` value selects; every other terminator may go to each of
+    /// its successors.
+    pub fn successors_while_live(
+        &self,
+        terminator: &Terminator,
+        binding: Local,
+    ) -> Vec<BasicBlock> {
+        let TerminatorKind::SwitchInt {
+            discr: Operand::Copy(flag),
+            targets,
+            otherwise,
+        } = &terminator.kind
+        else {
+            return terminator.successors();
+        };
+        let is_flag_of_binding = flag.projection.is_empty()
+            && self.local_decls[flag.local.0].drop_flag_of() == Some(binding);
+        if !is_flag_of_binding {
+            return terminator.successors();
+        }
+        let taken = targets
+            .iter()
+            .filter(|(value, _)| *value != Discriminant::bool_false());
+        taken
+            .map(|&(_, target)| target)
+            .chain([*otherwise])
+            .collect()
     }
 
     /// What a type written in this body is laid out against: the program's

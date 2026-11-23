@@ -198,13 +198,21 @@ fn statement_effect(body: &Body, kind: &StatementKind, here: BasicBlock) -> Effe
         }
         StatementKind::StorageDead(_, _) | StatementKind::Nop => {}
     }
+    credit_payload_moves(body, &mut effect);
+    effect
+}
+
+/// Counts each projected move in `effect` of the payload of an optional
+/// held as its payload's own pointer as a move of the optional: that
+/// payload is the optional's only reference, so moving it hands the
+/// optional's on, in an assignment or a call alike.
+fn credit_payload_moves(body: &Body, effect: &mut Effect) {
     let (whole, projected) = (effect.projected_moves.drain(..))
         .partition(|place| is_nullable_pointer_payload(place, body));
     effect.projected_moves = projected;
     effect
         .moves
         .extend(whole.into_iter().map(|place: Place| place.local));
-    effect
 }
 
 /// What the terminator of `block` does to the locals it mentions; a return
@@ -217,6 +225,7 @@ fn terminator_effect(body: &Body, block: usize) -> Effect {
             effect.uses.push((Local(0), Touch::Read));
         }
     }
+    credit_payload_moves(body, &mut effect);
     effect
 }
 

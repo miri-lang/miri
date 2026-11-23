@@ -1499,7 +1499,7 @@ fn apply_terminator(
     if func.and_then(Operand::called_runtime_effect).is_some() {
         release_taken_args(body, func, args, tracked, state, violations);
     } else {
-        for local in owned_bare_args(args, modes) {
+        for local in owned_bare_args(body, args, modes) {
             release(body, &Place::new(local), tracked, state, violations);
         }
     }
@@ -1541,15 +1541,18 @@ fn release_taken_args(
 }
 
 /// The bare locals a call passes [`ArgMode::Owned`]: the callee takes over the
-/// reference each holds, so the caller no longer owns it.
+/// reference each holds, so the caller no longer owns it. A `move` of the
+/// payload of an optional held as its payload's own pointer hands over the
+/// optional's reference ([`bare_local_moved`]).
 fn owned_bare_args<'a>(
+    body: &'a Body,
     args: &'a [Operand],
     modes: &'a [ArgMode],
 ) -> impl Iterator<Item = Local> + 'a {
     args.iter()
         .enumerate()
         .filter(|(position, _)| arg_mode(modes, *position) == ArgMode::Owned)
-        .filter_map(|(_, arg)| arg.bare_local())
+        .filter_map(|(_, arg)| arg.bare_local().or_else(|| bare_local_moved(body, arg)))
 }
 
 /// Whether an rvalue reads `place` without taking over a reference to it, so that

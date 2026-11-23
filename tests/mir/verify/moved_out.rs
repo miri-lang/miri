@@ -504,3 +504,31 @@ fn moving_a_field_of_a_value_other_than_an_optional_is_flagged() {
     body.local_decls[1].ty = string_ty();
     assert_one_finding(&body, &["projection"]);
 }
+
+/// A body like [`optional_payload_body`] whose blocks are `blocks`.
+fn optional_payload_blocks(blocks: Vec<BasicBlockData>) -> Body {
+    let mut body = optional_payload_body(Vec::new());
+    body.basic_blocks = blocks.into();
+    body
+}
+
+#[test]
+fn a_call_handed_the_payload_of_an_optional_by_move_moves_the_optional() {
+    let body = optional_payload_blocks(vec![
+        block(Vec::new(), call(vec![Operand::Move(payload_of(1))], 2, 1)),
+        block(vec![moved_end(1), decref(2)], TerminatorKind::Return),
+    ]);
+    assert_clean(&body);
+}
+
+#[test]
+fn a_read_of_an_optional_after_a_call_took_its_payload_by_move_is_flagged() {
+    let body = optional_payload_blocks(vec![
+        block(Vec::new(), call(vec![Operand::Move(payload_of(1))], 2, 1)),
+        block(
+            vec![assign(2, copied(1)), moved_end(1), decref(2)],
+            TerminatorKind::Return,
+        ),
+    ]);
+    assert_one_finding(&body, &["bb0", "bb1[0]"]);
+}

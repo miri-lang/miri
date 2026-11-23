@@ -245,6 +245,7 @@ pub fn bind_pattern(
                     });
                     // RC insertion now handles Field(0) projections on Option types via
                     // place_is_counted, so no explicit IncRef needed here.
+                    ctx.optional_payloads.insert(var_local, subject_local);
                 }
                 return Ok(());
             }

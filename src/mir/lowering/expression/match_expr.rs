@@ -828,11 +828,9 @@ fn lower_match_subject(
     };
     // A binding of the body's own whose payload a keeper takes is the
     // subject too: the keeper is handed the payload's one reference and the
-    // binding ends there, so a copy would be a second holder.
-    // TODO: a keeper called on only some paths of an arm is still handed a
-    // funded copy of the payload, which stays bound on the other paths; it
-    // should move the payload out there and leave a drop flag to release it
-    // on the paths that keep it.
+    // binding ends there, so a copy would be a second holder. A keeper
+    // called on only some paths of an arm leaves the binding to its drop
+    // flag on the others (`kept_parameters::hand_over_matched_payloads`).
     let ended_binding = match &subject_op {
         Operand::Copy(place) | Operand::Move(place) => (place.projection.is_empty()
             && matches!(subject.node, ExpressionKind::Identifier(..))

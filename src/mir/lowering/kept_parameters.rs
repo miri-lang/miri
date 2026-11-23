@@ -41,6 +41,8 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::variable::{self, ConsumedRead};
+use crate::mir::option_layout::is_nullable_pointer_payload;
+use crate::mir::place::PlaceElem;
 use crate::mir::{
     ArgMode, Body, CallFlags, EndCause, Local, Operand, Place, Rvalue, Statement as MirStatement,
     StatementKind as MirStatementKind, Terminator, TerminatorKind, RETURN_LOCAL,
@@ -495,12 +497,91 @@ pub(crate) fn hand_over_kept_arguments(
         Ok(local)
     };
     handed.moved = pass_owned(call.kept, (arg_ops, arg_modes), call.span, taken)?;
-    end_matched_scrutinees(ctx, call, &consumed, &handed.moved);
+    let payloads = hand_over_matched_payloads(ctx, call, arg_ops, &mut handed.moved);
+    let ended: Vec<usize> = payloads.iter().map(|&(scrutinee, _)| scrutinee).collect();
+    end_matched_scrutinees(ctx, call, (&consumed, &handed.moved), &ended);
+    let is_ended_payload = |local: &Local| payloads.iter().any(|&(_, payload)| payload == *local);
     handed.consumed = (consumed.into_iter())
         .map(|(_, local)| local)
-        .filter(|local| !handed.moved.contains(local))
+        .filter(|local| !handed.moved.contains(local) && !is_ended_payload(local))
         .collect();
     Ok(handed)
+}
+
+/// Hands the call, in place of each payload binding it takes by `move` that
+/// a `Some(..)` pattern bound out of an optional held as its payload's own
+/// pointer, the optional's own reference: `move o.0`, when the optional is
+/// the only local the match holds its scrutinee in and the type checker
+/// records the hand-over as ending that scrutinee
+/// ([`TypeChecker::ended_scrutinee`]). The payload binding then only reads
+/// what the optional holds, so it takes no reference of its own, and it
+/// ends before the call; the optional ends, moved, after it. On a path of
+/// the arm that hands nothing over, the binding ends with its scope and
+/// the optional's drop flag releases the payload where the optional ends,
+/// so the payload has one holder on every path.
+///
+/// Rewrites `arg_ops` and `moved`, and returns each scrutinee it ended with
+/// the payload binding it ended before the call.
+fn hand_over_matched_payloads(
+    ctx: &mut LoweringContext,
+    call: &KeptCall<'_>,
+    arg_ops: &mut [Operand],
+    moved: &mut Vec<Local>,
+) -> Vec<(usize, Local)> {
+    let mut ended = Vec::new();
+    let operands =
+        (call.receiver.into_iter()).chain(call.args.iter().map(variable::argument_value));
+    for (position, operand) in operands.enumerate() {
+        let Some(scrutinee) = ctx.type_checker.ended_scrutinee(operand) else {
+            continue;
+        };
+        let Some(payload) = arg_ops.get(position).and_then(moved_whole_local) else {
+            continue;
+        };
+        let Some(optional) = matched_optional(ctx, scrutinee, payload) else {
+            continue;
+        };
+        arg_ops[position] = Operand::Move(optional_payload(optional));
+        moved.retain(|&local| local != payload);
+        moved.push(optional);
+        ctx.push_statement(MirStatement {
+            kind: MirStatementKind::StorageDead(Place::new(payload), EndCause::Consumed),
+            span: call.span,
+        });
+        ended.push((scrutinee, payload));
+    }
+    ended
+}
+
+/// The optional `payload` was bound out of, when it is the only local the
+/// match on `scrutinee` holds it in and it is held as its payload's own
+/// pointer, so moving its payload hands on its reference.
+fn matched_optional(ctx: &LoweringContext, scrutinee: usize, payload: Local) -> Option<Local> {
+    // TODO: an optional matched out of another optional's payload is held by
+    // a payload binding with a reference of its own, not by the scope, so a
+    // keeper taking the inner payload is still handed a funded copy.
+    let &optional = ctx.optional_payloads.get(&payload)?;
+    let holders = ctx.matched_scrutinees.get(&scrutinee)?;
+    if holders.as_slice() != [optional] {
+        return None;
+    }
+    is_nullable_pointer_payload(&optional_payload(optional), &ctx.body).then_some(optional)
+}
+
+/// The payload of the optional `optional`.
+fn optional_payload(optional: Local) -> Place {
+    Place {
+        local: optional,
+        projection: vec![PlaceElem::Field(0)],
+    }
+}
+
+/// The local `operand` moves whole, if it moves one.
+fn moved_whole_local(operand: &Operand) -> Option<Local> {
+    match operand {
+        Operand::Move(place) if place.projection.is_empty() => Some(place.local),
+        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => None,
+    }
 }
 
 /// Ends, before the call, the scrutinee each payload binding the call hands
@@ -508,16 +589,17 @@ pub(crate) fn hand_over_kept_arguments(
 /// scrutinee as the scope's own ([`TypeChecker::ended_scrutinee`]): the
 /// keeper then holds the payload's only reference, and its hook runs where
 /// the keeper's new owner ends. A scrutinee two payloads handed to the one
-/// call were bound out of ends once. `consumed` pairs each consumed
-/// operand's expression id with the local it read; `moved` lists the locals
-/// handed over.
+/// call were bound out of ends once, and one `handed` ended already
+/// ([`hand_over_matched_payloads`]) is left alone. `consumed` pairs each
+/// consumed operand's expression id with the local it read; `moved` lists
+/// the locals handed over.
 fn end_matched_scrutinees(
     ctx: &mut LoweringContext,
     call: &KeptCall<'_>,
-    consumed: &[(usize, Local)],
-    moved: &[Local],
+    (consumed, moved): (&[(usize, Local)], &[Local]),
+    handed: &[usize],
 ) {
-    let mut ended: Vec<usize> = Vec::new();
+    let mut ended: Vec<usize> = handed.to_vec();
     let operands =
         (call.receiver.into_iter()).chain(call.args.iter().map(variable::argument_value));
     for operand in operands {

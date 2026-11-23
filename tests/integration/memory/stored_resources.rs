@@ -507,3 +507,57 @@ fn main()
         "got 2\nreleased 1\nreleased 2",
     );
 }
+
+#[test]
+fn a_payload_handed_to_a_keeper_on_some_paths_of_its_arm_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn shelve(t Token) Slot
+    return Slot(held: Some(t))
+
+fn main()
+    var i = 0
+    while i < 2
+        let p Token? = Some(Token(id: i))
+        match p
+            Some(r)
+                if r.id == 0
+                    let _s = shelve(r)
+                    println("shelved")
+                else
+                    println(f"kept {r.id}")
+            None: println("none")
+        i += 1
+    println("after")
+"#,
+        ),
+        "shelved\nreleased 0\nkept 1\nreleased 1\nafter",
+    );
+}
+
+#[test]
+fn a_payload_handed_to_a_keeper_under_a_condition_is_released_once_where_it_is_not() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn shelve(t Token) Slot
+    return Slot(held: Some(t))
+
+fn main()
+    var i = 0
+    while i < 2
+        let p Token? = Some(Token(id: i))
+        match p
+            Some(r)
+                if r.id == 0
+                    let _s = shelve(r)
+            None: println("none")
+        println(f"end of round {i}")
+        i += 1
+    println("after")
+"#,
+        ),
+        "released 0\nend of round 0\nend of round 1\nreleased 1\nafter",
+    );
+}

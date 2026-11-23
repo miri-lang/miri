@@ -173,3 +173,48 @@ mod type_arguments {
         assert_eq!(body_holding(array).validate(), Ok(()));
     }
 }
+
+/// A body whose local 1 is a binding and local 2 its drop flag, or a plain
+/// `bool` when `is_flag` is false, with a test of local 2 going to block 1
+/// when it is false and block 2 otherwise.
+fn flag_test(is_flag: bool) -> (Body, Terminator) {
+    use miri::ast::types::{Type, TypeKind};
+    use miri::mir::terminator::Discriminant;
+    use miri::mir::{FlagOf, LocalDecl};
+    let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
+    let ty = |kind| Type::new(kind, Span::default());
+    body.new_local(LocalDecl::new(ty(TypeKind::Void), Span::default()));
+    body.new_local(LocalDecl::new(ty(TypeKind::String), Span::default()));
+    let mut flag = LocalDecl::new(ty(TypeKind::Boolean), Span::default());
+    if is_flag {
+        flag.flag_of = Some(FlagOf::Drop(Local(1)));
+    }
+    body.new_local(flag);
+    let test = Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(Local(2))),
+            targets: vec![(Discriminant::bool_false(), BasicBlock(1))],
+            otherwise: BasicBlock(2),
+        },
+        Span::default(),
+    );
+    (body, test)
+}
+
+#[test]
+fn a_live_binding_never_takes_the_false_edge_of_its_drop_flag() {
+    let (body, test) = flag_test(true);
+    assert_eq!(
+        body.successors_while_live(&test, Local(1)),
+        vec![BasicBlock(2)]
+    );
+}
+
+#[test]
+fn a_test_of_another_local_may_take_either_edge() {
+    let (body, test) = flag_test(false);
+    let both = vec![BasicBlock(1), BasicBlock(2)];
+    assert_eq!(body.successors_while_live(&test, Local(1)), both);
+    let (body, test) = flag_test(true);
+    assert_eq!(body.successors_while_live(&test, Local(3)), both);
+}

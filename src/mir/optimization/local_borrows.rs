@@ -660,7 +660,7 @@ impl Watch<'_> {
                     | TerminatorKind::Call { .. }
                     | TerminatorKind::VirtualCall { .. }
                     | TerminatorKind::GpuLaunch { .. } => {
-                        Segment::Continues(terminator.successors())
+                        Segment::Continues(self.body.successors_while_live(terminator, local))
                     }
                 }
             }
@@ -762,6 +762,10 @@ fn operand_changes(operand: &Operand, owners: &[Local]) -> bool {
 /// borrow reads. An owner lent to any other callee is refused too, though a
 /// function of the program copies a parameter it writes on entry.
 fn terminator_changes(terminator: &Terminator, owners: &[Local]) -> bool {
+    // TODO: a method the type checker knows leaves its receiver alone (a
+    // read such as `is_some()`) still counts as a change of the owner it is
+    // lent, so a payload binding read out of an optional the arm reads that
+    // way takes a reference of its own beside the optional's.
     let (func, args, arg_modes, destination) = match &terminator.kind {
         TerminatorKind::Call {
             func,
