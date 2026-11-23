@@ -69,6 +69,7 @@ use crate::mir::place::{Local, PlaceContext};
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::terminator::{arg_mode, TerminatorKind};
+use crate::mir::type_facts::DropHookReach;
 use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{Body, Operand, Place, Rvalue};
@@ -227,7 +228,10 @@ fn retained_copy(stmts: &[Statement], i: usize) -> Option<(Local, Local)> {
 /// the retain that funded the copy against the local's own release.
 ///
 /// The triple `IncRef(x)` … `d = x` (or `d` built from `x`) … `DecRef(x)` in
-/// one block becomes `d = move x` when:
+/// one block — or, for an `x` whose release may run a drop hook, in a block
+/// and the blocks it runs straight into, each reached only from the one
+/// before it through a terminator not naming `x` — becomes `d = move x`
+/// when:
 ///
 /// 1. `x` is a whole local the body owns and releases — managed, not a
 ///    parameter or a capture, holding no device buffer — that no borrow reads
@@ -247,31 +251,86 @@ fn retained_copy(stmts: &[Statement], i: usize) -> Option<(Local, Local)> {
 ///
 /// Returns true if any copy became a move.
 fn move_dying_sources(body: &mut Body, kept: KeptPairs) -> bool {
+    let predecessors = crate::mir::analysis::loops::predecessors(body);
     let mut changed = false;
     for block in 0..body.basic_blocks.len() {
-        while let Some(transfer) = dying_source_transfer(body, block, kept) {
-            apply_transfer(&mut body.basic_blocks[block].statements, transfer);
+        while let Some(transfer) = dying_source_transfer(body, block, kept, &predecessors) {
+            apply_transfer(body, block, transfer);
             changed = true;
         }
     }
     changed
 }
 
+/// A statement's position: its block and its index in the block.
+type At = (usize, usize);
+
 /// The positions of one retain, the copy it funds and the release it cancels
-/// against, for a copy of a local dying right after it.
+/// against, for a copy of a local dying right after it. The retain is in the
+/// block searched; the copy and the release may be in the blocks it runs
+/// straight into.
 #[derive(Clone)]
 struct DyingTransfer {
     /// The place the copy reads: the local, or the payload of an optional
     /// held as its payload's own pointer.
     source: Place,
     retain: usize,
-    copy: usize,
-    release: usize,
+    copy: At,
+    release: At,
+}
+
+/// The statements from the one at `start` in `block` on, followed, given the
+/// body's `predecessors`, by those of each block control runs straight into:
+/// a block's terminator naming nothing of `local` and leading only to a block
+/// nothing else leads to. A call returns to the one block it names, and
+/// nothing it runs can reach a local it is not handed, so `local` holds what
+/// it held across it.
+fn straight_run<'b>(
+    body: &'b Body,
+    block: usize,
+    start: usize,
+    local: Local,
+    predecessors: Option<&[Vec<usize>]>,
+) -> Vec<(At, &'b Statement)> {
+    let mut run = Vec::new();
+    let mut current = block;
+    let mut from = start;
+    loop {
+        let data = &body.basic_blocks[current];
+        run.extend(
+            (data.statements.iter().enumerate().skip(from)).map(|(at, s)| ((current, at), s)),
+        );
+        let (Some(terminator), Some(predecessors)) = (&data.terminator, predecessors) else {
+            return run;
+        };
+        let successors = terminator.successors();
+        let [next] = successors.as_slice() else {
+            return run;
+        };
+        let names_local = mentions(local, |mention| {
+            mention.visit_terminator(BasicBlock(current), terminator)
+        });
+        let is_straight = predecessors
+            .get(next.0)
+            .is_some_and(|p| p.as_slice() == [current])
+            && next.0 != block
+            && !body.basic_blocks[next.0].is_cleanup;
+        if names_local || !is_straight {
+            return run;
+        }
+        current = next.0;
+        from = 0;
+    }
 }
 
 /// The first copy in `block` of `body` that [`move_dying_sources`] turns into
 /// a move.
-fn dying_source_transfer(body: &Body, block: usize, kept: KeptPairs) -> Option<DyingTransfer> {
+fn dying_source_transfer(
+    body: &Body,
+    block: usize,
+    kept: KeptPairs,
+    predecessors: &[Vec<usize>],
+) -> Option<DyingTransfer> {
     let statements = &body.basic_blocks[block].statements;
     statements
         .iter()
@@ -284,24 +343,37 @@ fn dying_source_transfer(body: &Body, block: usize, kept: KeptPairs) -> Option<D
             if !is_transferable_source(body, local, kept) {
                 return None;
             }
-            let copy = next_mention(statements, local, retain + 1)?;
-            if !transfers_local(&statements[copy], retained) {
+            // Only a value whose release may run a drop hook is followed past
+            // its block: every other count stays cancelled inside one block,
+            // which the loop header reads rely on.
+            let crosses = DropHookReach::new(body.rc_classifier.definitions())
+                .may_run_drop_hook(&body.local_decls[local.0].ty);
+            let run = straight_run(
+                body,
+                block,
+                retain + 1,
+                local,
+                crosses.then_some(predecessors),
+            );
+            let run_statements: Vec<&Statement> = run.iter().map(|&(_, s)| s).collect();
+            let copy = next_mention(&run_statements, local, 0)?;
+            if !transfers_local(run_statements[copy], retained) {
                 return None;
             }
-            let release = copy + 1 + dying_release(&statements[copy + 1..], local)?;
-            let destination = stored_destination(&statements[copy])?;
-            let releases_between = statements[copy + 1..release].iter().any(|statement| {
+            let release = copy + 1 + dying_release(&run_statements[copy + 1..], local)?;
+            let destination = stored_destination(run_statements[copy])?;
+            let releases_between = run_statements[copy + 1..release].iter().any(|statement| {
                 matches!(
                     &statement.kind,
                     StatementKind::DecRef(place) | StatementKind::Dealloc(place)
                         if place.local == destination
                 )
             });
-            (!releases_between).then_some(DyingTransfer {
+            (!releases_between).then(|| DyingTransfer {
                 source: retained.clone(),
                 retain,
-                copy,
-                release,
+                copy: run[copy].0,
+                release: run[release].0,
             })
         })
 }
@@ -326,8 +398,12 @@ fn is_transferable_source(body: &Body, local: Local, kept: KeptPairs) -> bool {
 }
 
 /// The position of the first statement at or after `start` mentioning `local`.
-fn next_mention(statements: &[Statement], local: Local, start: usize) -> Option<usize> {
-    (start..statements.len()).find(|&at| statement_mentions(&statements[at], local))
+fn next_mention<S: std::borrow::Borrow<Statement>>(
+    statements: &[S],
+    local: Local,
+    start: usize,
+) -> Option<usize> {
+    (start..statements.len()).find(|&at| statement_mentions(statements[at].borrow(), local))
 }
 
 /// Whether `statement` stores `source` whole into a destination not naming
@@ -379,9 +455,10 @@ fn stored_destination(statement: &Statement) -> Option<Local> {
 
 /// Remove the retain and the release of `transfer` and spell its copy as a
 /// move of the local.
-fn apply_transfer(statements: &mut Vec<Statement>, transfer: DyingTransfer) {
+fn apply_transfer(body: &mut Body, block: usize, transfer: DyingTransfer) {
+    let (copy_block, copy) = transfer.copy;
     if let StatementKind::Assign(_, rvalue) | StatementKind::Reassign(_, rvalue) =
-        &mut statements[transfer.copy].kind
+        &mut body.basic_blocks[copy_block].statements[copy].kind
     {
         for operand in stored_operands_mut(rvalue) {
             if reads_place(operand, &transfer.source) {
@@ -389,8 +466,9 @@ fn apply_transfer(statements: &mut Vec<Statement>, transfer: DyingTransfer) {
             }
         }
     }
-    statements.remove(transfer.release);
-    statements.remove(transfer.retain);
+    let (release_block, release) = transfer.release;
+    body.basic_blocks[release_block].statements.remove(release);
+    body.basic_blocks[block].statements.remove(transfer.retain);
 }
 
 /// The operands an rvalue stores into its destination as they are: the value
@@ -603,10 +681,14 @@ fn funding_retain(statements: &[Statement], local: Local) -> Option<usize> {
 /// The position of `DecRef(local)` when it is the block's first mention of
 /// `local` and is followed, with no mention between, by the end of the local's
 /// storage or a rebinding of it that does not read it.
-fn dying_release(statements: &[Statement], local: Local) -> Option<usize> {
+fn dying_release<S: std::borrow::Borrow<Statement>>(
+    statements: &[S],
+    local: Local,
+) -> Option<usize> {
     let whole = Place::new(local);
     let mut mentioning = statements
         .iter()
+        .map(|statement| statement.borrow())
         .enumerate()
         .filter(|(_, statement)| statement_mentions(statement, local));
     let (release, first) = mentioning.next()?;

@@ -456,3 +456,54 @@ fn main()
         "shelved\nreleased 1\nafter\nreleased 2",
     );
 }
+
+#[test]
+fn a_payload_handed_on_after_another_argument_runs_code_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+class Shelf
+    var held Token
+    fn init(held Token)
+        self.held = held
+
+class Tag
+    public var n int
+    fn init(n int)
+        self.n = n
+        println("tag made")
+
+fn shelve(tag Tag, t Token) Shelf
+    println(f"tag {tag.n}")
+    return Shelf(t)
+
+fn main()
+    var l = List<Token>()
+    l.push(Token(id: 1))
+    match l.remove_at(0)
+        Some(t)
+            let _s = shelve(Tag(7), t)
+            println("shelved")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "tag made\ntag 7\nshelved\nreleased 1\nafter",
+    );
+}
+
+#[test]
+fn a_resource_picked_out_of_a_tuple_at_run_time_is_borrowed() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    let t = (Token(id: 1), Token(id: 2))
+    var i = 1
+    let r = t[i]
+    println(f"got {r.id}")
+"#,
+        ),
+        "got 2\nreleased 1\nreleased 2",
+    );
+}

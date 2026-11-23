@@ -705,3 +705,40 @@ fn a_program_binding_naming_a_whole_local_is_refused() {
     body.local_decls[3].is_user_variable = true;
     assert_refused(&body, "a program binding copying a whole local");
 }
+
+/// The body `single_block` builds, with `_1` a tuple of two strings rather
+/// than a list: `_3` reads the element `_2` picks at run time.
+fn tuple_element_body() -> Recorded {
+    let string_argument = || miri::ast::type_arguments::TypeArgument {
+        id: 0,
+        node: miri::ast::type_arguments::TypeArgKind::Type(Box::new(string_ty()), false),
+        span: miri::error::syntax::Span::new(0, 0),
+    };
+    let tuple = Type::new(
+        TypeKind::Tuple(vec![string_argument(), string_argument()]),
+        miri::error::syntax::Span::new(0, 0),
+    );
+    let mut statements = list_and_index();
+    statements.extend(end_of_borrow_and_list());
+    let body = body_of(
+        &[void_ty(), tuple, int_ty(), string_ty()],
+        0,
+        vec![block(statements, ret())],
+    );
+    Recorded {
+        body,
+        ownership: OwnershipFacts {
+            borrowed_locals: HashMap::from([(Local(3), vec![Local(1)])]),
+            ..OwnershipFacts::default()
+        },
+    }
+}
+
+/// A tuple's element picked by a run-time index is one of its fields, a step
+/// inside the tuple's own value.
+#[test]
+fn a_borrow_of_a_tuple_element_picked_at_run_time_holds() {
+    let body = tuple_element_body();
+    let violations = verify_local_borrows(&body, &body.ownership, None);
+    assert!(violations.is_empty(), "got: {}", messages(&violations));
+}

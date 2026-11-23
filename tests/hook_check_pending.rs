@@ -31,18 +31,24 @@ const FUNDED_PLACE: &str = "a resource read out of a place is handed to a keeper
 /// reference of its own beside the collection's.
 const OWNED_GETTER: &str = "a map or set getter hands out an owned copy";
 
-/// A payload bound out of a matched value held in a binding or a loop's
-/// subject is copied while the matched value still holds it.
-const MATCHED_PAYLOAD: &str = "a matched payload is copied while its scrutinee still holds it";
+/// A field of a class instance lent to a call that may reach the instance
+/// another way is copied with a reference of its own for the call, since a
+/// class instance is still shared on assignment and another holder may
+/// replace the field while the call runs.
+const CLASS_FIELD_ARGUMENT: &str = "a class field lent to a call is copied for it";
 
-/// The call a `for` loop makes each pass, `next` or `element_at`, is handed
-/// a funded copy of a value its owner still holds.
-const LOOP_CALL: &str = "a loop's per-pass call is handed a funded copy";
+/// A payload of an enum held as a counted block is copied out of it for a
+/// keeper, then the enum is released whole: moving one field out needs a
+/// release that frees the block without the fields already moved.
+const ENUM_PAYLOAD: &str = "an enum block's payload handed to a keeper is copied out of it";
 
-/// A resource held by an optional, an enum or a tuple is copied out while
-/// the value holding it is still live: reading it through a generic alias,
-/// picking it by a value, or building another value around its fields.
-const VALUE_FLOW: &str = "a resource is copied out of the value still holding it";
+/// A keeper called on only some paths of a match arm is handed a funded copy
+/// of the payload, which stays bound on the other paths.
+const CONDITIONAL_HANDOVER: &str = "a payload handed over on some paths only is a funded copy";
+
+/// A closure lent to a call holds a reference of its own to a resource it
+/// only reads, beside the binding that owns it.
+const CAPTURED_RESOURCE: &str = "a lent closure takes a reference of its own to what it reads";
 
 /// Each test, by its path from the test binary's root, with the mechanism
 /// that still gives its program a second holder.
@@ -134,21 +140,19 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("integration::memory::collection_element_copies::filtering_a_map_of_a_cloneable_resource_clones_each_value_kept", OWNED_GETTER),
     ("integration::memory::collection_element_copies::filtering_a_set_of_a_cloneable_resource_clones_each_element_kept", OWNED_GETTER),
     ("integration::memory::kept_imported_calls::library_bodies_reusing_a_resource_run_each_hook_once", OWNED_GETTER),
-    ("integration::memory::places_handed_to_keepers::taking_an_optional_element_before_matching_hands_its_payload_over", MATCHED_PAYLOAD),
-    ("integration::memory::places_handed_to_keepers::taking_an_optional_field_hands_its_payload_to_the_keeper", MATCHED_PAYLOAD),
-    ("integration::memory::places_handed_to_keepers::two_payloads_of_one_owned_scrutinee_handed_to_one_keeper_end_it_once", MATCHED_PAYLOAD),
-    ("integration::option::comparison_in_loops::test_option_compare_none_in_while_with_if_let_walk", MATCHED_PAYLOAD),
-    ("integration::option::comparison_in_loops::test_option_compare_none_in_while_with_match_walk", MATCHED_PAYLOAD),
-    ("integration::option::comparison_in_loops::test_option_compare_some_in_while_releases_payloads", MATCHED_PAYLOAD),
-    ("integration::memory::kept_operator_and_loop_calls::a_next_keeping_its_iterator_is_handed_a_reference_of_its_own_each_pass", LOOP_CALL),
-    ("integration::memory::kept_operator_and_loop_calls::a_value_looked_for_with_in_is_still_the_callers", LOOP_CALL),
-    ("integration::memory::kept_operator_and_loop_calls::an_element_at_keeping_its_receiver_is_handed_a_reference_each_pass", LOOP_CALL),
-    ("integration::generics::field_arguments::a_generic_instance_built_from_another_ones_optional_fields_releases_everything", VALUE_FLOW),
-    ("integration::memory::collection_element_copies::moving_the_elements_out_repairs_a_refused_copy", VALUE_FLOW),
-    ("integration::memory::consumed_arguments::a_resource_read_by_a_closure_passed_to_a_call_stays_usable", VALUE_FLOW),
-    ("integration::memory::kept_virtual_calls::an_element_and_a_parameter_removed_for_an_owning_slot_are_handed_over", VALUE_FLOW),
-    ("integration::option::nullable_pointer_aliases::test_an_optional_of_a_generic_alias_flows_through_fields_lists_and_parameters", VALUE_FLOW),
-    ("integration::tuple::indexed_elements::test_a_class_instance_picked_by_a_value_is_released_once", VALUE_FLOW),
+    ("integration::memory::places_handed_to_keepers::taking_an_optional_element_before_matching_hands_its_payload_over", OUT_SLOT),
+    ("integration::memory::places_handed_to_keepers::taking_an_optional_field_hands_its_payload_to_the_keeper", OUT_SLOT),
+    ("integration::memory::places_handed_to_keepers::two_payloads_of_one_owned_scrutinee_handed_to_one_keeper_end_it_once", ENUM_PAYLOAD),
+    ("integration::option::comparison_in_loops::test_option_compare_none_in_while_with_if_let_walk", FUNDED_PLACE),
+    ("integration::option::comparison_in_loops::test_option_compare_none_in_while_with_match_walk", FUNDED_PLACE),
+    ("integration::option::comparison_in_loops::test_option_compare_some_in_while_releases_payloads", FUNDED_PLACE),
+    ("integration::memory::kept_operator_and_loop_calls::a_next_keeping_its_iterator_is_handed_a_reference_of_its_own_each_pass", FUNDED_PLACE),
+    ("integration::memory::kept_operator_and_loop_calls::a_value_looked_for_with_in_is_still_the_callers", GENERIC_BODY),
+    ("integration::memory::kept_operator_and_loop_calls::an_element_at_keeping_its_receiver_is_handed_a_reference_each_pass", FUNDED_PLACE),
+    ("integration::generics::field_arguments::a_generic_instance_built_from_another_ones_optional_fields_releases_everything", GENERIC_BODY),
+    ("integration::memory::collection_element_copies::moving_the_elements_out_repairs_a_refused_copy", CONDITIONAL_HANDOVER),
+    ("integration::memory::consumed_arguments::a_resource_read_by_a_closure_passed_to_a_call_stays_usable", CAPTURED_RESOURCE),
+    ("integration::option::nullable_pointer_aliases::test_an_optional_of_a_generic_alias_flows_through_fields_lists_and_parameters", CLASS_FIELD_ARGUMENT),
 ];
 
 /// Whether the test running on this thread is checked for a second holder.

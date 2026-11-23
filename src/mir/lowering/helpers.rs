@@ -604,6 +604,37 @@ pub fn spellings_of_one_value(from_ty: &Type, to_ty: &Type) -> bool {
     from == to || mir_types_structurally_match(&from, &to)
 }
 
+/// Whether two types are one value once every alias in them is read as the
+/// type it stands for, at the top and through optional layers:
+/// `Id<Node>?` for `type Id<T> is T` is `Node?`. A cast between them hands
+/// the value on unchanged, and would give it a second holder for nothing.
+pub fn aliases_of_one_value(
+    from_ty: &Type,
+    to_ty: &Type,
+    definitions: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,
+) -> bool {
+    let from = without_aliases(from_ty, definitions);
+    let to = without_aliases(to_ty, definitions);
+    from.kind == to.kind || spellings_of_one_value(&from, &to)
+}
+
+/// `ty` with every alias at its top and through its optional layers read as
+/// the type it stands for.
+fn without_aliases(
+    ty: &Type,
+    definitions: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,
+) -> Type {
+    let resolved = crate::mir::option_layout::resolve_alias(&ty.kind, definitions)
+        .unwrap_or_else(|| ty.clone());
+    match &resolved.kind {
+        TypeKind::Option(payload) => Type::new(
+            TypeKind::Option(Box::new(without_aliases(payload, definitions))),
+            resolved.span,
+        ),
+        _ => resolved,
+    }
+}
+
 /// The built-in type a class name with no type arguments spells, or `kind`
 /// itself.
 fn primitive_spelling(kind: &TypeKind) -> TypeKind {

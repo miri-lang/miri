@@ -879,10 +879,14 @@ fn is_value_step(
     definitions: &HashMap<String, TypeDefinition>,
 ) -> bool {
     match step {
-        PlaceElem::Index(_, _) => matches!(
-            container.as_builtin_collection(),
-            Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
-        ),
+        // A tuple's element picked by a run-time index is one of its fields.
+        PlaceElem::Index(_, _) => {
+            matches!(container, TypeKind::Tuple(_))
+                || matches!(
+                    container.as_builtin_collection(),
+                    Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
+                )
+        }
         PlaceElem::Field(_) => holds_fields_by_value(container, definitions),
         PlaceElem::Deref => false,
     }

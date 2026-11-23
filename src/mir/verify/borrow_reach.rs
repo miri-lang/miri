@@ -53,6 +53,10 @@ pub(super) fn reach_of(body: &Body, place: &Place) -> Option<Reach> {
         match (&place.projection[depth], container_of(&kind, definitions)) {
             (PlaceElem::Field(_), Container::FieldsByValue)
             | (PlaceElem::Index(_, _), Container::ElementsByValue) => {}
+            // A tuple's element picked by a run-time index is one of its
+            // fields.
+            (PlaceElem::Index(_, _), Container::FieldsByValue)
+                if matches!(kind, TypeKind::Tuple(_)) => {}
             (PlaceElem::Field(_), Container::Instance) => reach = Reach::ThroughField,
             (PlaceElem::Field(_) | PlaceElem::Index(_, _), _) | (PlaceElem::Deref, _) => {
                 return None

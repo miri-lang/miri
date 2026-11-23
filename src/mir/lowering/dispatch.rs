@@ -2292,7 +2292,14 @@ pub(super) fn coerce_arg_to_declared(
     // compared as written it would read as a value the optional wraps.
     let op_ty =
         super::variable::canonical_declared_type(ctx.type_checker, &argument_type(ctx, &op, arg));
-    if op_ty.kind == target_ty.kind || spellings_of_one_value(&op_ty, target_ty) {
+    if op_ty.kind == target_ty.kind
+        || spellings_of_one_value(&op_ty, target_ty)
+        || super::helpers::aliases_of_one_value(
+            &op_ty,
+            target_ty,
+            ctx.type_checker.type_definitions(),
+        )
+    {
         return op;
     }
     let temp = ctx.push_temp(target_ty.clone(), arg.span);

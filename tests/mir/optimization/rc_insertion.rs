@@ -1180,8 +1180,10 @@ fn main()
     );
 }
 
+/// `y` borrows the tuple's element, so the reference the caller is handed is
+/// taken where the borrow escapes: at the return, if not at the read.
 #[test]
-fn test_a_string_picked_out_of_a_tuple_by_a_value_is_retained() {
+fn test_a_string_picked_out_of_a_tuple_by_a_value_is_retained_where_it_escapes() {
     let source = r#"
 fn probe() String
     let x = ("a" + "b", "c" + "d")
@@ -1190,13 +1192,15 @@ fn probe() String
     return y
 "#;
     let body = lowered_with_rc(source, "probe");
+    let y = local_named(&body, "y");
     assert!(
         all_statements(&body).iter().any(|kind| matches!(
             kind,
             StatementKind::IncRef(p)
-                if p.projection.iter().any(|e| matches!(e, PlaceElem::Index(_, _)))
+                if p.local == y
+                    || p.projection.iter().any(|e| matches!(e, PlaceElem::Index(_, _)))
         )),
-        "the element read out of the tuple must be retained: {:?}",
+        "the string the function returns must hold a reference of its own: {:?}",
         all_statements(&body)
     );
 }
