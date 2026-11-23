@@ -653,3 +653,55 @@ fn a_borrow_recorded_out_of_a_map_entry_is_refused() {
     body.local_decls[1].ty = collection_ty("Map", &[TypeKind::Int, TypeKind::String]);
     assert_refused(&body, "a map entry's borrow");
 }
+
+/// Locals: 0 the return slot, 1 a list the body owns, 2 unused, 3 a
+/// temporary the compiler made, defined as a copy of the whole list and
+/// recorded as borrowing it — the way a match names its subject.
+fn whole_alias_body(middle: Vec<Statement>) -> Recorded {
+    let list = || collection_ty("List", &[TypeKind::String]);
+    let mut statements = vec![
+        super::storage_live(1),
+        super::assign_fresh(1),
+        super::storage_live(3),
+        stmt(StatementKind::Assign(
+            place(3),
+            Rvalue::Use(Operand::Copy(place(1))),
+        )),
+    ];
+    statements.extend(middle);
+    statements.extend(end_of_borrow_and_list());
+    let body = body_of(
+        &[void_ty(), list(), int_ty(), list()],
+        0,
+        vec![block(statements, ret())],
+    );
+    Recorded {
+        body,
+        ownership: OwnershipFacts {
+            borrowed_locals: HashMap::from([(Local(3), vec![Local(1)])]),
+            ..OwnershipFacts::default()
+        },
+    }
+}
+
+#[test]
+fn a_temporary_naming_a_whole_local_that_stays_borrows_it() {
+    let body = whole_alias_body(Vec::new());
+    let violations = verify_body(&body, &body.ownership);
+    assert!(violations.is_empty(), "got: {}", messages(&violations));
+}
+
+#[test]
+fn a_temporary_naming_a_whole_local_released_while_it_holds_is_refused() {
+    let body = whole_alias_body(vec![super::decref(1)]);
+    assert_refused(&body, "releasing the named local inside the range");
+}
+
+/// A binding the program wrote holds a reference of its own: only a
+/// temporary may borrow a whole local.
+#[test]
+fn a_program_binding_naming_a_whole_local_is_refused() {
+    let mut body = whole_alias_body(Vec::new());
+    body.local_decls[3].is_user_variable = true;
+    assert_refused(&body, "a program binding copying a whole local");
+}

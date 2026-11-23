@@ -38,12 +38,9 @@ enum Container {
     Opaque,
 }
 
-/// How `place` is reached from its root; `None` for a place with no step,
-/// or with a step this check does not follow.
+/// How `place` is reached from its root, the root itself being inside its
+/// own value; `None` for a place with a step this check does not follow.
 pub(super) fn reach_of(body: &Body, place: &Place) -> Option<Reach> {
-    if place.projection.is_empty() {
-        return None;
-    }
     let types = PlaceTypes::of(body);
     let definitions = body.rc_classifier.definitions();
     let mut reach = Reach::InValue;

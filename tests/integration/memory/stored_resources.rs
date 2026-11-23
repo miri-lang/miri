@@ -410,3 +410,22 @@ fn main()
         "shelved\nreleased 1\nafter",
     );
 }
+
+#[test]
+fn matching_an_optional_resource_held_in_a_binding_gives_it_no_second_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    let o Token? = Some(Token(id: 2))
+    match o
+        Some(t): println(f"matched {t.id}")
+        None: println("none")
+    if let Some(t) = o
+        println(f"again {t.id}")
+    println("after")
+"#,
+        ),
+        "matched 2\nagain 2\nafter\nreleased 2",
+    );
+}

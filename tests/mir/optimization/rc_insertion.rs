@@ -749,6 +749,9 @@ fn test_auto_copy_struct_is_reference_counted() {
         0,
         vec![assign(place(2), use_copy(place(1))), storage_dead(place(2))],
     );
+    // A binding the program wrote: a whole copy into a temporary of a type
+    // this body cannot tell runs no hook would borrow instead.
+    body.local_decls[2].is_user_variable = true;
 
     assert_eq!(
         rc_statements(&mut body),

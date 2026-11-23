@@ -18,7 +18,9 @@
 //! `l` borrows when all of these hold:
 //!
 //! - **It reads.** `l` is a managed local the body owns, every definition of it
-//!   is a copy RC insertion would retain, it holds no device buffer, and it is never rebound, released by hand, handed to a runtime
+//!   is a copy RC insertion would retain — of a projected place, or, for a
+//!   temporary the compiler made whose type may run a drop hook, of a whole
+//!   local, the way a match names its subject — it holds no device buffer, and it is never rebound, released by hand, handed to a runtime
 //!   entry point that keeps it, written through, passed `out`, or handed by
 //!   `move` to a position its callee owns: a move gives the callee the
 //!   caller's own reference, which a borrow does not hold.
@@ -100,13 +102,13 @@ pub(super) fn infer_local_borrows(
     ctx: &RcContext,
     managed_locals: &HashSet<Local>,
 ) -> HashMap<Local, Vec<Local>> {
-    let mut reads = borrowing_reads(body, ctx, managed_locals);
+    let hooks = DropHookReach::new(definitions(ctx));
+    let mut reads = borrowing_reads(body, ctx, managed_locals, &hooks);
     reads.retain(|&local, _| is_plain_value(body, local));
     let refused = refused_locals(body, ctx, &reads);
     reads.retain(|local, _| !refused.contains(local));
     let exposed_sites = retain_rooted_reads(body, ctx, managed_locals, &mut reads);
     let entries = entry_collections(body);
-    let hooks = DropHookReach::new(definitions(ctx));
     let noise = (!exposed_sites.is_empty() || !entries.is_empty())
         .then(|| BodyNoise::of(body, ownership, Phase::Lowered, &hooks));
     let mut settled = Settled {
@@ -294,7 +296,12 @@ fn definitions<'a>(ctx: &RcContext<'a>) -> &'a HashMap<String, TypeDefinition> {
 
 /// Each managed local's copies of a projected place that RC insertion would
 /// retain, by the local they define.
-fn borrowing_reads(body: &Body, ctx: &RcContext, managed_locals: &HashSet<Local>) -> Reads {
+fn borrowing_reads(
+    body: &Body,
+    ctx: &RcContext,
+    managed_locals: &HashSet<Local>,
+    hooks: &DropHookReach,
+) -> Reads {
     let mut reads = Reads::new();
     for (block, data) in body.basic_blocks.iter().enumerate() {
         for (index, statement) in data.statements.iter().enumerate() {
@@ -304,7 +311,7 @@ fn borrowing_reads(body: &Body, ctx: &RcContext, managed_locals: &HashSet<Local>
             };
             let is_read = dest.projection.is_empty()
                 && managed_locals.contains(&dest.local)
-                && !source.projection.is_empty()
+                && (!source.projection.is_empty() || is_resource_alias(body, dest.local, hooks))
                 && RcInsertion.should_incref_source(ctx, source, dest, managed_locals);
             if is_read {
                 reads
@@ -315,6 +322,17 @@ fn borrowing_reads(body: &Body, ctx: &RcContext, managed_locals: &HashSet<Local>
         }
     }
     reads
+}
+
+/// Whether `local` is a temporary the compiler made to hold a value whose
+/// release may run a drop hook, which a copy of a whole local defines as a
+/// second name for it while it is read, the way a match holds its subject.
+/// Borrowing keeps the resource's one holder; any other value keeps the
+/// reference of its own a copy gives it, which a loop's header reads rely on.
+/// A binding the program wrote borrows only what it reads out of a place.
+fn is_resource_alias(body: &Body, local: Local, hooks: &DropHookReach) -> bool {
+    let decl = &body.local_decls[local.0];
+    !decl.is_user_variable && hooks.may_run_drop_hook(&decl.ty)
 }
 
 /// Whether `local` holds no device buffer. A value whose release runs a
@@ -814,17 +832,15 @@ pub(crate) enum Reach {
 
 /// How `place` is reached from its root, through value steps — an element of
 /// a list or an array, a field of a struct, a tuple, an optional or an enum —
-/// and fields of class instances; `None` for a place with no step, or with a
-/// dereference or a field of a value whose holder is not known. `declared`
+/// and fields of class instances, the root itself being inside its own value;
+/// `None` for a place with a dereference or a field of a value whose holder
+/// is not known. `declared`
 /// gives the declared type of each place on the way.
 pub(crate) fn reach_of(
     place: &Place,
     declared: impl Fn(&Place) -> Option<Type>,
     definitions: &HashMap<String, TypeDefinition>,
 ) -> Option<Reach> {
-    if place.projection.is_empty() {
-        return None;
-    }
     place
         .projection
         .iter()

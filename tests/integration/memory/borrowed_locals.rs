@@ -99,8 +99,9 @@ println(f"{run()}")
 }
 
 /// `for s in shapes` over a list the body owns borrows each element for the
-/// iteration, virtual call included: only the iteration's own copy of the list
-/// and the shapes' construction are counted.
+/// iteration, virtual call included. The iteration's own name for a list of
+/// trait values, which may hold a value with a drop hook, borrows the list as
+/// well, so only the shapes' construction is counted.
 #[test]
 fn test_loop_variable_over_a_local_list_takes_no_reference() {
     assert_borrowing(
@@ -145,8 +146,8 @@ fn total() int
 println(f"{total()}")
 "#,
         "38",
-        2,
-        7,
+        0,
+        5,
     );
 }
 
@@ -509,6 +510,7 @@ println(f"{run()}")
 /// is never taken over. It binds a copy of the parameter on entry, which
 /// takes a reference of its own, so each of the two calls copies the
 /// borrowed `rows.first` before writing and `rows` keeps its one element.
+/// The loop's own name for that copy borrows it, taking no reference.
 #[test]
 fn test_a_function_writing_a_borrowed_element_leaves_its_list_alone() {
     assert_borrowing(
@@ -556,8 +558,8 @@ fn run() String
 println(run())
 "#,
         "24 1 1",
-        6,
-        18,
+        4,
+        16,
     );
 }
 

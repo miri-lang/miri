@@ -219,7 +219,10 @@ impl Checker<'_> {
             return Some("it holds no counted host value".to_string());
         }
         if definitions_of(body, local).is_none() {
-            return Some("a definition of it is not a copy of a projected place".to_string());
+            return Some(
+                "a definition of it is not a copy of a projected place, or of a whole local into a temporary"
+                    .to_string(),
+            );
         }
         let writes = written_as(body, &decl.ty);
         accesses_in(body)
@@ -382,7 +385,8 @@ fn leaves_owner(access: Access) -> bool {
 }
 
 /// Each definition of `local` with the place it copies; `None` when one of
-/// them is anything but a copy of a projected place.
+/// them is anything but a copy of a projected place, or, into a temporary the
+/// compiler made, of a whole local.
 fn definitions_of(body: &Body, local: Local) -> Option<Vec<((usize, usize), Place)>> {
     let mut reads = Vec::new();
     for (block, data) in body.basic_blocks.iter().enumerate() {
@@ -396,7 +400,7 @@ fn definitions_of(body: &Body, local: Local) -> Option<Vec<((usize, usize), Plac
             let Rvalue::Use(Operand::Copy(source)) = rvalue else {
                 return None;
             };
-            if source.projection.is_empty() {
+            if source.projection.is_empty() && body.local_decls[local.0].is_user_variable {
                 return None;
             }
             reads.push(((block, index), source.clone()));
