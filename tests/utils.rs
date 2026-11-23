@@ -103,12 +103,10 @@ fn exec_miri(command: &str, input: &str, program_args: &[&str]) -> CompilerResul
             // The leak check counts every block: those the runtime allocates
             // with a count header and those compiled code lays out itself
             // (class instances, tuples, enum payloads, closure environments).
-            // TODO: also set MIRI_HOOK_CHECK=1 here. It fails today because
-            // a resource handed to a collection, a constructed value, a
-            // reassigned binding or a field is retained rather than moved, and
-            // an element or field of a resource is read through a retained
-            // temporary.
+            // The hook check stops a program whose value with a drop hook
+            // gains a second holder.
             .env("MIRI_LEAK_CHECK", "1")
+            .env("MIRI_HOOK_CHECK", hook_check_value())
             // Findings are fatal: every program the suite compiles is verifier
             // corpus, so an RC seam introduced anywhere fails the test that
             // compiles it rather than printing a warning nobody reads.
@@ -191,6 +189,17 @@ pub fn miri_run_with_args(input: &str, args: &[&str]) -> CompilerResult {
     exec_miri("run", input, args)
 }
 
+/// The `MIRI_HOOK_CHECK` value a program the harness runs is given: on,
+/// except for a test whose program still gives a value with a drop hook a
+/// second holder ([`crate::hook_check_pending`]).
+pub fn hook_check_value() -> &'static str {
+    if crate::hook_check_pending::hook_check_applies() {
+        "1"
+    } else {
+        "0"
+    }
+}
+
 /// Run Miri binary with 'run' command with an additional environment variable.
 /// Sets both the standard variables and the provided extra variable.
 pub fn miri_run_with_env(input: &str, env_var: &str, env_value: &str) -> CompilerResult {
@@ -207,6 +216,7 @@ pub fn miri_run_with_env(input: &str, env_var: &str, env_value: &str) -> Compile
     let mut cmd = miri_cmd();
     cmd.env("RUST_BACKTRACE", "1")
         .env("MIRI_LEAK_CHECK", "1")
+        .env("MIRI_HOOK_CHECK", hook_check_value())
         .env("MIRI_VERIFY_MIR", "1")
         .env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
         .env(env_var, env_value)
@@ -325,6 +335,7 @@ fn miri_project(
     let output = cmd
         .env("RUST_BACKTRACE", "1")
         .env("MIRI_LEAK_CHECK", "1")
+        .env("MIRI_HOOK_CHECK", hook_check_value())
         .env("MIRI_VERIFY_MIR", "1")
         .env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
         // Prevent linker-override env vars from leaking in from concurrent tests.
@@ -392,6 +403,7 @@ fn miri_project_with_command_and_cwd(
     let mut cmd = miri_cmd();
     cmd.env("RUST_BACKTRACE", "1")
         .env("MIRI_LEAK_CHECK", "1")
+        .env("MIRI_HOOK_CHECK", hook_check_value())
         .env("MIRI_VERIFY_MIR", "1")
         .env_remove("MIRI_CC")
         .env_remove("CC");
@@ -538,6 +550,7 @@ pub fn miri_build_and_run_repeatedly(input: &str, runs: usize) -> Vec<CompilerRe
         .map(|_| {
             let output = Command::new(&artifact_path)
                 .env("MIRI_LEAK_CHECK", "1")
+                .env("MIRI_HOOK_CHECK", hook_check_value())
                 .output()
                 .expect("run built program");
             CompilerResult {

@@ -12,6 +12,7 @@ pub mod error;
 pub mod evals;
 pub mod gpu_target;
 pub mod grammar;
+pub mod hook_check_pending;
 pub mod integration;
 pub mod lexer;
 pub mod mir;
