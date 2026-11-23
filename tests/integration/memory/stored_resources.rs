@@ -429,3 +429,30 @@ fn main()
         "matched 2\nagain 2\nafter\nreleased 2",
     );
 }
+
+#[test]
+fn a_payload_handed_to_a_keeper_out_of_a_matched_binding_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn shelve(t Token) Slot
+    return Slot(held: Some(t))
+
+fn main()
+    let o Token? = Some(Token(id: 1))
+    match o
+        Some(t)
+            let _s = shelve(t)
+            println("shelved")
+        None: println("none")
+    var p Token? = None
+    match p
+        Some(t)
+            let _s = shelve(t)
+        None: p = Some(Token(id: 2))
+    println("after")
+"#,
+        ),
+        "shelved\nreleased 1\nafter\nreleased 2",
+    );
+}

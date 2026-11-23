@@ -656,6 +656,12 @@ impl TypeChecker {
         self.consumed_arguments.ended_scrutinee(argument)
     }
 
+    /// Whether a keeper taking a payload bound out of the scrutinee
+    /// `subject` ends it ([`use_after_move::ConsumedArguments::is_ended_scrutinee`]).
+    pub fn is_ended_scrutinee(&self, subject: &Expression) -> bool {
+        self.consumed_arguments.is_ended_scrutinee(subject)
+    }
+
     /// Whether `argument` is handed to a call through a lending parameter,
     /// which reads it only
     /// ([`use_after_move::ConsumedArguments::is_lent_argument`]).

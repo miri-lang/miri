@@ -798,6 +798,9 @@ struct MatchSubject {
     /// Local count before the subject was lowered, separating locals the
     /// subject allocated here from ones that already existed.
     watermark: usize,
+    /// Whether `local` is the body's own binding the subject names, which a
+    /// keeper taking a payload ends and its scope releases otherwise.
+    names_binding: bool,
 }
 
 /// Lower a match subject into a temp so every arm can read it.
@@ -823,7 +826,22 @@ fn lower_match_subject(
         .then_some(place.local),
         Operand::Constant(_) | Operand::Function(_) => None,
     };
-    let local = match made_here {
+    // A binding of the body's own whose payload a keeper takes is the
+    // subject too: the keeper is handed the payload's one reference and the
+    // binding ends there, so a copy would be a second holder.
+    // TODO: a keeper called on only some paths of an arm is still handed a
+    // funded copy of the payload, which stays bound on the other paths; it
+    // should move the payload out there and leave a drop flag to release it
+    // on the paths that keep it.
+    let ended_binding = match &subject_op {
+        Operand::Copy(place) | Operand::Move(place) => (place.projection.is_empty()
+            && matches!(subject.node, ExpressionKind::Identifier(..))
+            && crate::mir::lowering::variable::is_own_binding(ctx, place.local)
+            && ctx.type_checker.is_ended_scrutinee(subject))
+        .then_some(place.local),
+        Operand::Constant(_) | Operand::Function(_) => None,
+    };
+    let local = match made_here.or(ended_binding) {
         Some(local) => local,
         None => {
             let local = ctx.push_temp(ctx.instantiated_type(&ty), subject.span);
@@ -839,6 +857,7 @@ fn lower_match_subject(
         ty,
         source_local,
         watermark,
+        names_binding: ended_binding.is_some() && made_here.is_none(),
     })
 }
 
@@ -854,9 +873,13 @@ fn lower_match_subject(
 /// registers the returned object itself, so taking it here as well would
 /// release it twice.
 ///
-/// The scope releases these in reverse, so the subject temp goes first.
+/// The scope releases these in reverse, so the subject temp goes first. A
+/// subject that is a binding of the body's own is left to its scope.
 /// Whether it took the operand's own local.
 fn register_subject_temps(ctx: &mut LoweringContext, subject: &MatchSubject) -> bool {
+    if subject.names_binding {
+        return false;
+    }
     let releases_source = subject.source_local.is_some_and(|source_local| {
         source_local != subject.local
             && ctx.is_released_by_expression(source_local, subject.watermark)

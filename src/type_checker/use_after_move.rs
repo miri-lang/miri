@@ -199,6 +199,14 @@ impl ConsumedArguments {
         self.payload_handovers.get(&argument.id).copied()
     }
 
+    /// Whether a keeper taking a payload bound out of the scrutinee
+    /// `subject` ends it, the scrutinee being the scope's own.
+    pub fn is_ended_scrutinee(&self, subject: &Expression) -> bool {
+        self.payload_handovers
+            .values()
+            .any(|&ended| ended == subject.id)
+    }
+
     /// Whether a keeper is handed a funded copy of the resource `argument`
     /// while its holder keeps its own.
     pub fn is_funded_copy(&self, argument: &Expression) -> bool {
