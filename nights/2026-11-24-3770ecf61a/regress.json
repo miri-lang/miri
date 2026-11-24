@@ -1,0 +1,59 @@
+{
+ "run_id": "20261124T152823Z",
+ "suspect": [
+  {
+   "cell": "fannkuch-redux/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.180288172731951,
+   "baseline": 1.312106015292204,
+   "tonight": 1.5486632112198366
+  },
+  {
+   "cell": "mandelbrot/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.164379832832218,
+   "baseline": 1.119108148755306,
+   "tonight": 1.3030669591688762
+  },
+  {
+   "cell": "mandelbrot/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.1277734544039186,
+   "baseline": 1.0911725516058848,
+   "tonight": 1.2305954378753068
+  }
+ ],
+ "regressed": [
+  {
+   "cell": "fannkuch-redux/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.180288172731951,
+   "baseline": 1.312106015292204,
+   "tonight": 1.5486632112198366
+  },
+  {
+   "cell": "mandelbrot/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.164379832832218,
+   "baseline": 1.119108148755306,
+   "tonight": 1.3030669591688762
+  },
+  {
+   "cell": "mandelbrot/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.1277734544039186,
+   "baseline": 1.0911725516058848,
+   "tonight": 1.2305954378753068
+  }
+ ],
+ "recovered": [
+  {
+   "cell": "sieve/miri/s/cold",
+   "measure": "time_vs_c"
+  },
+  {
+   "cell": "sieve/miri/s/hot",
+   "measure": "time_vs_c"
+  }
+ ]
+}
