@@ -561,3 +561,29 @@ fn main()
         "released 0\nend of round 0\nend of round 1\nreleased 1\nafter",
     );
 }
+
+#[test]
+fn a_payload_handed_over_after_the_arm_reads_the_optional_through_a_method_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn shelve(t Token) Slot
+    return Slot(held: Some(t))
+
+fn main()
+    var i = 0
+    while i < 2
+        let p Token? = Some(Token(id: i + 3))
+        match p
+            Some(r)
+                println(f"has {p.is_some()}")
+                if r.id == 3
+                    let _s = shelve(r)
+            None: println("none")
+        i += 1
+    println("after")
+"#,
+        ),
+        "has true\nreleased 3\nhas true\nreleased 4\nafter",
+    );
+}

@@ -134,6 +134,7 @@ mod closure_captures;
 mod drop_flags;
 mod in_bounds;
 mod lent_arguments;
+mod lent_copies;
 mod local_borrows;
 mod moved_out;
 mod optional_representation;

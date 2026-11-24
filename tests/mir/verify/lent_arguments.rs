@@ -104,6 +104,55 @@ fn a_field_read_into_a_retained_local_first_is_not_reported() {
     assert!(found.is_empty(), "{found:?}");
 }
 
+/// `fn callee(h Holder, r Resource)`: copies `r`, whose release may run a
+/// hook, retains the copy and releases it; with `hands_on`, it also moves
+/// `r` on, so the copy may hold the last reference.
+fn releasing_a_copy_of_its_parameter(hands_on: bool) -> Body {
+    let hooked = TypeKind::Custom("Resource".to_string(), None);
+    let mut statements = vec![
+        store(local(3), local(2)),
+        statement(StatementKind::IncRef(local(3))),
+        statement(StatementKind::DecRef(local(3))),
+    ];
+    if hands_on {
+        statements.push(statement(StatementKind::Assign(
+            local(4),
+            miri::mir::Rvalue::Use(Operand::Move(local(2))),
+        )));
+    }
+    body_of(
+        &[
+            TypeKind::Void,
+            holder(),
+            hooked.clone(),
+            hooked.clone(),
+            hooked,
+        ],
+        2,
+        vec![returning(statements)],
+    )
+}
+
+/// Releasing a copy of a lent parameter leaves the caller's reference, so it
+/// is no harm: a field lent to such a callee needs no reference of its own.
+#[test]
+fn a_field_lent_to_a_callee_releasing_only_a_copy_of_what_it_is_lent_is_not_reported() {
+    let found = violations(
+        releasing_a_copy_of_its_parameter(false),
+        caller("callee", copy(field(1, 0)), Vec::new()),
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_field_lent_to_a_callee_whose_copy_may_hold_the_last_reference_is_reported() {
+    let found = violations(
+        releasing_a_copy_of_its_parameter(true),
+        caller("callee", copy(field(1, 0)), Vec::new()),
+    );
+    assert_eq!(found.len(), 1, "{found:?}");
+}
+
 /// `fn callee(h Holder, n Node)`: replaces the node `h` holds.
 fn field_writing_method_taking_node() -> Body {
     let mut body = field_writing_method();

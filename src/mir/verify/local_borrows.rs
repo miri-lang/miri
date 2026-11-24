@@ -31,8 +31,10 @@
 //! - on every path from a definition to the end of its storage, its owner —
 //!   and, for a borrow read out of another borrowed local, that local's owners —
 //!   is only read through a projection, retained through one, or lent by copy
-//!   to a runtime entry point that only reads it; the end of a lent
-//!   parameter's binding leaves its caller's reference in place;
+//!   to a runtime entry point that only reads it or to a function of the
+//!   program its caller found harmless ([`super::callee_effects`]), which
+//!   stores into nothing but its own locals; the end of a lent parameter's
+//!   binding leaves its caller's reference in place;
 //! - an entry a runtime getter lends out of a collection
 //!   ([`RuntimeEffect::hands_back_a_borrow`]) holds no reference of its own: a
 //!   borrow read out of one counts the locals holding the collection among
@@ -261,8 +263,12 @@ impl Checker<'_> {
                 owners.extend(parents);
                 read_exposed |= parent_exposed;
             }
-            let harm = read_exposed.then_some(&self.harm);
-            if !stays_over_range(body, self.ownership, local, site, &owners, harm) {
+            let range = Range {
+                local,
+                site,
+                owners: &owners,
+            };
+            if !stays_over_range(body, self.ownership, &range, &self.harm, read_exposed) {
                 return None;
             }
             all_owners.extend(owners);
@@ -439,24 +445,37 @@ fn ends_lent_parameter(body: &Body, ownership: &OwnershipFacts, statement: &Stat
             && !ownership.is_owned_param(place.local))
 }
 
-/// Whether, on every path from the definition of `local` at `site` to the end
-/// of its storage, each of `owners` is reached only in ways that leave it as
-/// it was, and — given `harm`, for a value other code may reach — every
-/// operation that runs is harmless. A path reaching the
-/// body's end first does not end the range.
+/// A borrow's range: the borrow, the definition it starts at, and the
+/// owners that must stay as they were over it.
+struct Range<'r> {
+    local: Local,
+    site: (usize, usize),
+    owners: &'r [Local],
+}
+
+/// Whether, on every path from the definition of the range's local at its
+/// site to the end of its storage, each of its owners is reached only in
+/// ways that leave it as it was, and — when other code may reach the value
+/// (`is_exposed`) — every operation that runs is harmless by `harm`. A path
+/// reaching the body's end first does not end the range.
 fn stays_over_range(
     body: &Body,
     ownership: &OwnershipFacts,
-    local: Local,
-    site: (usize, usize),
-    owners: &[Local],
-    harm: Option<&BodyHarm>,
+    range: &Range,
+    harm: &BodyHarm,
+    is_exposed: bool,
 ) -> bool {
+    let Range {
+        local,
+        site,
+        owners,
+    } = *range;
     let changes = |accesses: Vec<(Local, Access)>| {
         accesses
             .into_iter()
             .any(|(accessed, access)| owners.contains(&accessed) && !leaves_owner(access))
     };
+    let loud = is_exposed.then_some(harm);
     let mut pending = vec![(site.0, site.1 + 1)];
     let mut visited = HashSet::new();
     'blocks: while let Some((block, from)) = pending.pop() {
@@ -467,7 +486,7 @@ fn stays_over_range(
             if ends {
                 continue 'blocks;
             }
-            let is_loud = harm.is_some_and(|harm| !harm.is_harmless_statement(&statement.kind));
+            let is_loud = loud.is_some_and(|harm| !harm.is_harmless_statement(&statement.kind));
             let changes_owner = !ends_lent_parameter(body, ownership, statement)
                 && changes(statement_accesses(statement));
             if changes_owner || is_loud {
@@ -477,10 +496,13 @@ fn stays_over_range(
         let Some(terminator) = &data.terminator else {
             return false;
         };
-        let is_loud =
-            harm.is_some_and(|harm| !harm.is_harmless_terminator(BasicBlock(block), terminator));
+        let at = BasicBlock(block);
+        let is_loud = loud.is_some_and(|harm| !harm.is_harmless_terminator(at, terminator));
         if matches!(terminator.kind, TerminatorKind::Return)
-            || changes(terminator_accesses(terminator))
+            || changes(owner_accesses(
+                terminator,
+                harm.calls_harmless_program(at, terminator),
+            ))
             || is_loud
         {
             return false;
@@ -605,6 +627,22 @@ fn rvalue_accesses(rvalue: &Rvalue, accesses: &mut Vec<(Local, Access)>) {
             );
         }
     }
+}
+
+/// How `terminator` reaches each local it names, as an owner a borrow
+/// relies on sees it: a call to a harmless function of the program
+/// (`calls_harmless`) stores into nothing but its own locals, so what it is
+/// lent by copy is only read.
+fn owner_accesses(terminator: &Terminator, calls_harmless: bool) -> Vec<(Local, Access)> {
+    let mut accesses = terminator_accesses(terminator);
+    if calls_harmless {
+        for (_, access) in &mut accesses {
+            if *access == Access::MayBeWritten {
+                *access = Access::ReadByCallee;
+            }
+        }
+    }
+    accesses
 }
 
 /// How `terminator` reaches each local it names.

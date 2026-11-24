@@ -478,6 +478,43 @@ fn a_borrowed_row_passed_owned_or_to_a_closure_is_refused() {
     assert_refused(&closure, "the row lent to a closure");
 }
 
+/// The list lent as the receiver of `size`, a method of the program, while
+/// `_3` borrows its element.
+fn owner_lent_as_receiver() -> Recorded {
+    borrowing_body(vec![
+        block(list_and_index(), call(method_named("size"), vec![lent(1)])),
+        block(end_of_borrow_and_list(), ret()),
+    ])
+}
+
+/// A method the verifiers find harmless stores into nothing but its own
+/// locals, so the list it is lent as its receiver stays as it was.
+#[test]
+fn a_borrow_whose_owner_is_lent_to_a_harmless_method_holds() {
+    let body = owner_lent_as_receiver();
+    let harmless = HashSet::from([BasicBlock(0)]);
+    let violations = verify_local_borrows(&body, &body.ownership, Some(&harmless));
+    assert!(violations.is_empty(), "got: {}", messages(&violations));
+}
+
+/// Any other method may write its receiver in place.
+#[test]
+fn a_borrow_whose_owner_is_lent_to_a_method_not_found_harmless_is_refused() {
+    let body = owner_lent_as_receiver();
+    assert_refused(
+        &body,
+        "the owner as the receiver of a method that may write it",
+    );
+    let violations = verify_local_borrows(&body, &body.ownership, Some(&HashSet::new()));
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.local == Local(3)),
+        "got: {}",
+        messages(&violations)
+    );
+}
+
 /// Locals as in [`row_borrowing_body`], but `_1` is a list of class
 /// instances and `_3` the instance read out of it — a reference by design,
 /// which a callee's writes reach through its own count. `_4` is a second list

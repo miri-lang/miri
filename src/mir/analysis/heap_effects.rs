@@ -24,7 +24,10 @@
 //!   call to a symbol with no body of the program is loud;
 //! - a release that may run a drop hook is loud: before reference counting,
 //!   the end of a local's storage or a rebinding of a type whose release may
-//!   run one; after it, the explicit release of such a type;
+//!   run one; after it, the explicit release of such a type. A local holding
+//!   only a copy of a parameter the body is lent
+//!   ([`super::lent_copies`]) releases a reference beside its caller's and
+//!   runs none;
 //! - a copy-on-write call, a count question, a retain, and a release no hook
 //!   can observe are quiet: each leaves every value some other name holds
 //!   alive.
@@ -47,6 +50,7 @@ use crate::ast::types::{Type, TypeKind};
 use crate::mir::analysis::element_matching::{
     element_matching, matched_element, Matching, Question,
 };
+use crate::mir::analysis::lent_copies::lent_copies;
 use crate::mir::facts::{OwnershipFacts, ProgramFacts};
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::symbol::Symbol;
@@ -488,6 +492,9 @@ struct Classifier<'b> {
     types: PlaceTypes<'b>,
     hooks: &'b DropHookReach<'b>,
     phase: Phase,
+    /// The locals holding only a copy of a parameter the body is lent,
+    /// whose release leaves the caller's reference and runs no hook.
+    lent_copies: HashSet<Local>,
 }
 
 impl<'b> Classifier<'b> {
@@ -503,6 +510,7 @@ impl<'b> Classifier<'b> {
             types: PlaceTypes::of(body),
             hooks,
             phase,
+            lent_copies: lent_copies(body, ownership),
         }
     }
 
@@ -512,17 +520,16 @@ impl<'b> Classifier<'b> {
             StatementKind::Assign(dest, _) => self.is_shared_store(dest),
             StatementKind::Reassign(dest, _) => {
                 self.is_shared_store(dest)
-                    || (self.phase == Phase::Lowered && self.may_run_drop_hook(dest))
+                    || (self.phase == Phase::Lowered && self.release_may_run_drop_hook(dest))
             }
             StatementKind::StorageDead(place, cause) => {
                 self.phase == Phase::Lowered
                     && cause.releases()
                     && self.may_release(place.local)
-                    && self.may_run_drop_hook(place)
+                    && self.release_may_run_drop_hook(place)
             }
-            StatementKind::DecRef(place) | StatementKind::Dealloc(place) => {
-                self.may_run_drop_hook(place)
-            }
+            StatementKind::DecRef(place) => self.release_may_run_drop_hook(place),
+            StatementKind::Dealloc(place) => self.may_run_drop_hook(place),
             StatementKind::StorageLive(_)
             | StatementKind::IncRef(_)
             | StatementKind::Nop
@@ -674,6 +681,14 @@ impl<'b> Classifier<'b> {
 
     fn is_shared_root(&self, local: Local) -> bool {
         is_shared_root(self.body, self.ownership, local)
+    }
+
+    /// Whether releasing `place` here may run a drop hook: what it holds
+    /// may run one, and it is not a copy of a parameter the body is lent,
+    /// whose caller still holds the value.
+    fn release_may_run_drop_hook(&self, place: &Place) -> bool {
+        let is_lent_copy = place.projection.is_empty() && self.lent_copies.contains(&place.local);
+        !is_lent_copy && self.may_run_drop_hook(place)
     }
 
     /// Whether releasing what `place` holds may run a drop hook; a place

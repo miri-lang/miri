@@ -449,6 +449,66 @@ fn a_release_after_counting_is_quiet_unless_a_hook_may_run() {
     assert!(!effects.is_quiet_callee(&function("hooked")));
 }
 
+/// A type no definition names, so its release may run a drop hook.
+fn hooked() -> TypeKind {
+    TypeKind::Custom("Resource".to_string(), None)
+}
+
+/// A body whose local 2 copies local 1 whole, then ends; `arg_count` says
+/// whether local 1 is a parameter, and `after` runs before the end.
+fn releasing_a_copy(arg_count: usize, after: Vec<Statement>) -> Body {
+    let mut statements = vec![store(local(2), local(1))];
+    statements.extend(after);
+    statements.push(statement(StatementKind::StorageDead(
+        local(2),
+        miri::mir::EndCause::Scope,
+    )));
+    body_of(
+        &[TypeKind::Void, hooked(), hooked(), hooked()],
+        arg_count,
+        vec![returning(statements)],
+    )
+}
+
+/// Ending a copy of a parameter the caller lends releases a reference beside
+/// the caller's, so no hook runs: the match a method lowers over `self` is
+/// quiet.
+#[test]
+fn ending_a_copy_of_a_lent_parameter_is_quiet() {
+    let program = vec![(function("read"), releasing_a_copy(1, Vec::new()))];
+    assert!(is_quiet(&program, "read"));
+}
+
+/// A copy of a local the body owns may hold the last reference.
+#[test]
+fn ending_a_copy_of_an_owned_local_whose_release_may_run_a_hook_is_loud() {
+    let program = vec![(function("read"), releasing_a_copy(0, Vec::new()))];
+    assert!(!is_quiet(&program, "read"));
+}
+
+/// A parameter the body moves on no longer holds the caller's reference
+/// while the copy ends.
+#[test]
+fn ending_a_copy_of_a_parameter_the_body_moves_on_is_loud() {
+    let hand_on = statement(StatementKind::Assign(
+        local(3),
+        Rvalue::Use(Operand::Move(local(1))),
+    ));
+    let program = vec![(function("read"), releasing_a_copy(1, vec![hand_on]))];
+    assert!(!is_quiet(&program, "read"));
+}
+
+/// After counting, releasing the copy by hand is as quiet.
+#[test]
+fn releasing_a_retained_copy_of_a_lent_parameter_is_quiet() {
+    let counted = vec![
+        statement(StatementKind::IncRef(local(2))),
+        statement(StatementKind::DecRef(local(2))),
+    ];
+    let program = vec![(function("read"), releasing_a_copy(1, counted))];
+    assert!(effects(&program, Phase::Counted).is_quiet_callee(&function("read")));
+}
+
 #[test]
 fn stamping_marks_each_call_to_a_quiet_callee_by_its_block() {
     let mut program = vec![

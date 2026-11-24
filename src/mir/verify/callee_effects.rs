@@ -16,7 +16,8 @@
 //! - a store lands on a local the body owns — never a parameter or a capture —
 //!   reached through value steps only, never through a field of a class
 //!   instance or a dereference;
-//! - a release runs no drop hook;
+//! - a release runs no drop hook, or releases a copy of a parameter the
+//!   body is lent ([`super::lent_copies`]), which is never the last;
 //! - a call into the runtime runs no code of the program and writes in place
 //!   only whole locals the body owns;
 //! - a call to a function of the program is harmless when its callee is: every
@@ -46,6 +47,7 @@ use crate::ast::type_arguments::TypeArgument;
 use std::collections::{HashMap, HashSet};
 
 use super::borrow_reach::{reach_of, Reach};
+use super::lent_copies::copies_of_lent_parameters;
 use crate::ast::types::TypeKind;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::type_facts::DropHookReach;
@@ -230,6 +232,9 @@ pub(super) struct BodyHarm<'b> {
     places: PlaceTypes<'b>,
     hooks: &'b DropHookReach<'b>,
     harmless_calls: Option<&'b HashSet<BasicBlock>>,
+    /// The locals holding only a copy of a parameter the body is lent,
+    /// whose release is never the last.
+    lent_copies: HashSet<Local>,
 }
 
 impl<'b> BodyHarm<'b> {
@@ -245,6 +250,7 @@ impl<'b> BodyHarm<'b> {
             places: PlaceTypes::of(body),
             hooks,
             harmless_calls,
+            lent_copies: copies_of_lent_parameters(body),
         }
     }
 
@@ -253,6 +259,11 @@ impl<'b> BodyHarm<'b> {
         match kind {
             StatementKind::Assign(dest, _) | StatementKind::Reassign(dest, _) => {
                 stores_into_own_value(self.body, dest)
+            }
+            StatementKind::DecRef(place)
+                if place.projection.is_empty() && self.lent_copies.contains(&place.local) =>
+            {
+                true
             }
             StatementKind::DecRef(place) | StatementKind::Dealloc(place) => (self.places)
                 .declared(place)
@@ -263,6 +274,23 @@ impl<'b> BodyHarm<'b> {
             | StatementKind::Nop
             | StatementKind::ReadHeader(_) => true,
         }
+    }
+
+    /// Whether `terminator`, ending `block`, is a direct call to a function
+    /// of the program its caller found harmless. Such a callee stores into
+    /// nothing but its own locals and hands its parameters to nothing that
+    /// writes them, so every argument it is lent stays as it was.
+    pub(super) fn calls_harmless_program(
+        &self,
+        block: BasicBlock,
+        terminator: &Terminator,
+    ) -> bool {
+        matches!(
+            operation_of(self.body, &self.places, terminator),
+            Operation::CallsProgram(..)
+        ) && self
+            .harmless_calls
+            .is_some_and(|calls| calls.contains(&block))
     }
 
     /// Whether `terminator`, ending `block`, is harmless.

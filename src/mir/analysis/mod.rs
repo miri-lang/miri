@@ -14,6 +14,8 @@
 //!   orders the elements of a container.
 //! - **Heap effects**: Which calls may release a value their caller lends
 //!   them, decided over the whole program.
+//! - **Lent copies**: The locals holding nothing but a copy of a parameter
+//!   the body is lent, whose release never runs a drop hook.
 //! - **Header reach**: Which calls a loop may make without changing the header
 //!   of a collection the body holds: the collection's aliases, and whether it
 //!   holds a reference of its own.
@@ -32,6 +34,7 @@ pub mod dominators;
 pub mod element_matching;
 pub mod header_reach;
 pub mod heap_effects;
+pub mod lent_copies;
 pub mod loops;
 pub mod non_negative;
 pub mod stable_headers;
