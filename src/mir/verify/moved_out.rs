@@ -24,6 +24,7 @@
 //! | `flag = true` / `flag = false` on a drop flag | the paths take the flag's new value |
 //! | the edge a switch on a drop flag leaves along | taken only by the paths whose flag holds the value leading there |
 //! | `Move` of a place under `x` | a finding: a move hands on a whole local's reference |
+//! | `Move` of a payload out of a box `x` holds, the next statement writing `None` into its hole | nothing: a take leaves `x` whole |
 //! | `Return` | a read of the return slot |
 //!
 //! The reads of a statement are checked before its moves take effect, so the
@@ -59,11 +60,13 @@
 
 use super::drop_flags::{DropFlags, Partitioned};
 use super::{local_display_name, VerificationViolation};
-use crate::mir::option_layout::is_nullable_pointer_payload;
+use crate::ast::literal::Literal;
+use crate::mir::option_layout::{is_nullable_pointer_payload, taken_payload_hole};
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
-    BasicBlock, Body, EndCause, Local, Operand, Place, StatementKind, TerminatorKind,
+    BasicBlock, Body, EndCause, Local, Operand, Place, Rvalue, Statement, StatementKind,
+    TerminatorKind,
 };
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -229,19 +232,50 @@ fn terminator_effect(body: &Body, block: usize) -> Effect {
     effect
 }
 
+/// Counts a projected move in `effect`, the effect of `kind`, as no move at
+/// all when it is a take: `kind` moves a payload out of a box its local
+/// holds, and `next`, the statement after it, writes `None` into the hole
+/// the move leaves ([`taken_payload_hole`]). The local holds a whole value
+/// again before anything else can read it, and holds nothing the move handed
+/// on.
+fn credit_take(body: &Body, kind: &StatementKind, next: Option<&Statement>, effect: &mut Effect) {
+    let StatementKind::Assign(_, Rvalue::Use(Operand::Move(taken))) = kind else {
+        return;
+    };
+    let Some(hole) = taken_payload_hole(taken, body) else {
+        return;
+    };
+    let fills = next.is_some_and(|next| {
+        matches!(
+            &next.kind,
+            StatementKind::Assign(filled, Rvalue::Use(Operand::Constant(constant)))
+                if *filled == hole && matches!(constant.literal, Literal::None)
+        )
+    });
+    if fills {
+        effect.projected_moves.retain(|place| place != taken);
+    }
+}
+
 /// Every effect of `block`, each at its site, the terminator last.
 fn block_effects(body: &Body, block: usize) -> Vec<(Site, Effect)> {
-    let statements = body.basic_blocks[block].statements.iter().enumerate();
+    let statements = &body.basic_blocks[block].statements;
     statements
+        .iter()
+        .enumerate()
         .map(|(index, statement)| {
             let site = Site {
                 block,
                 statement: Some(index),
             };
-            (
-                site,
-                statement_effect(body, &statement.kind, BasicBlock(block)),
-            )
+            let mut effect = statement_effect(body, &statement.kind, BasicBlock(block));
+            credit_take(
+                body,
+                &statement.kind,
+                statements.get(index + 1),
+                &mut effect,
+            );
+            (site, effect)
         })
         .chain(std::iter::once((
             Site {

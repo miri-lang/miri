@@ -12,8 +12,8 @@ use miri::ast::types::{
 use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
 use miri::mir::option_layout::{
-    is_nullable_pointer_optional, payload_is_nullable_pointer, resolve_alias, LayerRepr,
-    LayoutScope, OptionalLayers,
+    is_nullable_pointer_optional, payload_is_nullable_pointer, resolve_alias, taken_payload_hole,
+    LayerRepr, LayoutScope, OptionalLayers,
 };
 use miri::type_checker::context::{
     AliasDefinition, ClassDefinition, EnumDefinition, GenericDefinition, StructDefinition,
@@ -546,4 +546,50 @@ fn test_option_layout_a_type_that_is_not_optional_has_no_layer() {
     ] {
         assert_eq!(layer_reprs(&kind), (Vec::new(), 0, false), "{kind:?}");
     }
+}
+
+/// The hole a take of the payload `depth` layers into a local of type
+/// `kind` empties, as the depth of the optional it writes `None` into.
+fn taken_hole_depth(kind: TypeKind, depth: usize) -> Option<usize> {
+    use miri::mir::{Body, ExecutionModel, Local, LocalDecl, Place, PlaceElem};
+    let mut body = Body::new(0, Span::new(0, 0), ExecutionModel::Cpu);
+    body.new_local(LocalDecl::new(ty(TypeKind::Void), Span::new(0, 0)));
+    body.new_local(LocalDecl::new(ty(kind), Span::new(0, 0)));
+    let payload = Place {
+        local: Local(1),
+        projection: vec![PlaceElem::Field(0); depth],
+    };
+    let hole = taken_payload_hole(&payload, &body)?;
+    assert_eq!(hole.local, Local(1));
+    assert!(hole
+        .projection
+        .iter()
+        .all(|elem| *elem == PlaceElem::Field(0)));
+    Some(hole.projection.len())
+}
+
+#[test]
+fn a_take_out_of_a_box_empties_the_innermost_optional_it_crosses() {
+    let nested = optional(optional(TypeKind::String));
+    assert_eq!(taken_hole_depth(nested.clone(), 2), Some(1));
+    assert_eq!(taken_hole_depth(nested, 1), Some(1));
+    let twice_boxed = optional(optional(optional(TypeKind::String)));
+    assert_eq!(taken_hole_depth(twice_boxed.clone(), 3), Some(2));
+    assert_eq!(taken_hole_depth(twice_boxed.clone(), 2), Some(2));
+    assert_eq!(taken_hole_depth(twice_boxed, 1), Some(1));
+}
+
+#[test]
+fn a_payload_crossing_no_box_or_held_as_bytes_is_no_take() {
+    assert_eq!(taken_hole_depth(optional(TypeKind::String), 1), None);
+    assert_eq!(taken_hole_depth(optional(optional(TypeKind::Int)), 2), None);
+    assert_eq!(
+        taken_hole_depth(optional(optional(TypeKind::String)), 0),
+        None
+    );
+    assert_eq!(
+        taken_hole_depth(optional(optional(TypeKind::String)), 3),
+        None
+    );
+    assert_eq!(taken_hole_depth(TypeKind::String, 1), None);
 }

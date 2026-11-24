@@ -532,3 +532,60 @@ fn a_read_of_an_optional_after_a_call_took_its_payload_by_move_is_flagged() {
     ]);
     assert_one_finding(&body, &["bb0", "bb1[0]"]);
 }
+
+/// A body like [`optional_payload_body`] whose local 1 is a `String??`: a
+/// box holding a `String?` held as its payload's own pointer.
+fn boxed_payload_body(statements: Vec<Statement>) -> Body {
+    let mut body = optional_payload_body(statements);
+    let inner = Type::new(TypeKind::Option(Box::new(string_ty())), span());
+    body.local_decls[1].ty = Type::new(TypeKind::Option(Box::new(inner)), span());
+    body
+}
+
+fn boxed_payload_of(local: usize) -> Place {
+    let mut payload = payload_of(local);
+    payload
+        .projection
+        .push(miri::mir::place::PlaceElem::Field(0));
+    payload
+}
+
+/// Writes `None` into the box local 1 holds.
+fn empty_box_of_one() -> Statement {
+    let inner = Type::new(TypeKind::Option(Box::new(string_ty())), span());
+    let absent = constant(inner, Literal::None);
+    stmt(StatementKind::Assign(payload_of(1), Rvalue::Use(absent)))
+}
+
+#[test]
+fn taking_a_payload_out_of_a_box_and_emptying_its_hole_is_accepted() {
+    let body = boxed_payload_body(vec![
+        assign(2, Operand::Move(boxed_payload_of(1))),
+        empty_box_of_one(),
+        decref(1),
+        decref(2),
+    ]);
+    assert_clean(&body);
+}
+
+#[test]
+fn taking_a_payload_out_of_a_box_without_emptying_its_hole_is_flagged() {
+    let body = boxed_payload_body(vec![
+        assign(2, Operand::Move(boxed_payload_of(1))),
+        decref(1),
+        decref(2),
+    ]);
+    assert_one_finding(&body, &["through a projection", "bb0[0]"]);
+}
+
+#[test]
+fn a_read_between_a_take_and_the_emptying_of_its_hole_is_flagged() {
+    let body = boxed_payload_body(vec![
+        assign(2, Operand::Move(boxed_payload_of(1))),
+        stmt(StatementKind::IncRef(place(1))),
+        empty_box_of_one(),
+        decref(1),
+        decref(2),
+    ]);
+    assert_one_finding(&body, &["through a projection", "bb0[0]"]);
+}

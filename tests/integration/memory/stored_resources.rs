@@ -587,3 +587,105 @@ fn main()
         "has true\nreleased 3\nhas true\nreleased 4\nafter",
     );
 }
+
+#[test]
+fn a_payload_of_a_nested_optional_handed_to_a_keeper_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn shelve(t Token) Slot
+    return Slot(held: Some(t))
+
+fn main()
+    let p Option<Token?> = Some(Some(Token(id: 0)))
+    match p
+        Some(q)
+            match q
+                Some(r)
+                    let _s = shelve(r)
+                    println("shelved")
+                None: println("inner none")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "shelved\nreleased 0\nafter",
+    );
+}
+
+#[test]
+fn a_payload_of_a_nested_optional_handed_to_a_keeper_on_some_paths_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn shelve(t Token) Slot
+    return Slot(held: Some(t))
+
+fn main()
+    var i = 0
+    while i < 2
+        let p Option<Token?> = Some(Some(Token(id: i)))
+        match p
+            Some(q)
+                match q
+                    Some(r)
+                        if r.id == 0
+                            let _s = shelve(r)
+                            println("shelved")
+                        else
+                            println(f"kept {r.id}")
+                    None: println("inner none")
+            None: println("none")
+        i += 1
+    println("after")
+"#,
+        ),
+        "shelved\nreleased 0\nkept 1\nreleased 1\nafter",
+    );
+}
+
+#[test]
+fn the_payload_of_a_boxed_optional_layer_handed_to_a_keeper_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn shelve(t Token?) Slot
+    return Slot(held: t)
+
+fn main()
+    let p Option<Token?> = Some(Some(Token(id: 0)))
+    match p
+        Some(q)
+            let _s = shelve(q)
+            println("shelved")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "shelved\nreleased 0\nafter",
+    );
+}
+
+#[test]
+fn an_outer_payload_read_after_its_inner_payload_was_handed_to_a_keeper_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn shelve(t Token) Slot
+    return Slot(held: Some(t))
+
+fn main()
+    let p Option<Token?> = Some(Some(Token(id: 0)))
+    match p
+        Some(q)
+            match q
+                Some(r)
+                    let _s = shelve(r)
+                None: println("inner none")
+            println(f"{q.is_some()}")
+        None: println("none")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}

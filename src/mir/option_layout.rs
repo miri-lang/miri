@@ -187,10 +187,51 @@ pub fn is_nullable_pointer_optional(kind: &TypeKind, scope: LayoutScope<'_>) -> 
     layers.boxed == 0 && layers.inline == 0 && layers.innermost_nullable_pointer
 }
 
+/// The optional place a take of `place` empties: `place` is a payload of an
+/// optional `body` holds in a local of its own, reached through boxed layers
+/// only, so moving it out leaves a hole in a box the local still holds. The
+/// hole is the innermost optional the move crosses into: the box's content
+/// when the box holds another optional layer, or the nullable pointer the
+/// payload is the payload of. The take writes `None` there in the statement
+/// after the move, so the box keeps its one release and releases nothing
+/// the move handed on.
+///
+/// `None` for every other place: one crossing no box (the payload of an
+/// optional held as its payload's own pointer moves the optional's own
+/// reference, [`is_nullable_pointer_payload`]), one crossing a layer held as
+/// bytes, and the value a box holds when no optional layer is left to empty.
+pub fn taken_payload_hole(
+    place: &crate::mir::Place,
+    body: &crate::mir::Body,
+) -> Option<crate::mir::Place> {
+    use crate::mir::place::PlaceElem;
+    let depth = place.projection.len();
+    if !(place.projection.iter()).all(|elem| matches!(elem, PlaceElem::Field(0))) {
+        return None;
+    }
+    let kind = &body.local_decls.get(place.local.0)?.ty.kind;
+    let layers = OptionalLayers::of(kind, body.layout_scope()).reprs();
+    let crossed = layers.get(..depth)?;
+    let hole_depth = match crossed.last()? {
+        LayerRepr::NullablePointer => depth - 1,
+        LayerRepr::Boxed if depth < layers.len() => depth,
+        LayerRepr::Boxed | LayerRepr::Inline => return None,
+    };
+    let through_boxes = crossed[..hole_depth]
+        .iter()
+        .all(|layer| *layer == LayerRepr::Boxed);
+    (hole_depth > 0 && through_boxes).then(|| crate::mir::Place {
+        local: place.local,
+        projection: vec![PlaceElem::Field(0); hole_depth],
+    })
+}
+
 /// Whether `place` is the payload of an optional `body` holds in a local of
 /// its own as its payload's own pointer ([`is_nullable_pointer_optional`]):
-/// the one projection a `move` may name, since that payload is the optional's
-/// only reference and moving it hands on the optional's.
+/// a projection a `move` may name on its own, since that payload is the
+/// optional's only reference and moving it hands on the optional's. The only
+/// other one is a take, which empties its hole next
+/// ([`taken_payload_hole`]).
 pub fn is_nullable_pointer_payload(place: &crate::mir::Place, body: &crate::mir::Body) -> bool {
     matches!(
         place.projection.as_slice(),

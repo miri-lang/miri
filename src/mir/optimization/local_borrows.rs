@@ -509,6 +509,13 @@ fn refused_by_terminator(
             keeps_or_checks(func, position) || arg_mode(arg_modes, position) == ArgMode::Out;
         let copies_on_entry = is_copied(place.local)
             && lends_to_entry_copy(func, position, arg, arg_mode(arg_modes, position));
+        // TODO: a borrow of a type that is no reference by design, lent by
+        // copy as the receiver of a quiet method (`q.is_none()` on an inner
+        // payload binding of a nested optional), is refused here though the
+        // method only reads it, so the binding takes a reference of its own
+        // and a resource it holds has two holders. Accepting it needs
+        // `lends_receiver_to_quiet_method` here and the same rule in
+        // `verify/local_borrows.rs`.
         let may_write_a_value =
             !is_reference(place.local) && !only_reads(func, position) && !copies_on_entry;
         (keeps || may_write_a_value).then_some(place.local)

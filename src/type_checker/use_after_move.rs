@@ -131,6 +131,10 @@ pub struct ConsumedArguments {
     /// of: the hand-over ends the scrutinee, so the keeper holds the
     /// payload's only reference.
     payload_handovers: HashMap<usize, usize>,
+    /// The subject expression of each inner `match` on a payload binding of
+    /// an owned scrutinee that a hand-over consumes with it
+    /// ([`super::place_reads::Rematched`]).
+    rematched_subjects: HashSet<usize>,
     /// Each resource handed to a keeper that the call copies and funds while
     /// its holder keeps its own: a plain resource field, an element of a
     /// collection offering no way to take one out, a binding whose
@@ -200,11 +204,11 @@ impl ConsumedArguments {
     }
 
     /// Whether a keeper taking a payload bound out of the scrutinee
-    /// `subject` ends it, the scrutinee being the scope's own.
+    /// `subject` ends it, the scrutinee being the scope's own or a payload
+    /// binding of one matched again on the way to the payload.
     pub fn is_ended_scrutinee(&self, subject: &Expression) -> bool {
-        self.payload_handovers
-            .values()
-            .any(|&ended| ended == subject.id)
+        self.rematched_subjects.contains(&subject.id)
+            || (self.payload_handovers.values()).any(|&ended| ended == subject.id)
     }
 
     /// Whether a keeper is handed a funded copy of the resource `argument`
@@ -222,6 +226,7 @@ impl ConsumedArguments {
     /// Add every argument `other` records.
     pub fn extend(&mut self, other: ConsumedArguments) {
         self.payload_handovers.extend(other.payload_handovers);
+        self.rematched_subjects.extend(other.rematched_subjects);
         self.funded_copies.extend(other.funded_copies);
         self.lent_arguments.extend(other.lent_arguments);
         self.expressions.extend(other.expressions);
@@ -2096,8 +2101,9 @@ impl<'a> UseAfterMoveChecker<'a> {
 
     /// When `name`, which `value` reads, is a payload the scope's own
     /// scrutinee bound and `sink` keeps it, consumes the scrutinee too, and
-    /// records the hand-over for lowering, which ends the scrutinee there.
-    /// A scrutinee an earlier hand-over consumed on this path is ended
+    /// every payload binding of it matched again on the way to `name`, and
+    /// records the hand-over for lowering, which ends them there. A
+    /// scrutinee an earlier hand-over consumed on this path is ended
     /// already.
     fn end_owned_scrutinee(
         &mut self,
@@ -2119,6 +2125,10 @@ impl<'a> UseAfterMoveChecker<'a> {
             chain: Vec::new(),
             open: None,
         };
+        for rematched in &owner.rematched {
+            (self.consumed_arguments.rematched_subjects).insert(rematched.subject);
+            consumed.insert(rematched.name.clone(), info.clone());
+        }
         consumed.insert(owner.key.clone(), info);
     }
 

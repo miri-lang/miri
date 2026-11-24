@@ -34,6 +34,7 @@
 
 use crate::ast::common::Parameter;
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::literal::Literal;
 use crate::ast::statement::RECEIVER_PARAM_NAME;
 use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
@@ -41,11 +42,13 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::variable::{self, ConsumedRead};
-use crate::mir::option_layout::is_nullable_pointer_payload;
+use crate::mir::option_layout::{is_nullable_pointer_payload, taken_payload_hole};
 use crate::mir::place::PlaceElem;
+use crate::mir::place_type::PlaceTypes;
 use crate::mir::{
-    ArgMode, Body, CallFlags, EndCause, Local, Operand, Place, Rvalue, Statement as MirStatement,
-    StatementKind as MirStatementKind, Terminator, TerminatorKind, RETURN_LOCAL,
+    ArgMode, Body, CallFlags, Constant, EndCause, Local, Operand, Place, Rvalue,
+    Statement as MirStatement, StatementKind as MirStatementKind, Terminator, TerminatorKind,
+    RETURN_LOCAL,
 };
 use crate::type_checker::context::MethodInfo;
 use crate::type_checker::TypeChecker;
@@ -509,16 +512,21 @@ pub(crate) fn hand_over_kept_arguments(
 }
 
 /// Hands the call, in place of each payload binding it takes by `move` that
-/// a `Some(..)` pattern bound out of an optional held as its payload's own
-/// pointer, the optional's own reference: `move o.0`, when the optional is
-/// the only local the match holds its scrutinee in and the type checker
-/// records the hand-over as ending that scrutinee
-/// ([`TypeChecker::ended_scrutinee`]). The payload binding then only reads
-/// what the optional holds, so it takes no reference of its own, and it
-/// ends before the call; the optional ends, moved, after it. On a path of
-/// the arm that hands nothing over, the binding ends with its scope and
-/// the optional's drop flag releases the payload where the optional ends,
-/// so the payload has one holder on every path.
+/// a `Some(..)` pattern bound out of a matched optional, the payload's one
+/// reference, when the optional is the only local the match holds its
+/// scrutinee in and the type checker records the hand-over as ending that
+/// scrutinee ([`TypeChecker::ended_scrutinee`]). The payload binding, and
+/// every binding of an inner match it was reached through, then only reads
+/// what the optional holds, so none takes a reference of its own, and each
+/// ends before the call.
+///
+/// An optional held as its payload's own pointer hands over its own
+/// reference, `move o.0`, and ends, moved, after the call. A payload held in
+/// a box the optional owns is taken out of it and its hole emptied
+/// ([`take_payload`]); the optional ends there, releasing the box. On a path
+/// of the arm that hands nothing over, the bindings end with their scopes
+/// and the optional's drop flag releases the payload where the optional
+/// ends, so the payload has one holder on every path.
 ///
 /// Rewrites `arg_ops` and `moved`, and returns each scrutinee it ended with
 /// the payload binding it ended before the call.
@@ -538,34 +546,142 @@ fn hand_over_matched_payloads(
         let Some(payload) = arg_ops.get(position).and_then(moved_whole_local) else {
             continue;
         };
-        let Some(optional) = matched_optional(ctx, scrutinee, payload) else {
-            continue;
+        let handed = match matched_payload(ctx, scrutinee, payload) {
+            Some(MatchedPayload::OwnReference(optional)) => {
+                end_consumed(ctx, &[payload], call.span);
+                arg_ops[position] = Operand::Move(optional_payload(optional));
+                optional
+            }
+            Some(MatchedPayload::Boxed(take)) => {
+                match take_payload(ctx, &take, payload, call.span) {
+                    Some(taken) => {
+                        arg_ops[position] = Operand::Move(Place::new(taken));
+                        taken
+                    }
+                    None => continue,
+                }
+            }
+            None => continue,
         };
-        arg_ops[position] = Operand::Move(optional_payload(optional));
         moved.retain(|&local| local != payload);
-        moved.push(optional);
-        ctx.push_statement(MirStatement {
-            kind: MirStatementKind::StorageDead(Place::new(payload), EndCause::Consumed),
-            span: call.span,
-        });
+        moved.push(handed);
         ended.push((scrutinee, payload));
     }
     ended
 }
 
-/// The optional `payload` was bound out of, when it is the only local the
-/// match on `scrutinee` holds it in and it is held as its payload's own
-/// pointer, so moving its payload hands on its reference.
-fn matched_optional(ctx: &LoweringContext, scrutinee: usize, payload: Local) -> Option<Local> {
-    // TODO: an optional matched out of another optional's payload is held by
-    // a payload binding with a reference of its own, not by the scope, so a
-    // keeper taking the inner payload is still handed a funded copy.
-    let &optional = ctx.optional_payloads.get(&payload)?;
+/// Where the payload a keeper is handed sits in the optional it was matched
+/// out of.
+enum MatchedPayload {
+    /// In an optional held as its payload's own pointer, whose reference is
+    /// the payload's.
+    OwnReference(Local),
+    /// In a box the matched optional owns.
+    Boxed(BoxedPayload),
+}
+
+/// A payload held in a box the matched optional `optional` owns.
+struct BoxedPayload {
+    optional: Local,
+    /// The payload, as a place under `optional`.
+    place: Place,
+    /// The optional layer a take of `place` empties
+    /// ([`taken_payload_hole`]).
+    hole: Place,
+    /// The payload bindings of the matches between `optional` and the
+    /// payload, each the subject of the next, outermost last.
+    through: Vec<Local>,
+}
+
+/// Where the payload `payload` was bound out of: walking from its binding
+/// through each optional a `Some(..)` pattern bound it out of to the one
+/// the match on `scrutinee` holds as its only local. `None` when no such
+/// optional holds it, or the payload cannot leave it without a release
+/// freeing the box but not its contents.
+fn matched_payload(
+    ctx: &LoweringContext,
+    scrutinee: usize,
+    payload: Local,
+) -> Option<MatchedPayload> {
+    // TODO: an optional bound out of an enum's payload (`E.A(q)` then
+    // `Some(r)` out of `q`) is no `Some(..)` binding, so the walk stops there
+    // and the keeper is handed a funded copy; a take out of the enum block's
+    // optional payload, filling it with `None`, would hand over its one
+    // reference.
     let holders = ctx.matched_scrutinees.get(&scrutinee)?;
-    if holders.as_slice() != [optional] {
-        return None;
+    let mut optional = *ctx.optional_payloads.get(&payload)?;
+    let mut through = Vec::new();
+    while holders.as_slice() != [optional] {
+        if through.len() == ctx.optional_payloads.len() {
+            return None;
+        }
+        through.push(optional);
+        optional = *ctx.optional_payloads.get(&optional)?;
     }
-    is_nullable_pointer_payload(&optional_payload(optional), &ctx.body).then_some(optional)
+    let place = Place {
+        local: optional,
+        projection: vec![PlaceElem::Field(0); through.len() + 1],
+    };
+    if through.is_empty() && is_nullable_pointer_payload(&place, &ctx.body) {
+        return Some(MatchedPayload::OwnReference(optional));
+    }
+    let hole = taken_payload_hole(&place, &ctx.body)?;
+    Some(MatchedPayload::Boxed(BoxedPayload {
+        optional,
+        place,
+        hole,
+        through,
+    }))
+}
+
+/// Takes the payload `take` names out of its box before the call: the
+/// payload binding `payload` and the bindings it was reached through end,
+/// the payload moves into a temporary of its own the call is handed, and
+/// `None` fills the hole it leaves in the statement right after, so the box
+/// holds nothing the call was handed. The matched optional is consumed
+/// there, releasing the box. Answers the temporary; `None`, emitting
+/// nothing, when the hole's type cannot be read.
+fn take_payload(
+    ctx: &mut LoweringContext,
+    take: &BoxedPayload,
+    payload: Local,
+    span: Span,
+) -> Option<Local> {
+    let hole_ty = PlaceTypes::of(&ctx.body).declared(&take.hole)?;
+    let mut bindings = vec![payload];
+    bindings.extend_from_slice(&take.through);
+    end_consumed(ctx, &bindings, span);
+    let taken = ctx.push_temp(ctx.body.local_decls[payload.0].ty.clone(), span);
+    let absent = Operand::Constant(Box::new(Constant {
+        span,
+        ty: hole_ty,
+        literal: Literal::None,
+    }));
+    for (place, rvalue) in [
+        (
+            Place::new(taken),
+            Rvalue::Use(Operand::Move(take.place.clone())),
+        ),
+        (take.hole.clone(), Rvalue::Use(absent)),
+    ] {
+        ctx.push_statement(MirStatement {
+            kind: MirStatementKind::Assign(place, rvalue),
+            span,
+        });
+    }
+    end_consumed(ctx, &[take.optional], span);
+    Some(taken)
+}
+
+/// Ends each of `locals` as consumed, where a keeper takes a payload they
+/// hold or read.
+fn end_consumed(ctx: &mut LoweringContext, locals: &[Local], span: Span) {
+    for &local in locals {
+        ctx.push_statement(MirStatement {
+            kind: MirStatementKind::StorageDead(Place::new(local), EndCause::Consumed),
+            span,
+        });
+    }
 }
 
 /// The payload of the optional `optional`.

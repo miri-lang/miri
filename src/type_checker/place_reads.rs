@@ -533,6 +533,36 @@ pub(crate) struct OwnedScrutinee {
     pub key: String,
     /// The scrutinee expression, which MIR lowering ends at the hand-over.
     pub expression: usize,
+    /// The payload bindings of this scrutinee matched again on the way to
+    /// the payload, outermost first: a keeper taking the payload consumes
+    /// each one with the scrutinee.
+    pub rematched: Vec<Rematched>,
+}
+
+/// A payload binding of an owned scrutinee that a `match` matches again.
+#[derive(Debug, Clone)]
+pub(crate) struct Rematched {
+    pub name: String,
+    /// The subject expression of the inner `match`, which MIR lowering
+    /// matches in the binding itself rather than in a copy of it.
+    pub subject: usize,
+}
+
+impl OwnedScrutinee {
+    /// The same scrutinee, reached through its payload binding `name`
+    /// matched again by the `match` whose subject is `subject`.
+    fn matched_again(&self, name: &str, subject: usize) -> Self {
+        let mut rematched = self.rematched.clone();
+        rematched.push(Rematched {
+            name: name.to_string(),
+            subject,
+        });
+        Self {
+            key: self.key.clone(),
+            expression: self.expression,
+            rematched,
+        }
+    }
 }
 
 /// What the bindings a `match` arm's patterns bind are read out of.
@@ -542,7 +572,7 @@ pub(crate) enum ScrutineeOrigin {
     /// A value the scope owns.
     Owned(OwnedScrutinee),
     /// A value neither: a plain field, an element of a collection offering
-    /// no way to take it out, a payload of a payload the scope owns.
+    /// no way to take it out.
     Unknown,
 }
 
@@ -795,12 +825,16 @@ impl PlaceFacts<'_> {
             ScrutineeOrigin::Owned(OwnedScrutinee {
                 key,
                 expression: scrutinee.id,
+                rematched: Vec::new(),
             })
         };
         let ExpressionKind::Identifier(name, _) = &scrutinee.node else {
             return owner(format!("{TEMPORARY_SCRUTINEE}{}", scrutinee.id));
         };
-        if bindings.payloads.contains_key(name) || !is_bound(name) {
+        if let Some(outer) = bindings.payloads.get(name) {
+            return ScrutineeOrigin::Owned(outer.matched_again(name, scrutinee.id));
+        }
+        if !is_bound(name) {
             return ScrutineeOrigin::Unknown;
         }
         owner(name.clone())
