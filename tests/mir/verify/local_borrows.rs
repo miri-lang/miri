@@ -515,6 +515,43 @@ fn a_borrow_whose_owner_is_lent_to_a_method_not_found_harmless_is_refused() {
     );
 }
 
+/// The list lent whole to `count`, a function of the program, while `_3`
+/// borrows its element.
+fn owner_lent_to_function() -> Recorded {
+    borrowing_body(vec![
+        block(
+            list_and_index(),
+            call(function_named("count"), vec![lent(1)]),
+        ),
+        block(end_of_borrow_and_list(), ret()),
+    ])
+}
+
+/// A function the verifiers find harmless stores into nothing but its own
+/// locals, a copy it binds on entry of a parameter it writes among them, so
+/// the list it is lent stays as it was.
+#[test]
+fn a_borrow_whose_owner_is_lent_to_a_harmless_function_holds() {
+    let body = owner_lent_to_function();
+    let harmless = HashSet::from([BasicBlock(0)]);
+    let violations = verify_local_borrows(&body, &body.ownership, Some(&harmless));
+    assert!(violations.is_empty(), "got: {}", messages(&violations));
+}
+
+/// A function not found harmless may reach the owner another way.
+#[test]
+fn a_borrow_whose_owner_is_lent_to_a_function_not_found_harmless_is_refused() {
+    let body = owner_lent_to_function();
+    let violations = verify_local_borrows(&body, &body.ownership, Some(&HashSet::new()));
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.local == Local(3)),
+        "got: {}",
+        messages(&violations)
+    );
+}
+
 /// Locals as in [`row_borrowing_body`], but `_1` is a list of class
 /// instances and `_3` the instance read out of it — a reference by design,
 /// which a callee's writes reach through its own count. `_4` is a second list

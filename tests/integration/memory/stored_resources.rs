@@ -589,6 +589,37 @@ fn main()
 }
 
 #[test]
+fn a_matched_resource_enum_lent_to_a_function_inside_its_arm_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+enum Pack
+    Two(Token, Token)
+    Empty
+    fn drop(self)
+        println("pack dropped")
+    fn size(self) int
+        match self
+            Pack.Two(_, _): return 2
+            Pack.Empty: return 0
+
+fn helper(p Pack) int
+    return p.size()
+
+fn main()
+    var p = Pack.Two(Token(id: 1), Token(id: 2))
+    match p
+        Pack.Two(a, b)
+            println(f"size {helper(p)}")
+            println(f"{a.id} {b.id}")
+        Pack.Empty: println("none")
+"#,
+        ),
+        "size 2\n1 2\npack dropped\nreleased 1\nreleased 2",
+    );
+}
+
+#[test]
 fn a_payload_of_a_nested_optional_handed_to_a_keeper_has_one_holder() {
     assert_one_holder_output(
         &with_token(

@@ -15,8 +15,9 @@
 //! holds, and **quiet** otherwise:
 //!
 //! - a store whose destination crosses a class field or a dereference
-//!   ([`crosses_heap_field`]), or is rooted at the receiver, a parameter the
-//!   body takes over, an `out` parameter or a capture, is loud;
+//!   ([`crosses_heap_field`]), or is rooted at a parameter — the receiver,
+//!   one the body takes over, one it is lent, an `out` one — or a capture,
+//!   is loud, so a quiet callee leaves every argument it is lent as it was;
 //! - a call into the runtime is loud when it may call a closure, or its record
 //!   says it writes in place an argument that is not a whole counted local the
 //!   body owns, or one whose release may run a drop hook;
@@ -674,9 +675,16 @@ impl<'b> Classifier<'b> {
         !(1..=self.body.arg_count).contains(&local.0) || self.ownership.is_owned_param(local)
     }
 
-    /// Whether a store into `dest` may replace a value another name holds.
+    /// Whether a store into `dest` may replace a value another name holds:
+    /// one crossing a class field or a dereference, or rooted at a shared
+    /// root or at any parameter. A caller still reads what it lends after
+    /// the call, so a store rooted at a lent parameter writes the caller's
+    /// value; a body writing a lent value a write copies writes its own copy
+    /// of it instead (`lowering::written_parameters`).
     fn is_shared_store(&self, dest: &Place) -> bool {
-        crosses_heap_field(&self.types, dest) || self.is_shared_root(dest.local)
+        crosses_heap_field(&self.types, dest)
+            || self.is_shared_root(dest.local)
+            || (1..=self.body.arg_count).contains(&dest.local.0)
     }
 
     fn is_shared_root(&self, local: Local) -> bool {

@@ -631,13 +631,14 @@ fn rvalue_accesses(rvalue: &Rvalue, accesses: &mut Vec<(Local, Access)>) {
 
 /// How `terminator` reaches each local it names, as an owner a borrow
 /// relies on sees it: a call to a harmless function of the program
-/// (`calls_harmless`) stores into nothing but its own locals, so what it is
-/// lent by copy is only read.
+/// (`calls_harmless`) stores into nothing but its own locals — a copy it
+/// binds on entry of a parameter it writes among them — so what it is lent by
+/// copy, at any position, is only read.
 fn owner_accesses(terminator: &Terminator, calls_harmless: bool) -> Vec<(Local, Access)> {
     let mut accesses = terminator_accesses(terminator);
     if calls_harmless {
         for (_, access) in &mut accesses {
-            if *access == Access::MayBeWritten {
+            if matches!(access, Access::MayBeWritten | Access::LentToEntryCopy) {
                 *access = Access::ReadByCallee;
             }
         }

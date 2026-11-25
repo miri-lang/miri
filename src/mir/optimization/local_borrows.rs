@@ -44,7 +44,7 @@
 //! - **Its root is not touched while it borrows.** On every path from a
 //!   definition of `l` to the end of `l`'s storage, the root is only read
 //!   through a projection, or lent by copy to a runtime entry point that only
-//!   reads it or to a quiet method as its receiver: never written, moved,
+//!   reads it or to a quiet function or method of the program: never written, moved,
 //!   copied whole, passed owned or `out`, released, or ended — though the end
 //!   of a lent parameter's binding leaves its caller's reference in place. A
 //!   borrow read out of another borrowed local inherits that local's root, so
@@ -514,7 +514,7 @@ fn refused_by_terminator(
         // payload binding of a nested optional), is refused here though the
         // method only reads it, so the binding takes a reference of its own
         // and a resource it holds has two holders. Accepting it needs
-        // `lends_receiver_to_quiet_method` here and the same rule in
+        // `lends_to_quiet_callee` here and the same rule in
         // `verify/local_borrows.rs`.
         let may_write_a_value =
             !is_reference(place.local) && !only_reads(func, position) && !copies_on_entry;
@@ -765,17 +765,12 @@ fn operand_changes(operand: &Operand, owners: &[Local]) -> bool {
 
 /// Whether `terminator` changes one of `owners`: writes it, launches a kernel
 /// over it, or hands it to a call other than lent by copy to a runtime entry
-/// point that only reads it, or to a quiet method as its receiver
-/// ([`lends_receiver_to_quiet_method`]). Any other method may write its
-/// receiver in place, by the count its caller hands it (`RECEIVER_UNIQUE`),
-/// and so free what a borrow reads. An owner lent to any other callee is
-/// refused too, though a function of the program copies a parameter it
-/// writes on entry.
+/// point that only reads it, or to a quiet function or method of the program
+/// ([`lends_to_quiet_callee`]). Any other method may write its receiver in
+/// place, by the count its caller hands it (`RECEIVER_UNIQUE`), and so free
+/// what a borrow reads; any other callee may reach the owner another way.
 fn terminator_changes(terminator: &Terminator, owners: &[Local]) -> bool {
-    // TODO: an owner lent by copy to a function of the program (`helper(p)`
-    // inside a match over `p`) still counts as a change, so the subject of a
-    // match over a resource enum takes a second reference for the arm. And a
-    // method replacing the matched value while a payload binding reads it
+    // TODO: a method replacing the matched value while a payload binding reads it
     // (`p.clear()` in the arm) leaves that binding a second holder of the
     // payload; whether that is refused or hands the payload over is undecided.
     let (func, args, arg_modes, destination) = match &terminator.kind {
@@ -807,7 +802,7 @@ fn terminator_changes(terminator: &Terminator, owners: &[Local]) -> bool {
     let lends = |position: usize, arg: &Operand| {
         matches!(arg, Operand::Copy(_))
             && arg_mode(arg_modes, position) == ArgMode::Borrowed
-            && (only_reads(func, position) || lends_receiver_to_quiet_method(terminator, position))
+            && (only_reads(func, position) || lends_to_quiet_callee(terminator))
     };
     owners.contains(&destination.local)
         || func.is_some_and(names_owner)
@@ -817,20 +812,21 @@ fn terminator_changes(terminator: &Terminator, owners: &[Local]) -> bool {
             .any(|(position, arg)| names_owner(arg) && !lends(position, arg))
 }
 
-/// Whether `terminator` is a direct call to a method of the program stamped
-/// quiet (`CallFlags::quiet`) and `position` is its receiver's. A quiet
-/// callee stores nothing rooted at its receiver, hands it to no runtime entry
-/// point writing counted contents in place, and calls nothing that does
-/// ([`crate::mir::analysis::heap_effects`]), so the receiver it is lent is
-/// only read: what a borrow reads out of it stays alive.
-fn lends_receiver_to_quiet_method(terminator: &Terminator, position: usize) -> bool {
+/// Whether `terminator` is a direct call to a function or method of the
+/// program stamped quiet (`CallFlags::quiet`). A quiet callee stores nothing
+/// rooted at a parameter, hands none to a runtime entry point writing counted
+/// contents in place, and calls nothing that does
+/// ([`crate::mir::analysis::heap_effects`]), so every argument it is lent —
+/// its receiver or any other — is only read: what a borrow reads out of it
+/// stays alive.
+fn lends_to_quiet_callee(terminator: &Terminator) -> bool {
     let TerminatorKind::Call { func, flags, .. } = &terminator.kind else {
         return false;
     };
-    let is_method = func
+    let is_program_symbol = func
         .called_symbol()
-        .is_some_and(|symbol| symbol.is_method() && !symbol.is_runtime());
-    position == 0 && is_method && flags.quiet
+        .is_some_and(|symbol| !symbol.is_runtime());
+    is_program_symbol && flags.quiet
 }
 
 /// Every local `terminator` names.

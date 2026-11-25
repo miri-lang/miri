@@ -393,6 +393,21 @@ fn a_runtime_writer_on_a_parameter_is_loud() {
     assert!(!is_quiet(&program, "wipe"));
 }
 
+/// `fn replace(p Node, n Node)` storing `n` over the parameter it is lent:
+/// the caller still reads that value after the call.
+#[test]
+fn a_store_into_a_lent_parameter_is_loud() {
+    let program = vec![(
+        function("replace"),
+        body_of(
+            &[TypeKind::Void, node(), node()],
+            2,
+            vec![returning(vec![store(local(1), local(2))])],
+        ),
+    )];
+    assert!(!is_quiet(&program, "replace"));
+}
+
 #[test]
 fn a_runtime_writer_on_a_list_the_body_owns_is_quiet() {
     let program = vec![(

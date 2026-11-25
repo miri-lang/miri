@@ -122,3 +122,36 @@ fn main()
         "{owners:?}\n{body}"
     );
 }
+
+/// A function that only reads the matched value it is lent leaves the
+/// payload a binding reads out of it alive.
+#[test]
+fn a_payload_binding_borrows_across_a_function_reading_the_matched_value() {
+    let source = matching_pack("let _n = count(p)")
+        + "
+fn count(p Pack) int
+    return p.size()
+";
+    let (owners, body) = owners_of(&source, "main", "a");
+    assert!(
+        owners.iter().any(|owner| owner == "p"),
+        "{owners:?}\n{body}"
+    );
+}
+
+/// A function replacing the matched value it is lent, through a method that
+/// replaces its receiver, releases the payload a binding reads out of it, so
+/// the binding cannot borrow from the matched value.
+#[test]
+fn a_function_replacing_the_matched_value_ends_the_borrow() {
+    let source = matching_pack("wipe(p)")
+        + "
+fn wipe(p Pack)
+    p.clear()
+";
+    let (owners, body) = owners_of(&source, "main", "a");
+    assert!(
+        !owners.iter().any(|owner| owner == "p"),
+        "{owners:?}\n{body}"
+    );
+}
