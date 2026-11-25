@@ -1297,6 +1297,7 @@ impl TypeChecker {
             self.program_facts(),
         )
         .with_iteration_plans(&self.iteration_plans)
+        .with_out_arguments(&self.out_arguments)
     }
 
     /// Keeps what the consumption check found in one file, or one

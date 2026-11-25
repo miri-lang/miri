@@ -1152,7 +1152,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
-    // OWN — Ownership and resource management (10 codes: 001-010)
+    // OWN — Ownership and resource management (11 codes: 001-011)
     "OWN",
     "001",
     OwnResourceNotConsumedAtScopeExit,
@@ -1220,6 +1220,13 @@ diagnostics!(
     "010",
     OwnResourceElementCopied,
     "Resource Element Copied",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "OWN",
+    "011",
+    OwnPayloadUsedAfterMatchedWrite,
+    "Payload Used After the Matched Value Is Written",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

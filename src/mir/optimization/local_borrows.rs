@@ -221,6 +221,7 @@ impl Settled<'_> {
         let mut all_owners: Vec<Local> = Vec::new();
         let mut is_exposed = false;
         let read_out_of = reads_out_of(reads, local);
+        let readers = readers_through(reads, local);
         for (site, source) in reads.get(&local).into_iter().flatten() {
             let Some((owners, parent_exposed)) = self.owners_of(source.local) else {
                 answer = None;
@@ -233,6 +234,7 @@ impl Settled<'_> {
                 owners: &owners,
                 noise: self.noise.filter(|_| read_exposed),
                 read_out_of: &read_out_of,
+                readers: &readers,
             };
             if (read_exposed && self.noise.is_none()) || !watch.stays(local, *site) {
                 answer = answer.and(Some(false));
@@ -279,6 +281,24 @@ impl Settled<'_> {
         }
         Some((owners, self.exposed.contains(&root)))
     }
+}
+
+/// `local` and every candidate read, at any depth, out of it.
+fn readers_through(reads: &Reads, local: Local) -> HashSet<Local> {
+    let mut readers = HashSet::from([local]);
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for (&candidate, sources) in reads {
+            let reads_a_reader = sources
+                .iter()
+                .any(|(_, source)| readers.contains(&source.local));
+            if reads_a_reader && readers.insert(candidate) {
+                grew = true;
+            }
+        }
+    }
+    readers
 }
 
 /// The candidates every read of which reads out of `local`.
@@ -623,16 +643,23 @@ struct Watch<'w> {
     /// releases at most a reference to a value the borrow's owner still
     /// holds, so it runs no drop hook and changes nothing the borrow reads.
     read_out_of: &'w HashSet<Local>,
+    /// The borrow and every candidate read out of it, at any depth: the
+    /// range runs to the last read of any of them, so a borrow ending early
+    /// never hands its owners' stricter watch to a borrow read out of it.
+    readers: &'w HashSet<Local>,
 }
 
 impl Watch<'_> {
     /// Whether nothing changes on any path from the definition of `local` at
-    /// `site` to the end of its storage.
+    /// `site` to its last read, or to the end of its storage when that comes
+    /// first. Past its last read nothing reads what the borrow holds, so a
+    /// change to its owner there releases nothing it needs.
     fn stays(&self, local: Local, site: Site) -> bool {
+        let reads = LaterReads::of(self.body, (local, self.readers));
         let mut pending = vec![(site.0, site.1 + 1)];
         let mut entered = HashSet::new();
         while let Some((block, from)) = pending.pop() {
-            match self.segment(block, local, from) {
+            match self.segment(block, (local, &reads), from) {
                 Segment::Changed => return false,
                 Segment::Ended => {}
                 Segment::Continues(successors) => pending.extend(
@@ -647,16 +674,19 @@ impl Watch<'_> {
     }
 
     /// How block `block`, from statement `from` on, extends the range of
-    /// `local`.
-    fn segment(&self, block: usize, local: Local, from: usize) -> Segment {
+    /// `local`, which `reads` says where it is read again.
+    fn segment(&self, block: usize, (local, reads): (Local, &LaterReads), from: usize) -> Segment {
         let data = &self.body.basic_blocks[block];
-        for statement in data.statements.iter().skip(from) {
-            if ends_range(statement, local) {
+        for (index, statement) in data.statements.iter().enumerate().skip(from) {
+            if ends_range(statement, local) || !reads.is_read_from(block, index) {
                 return Segment::Ended;
             }
             if self.is_changed_by(statement) {
                 return Segment::Changed;
             }
+        }
+        if !reads.is_read_from(block, data.statements.len()) {
+            return Segment::Ended;
         }
         match data.terminator.as_ref() {
             Some(terminator) if !self.is_changed_by_terminator(terminator) => {
@@ -699,6 +729,117 @@ impl Watch<'_> {
     }
 }
 
+/// Where a borrow, or a local read out of it, is read again: whether one is
+/// live into each block, and the last read of one in each block's
+/// statements and terminator, the terminator counting as the read after the
+/// last statement. A read is any mention but the start or end of a local's
+/// storage and a whole redefinition; the borrow's own end or redefinition
+/// ends the range.
+struct LaterReads {
+    live_in: Vec<bool>,
+    /// Per block, the position of the last read: a statement's index, or
+    /// the number of statements for the terminator.
+    last_read: Vec<Option<usize>>,
+    successors: Vec<Vec<BasicBlock>>,
+}
+
+impl LaterReads {
+    fn of(body: &Body, (local, readers): (Local, &HashSet<Local>)) -> Self {
+        let blocks = &body.basic_blocks;
+        let successors: Vec<Vec<BasicBlock>> = (blocks.iter())
+            .map(|data| {
+                data.terminator
+                    .as_ref()
+                    .map_or_else(Vec::new, |t| t.successors())
+            })
+            .collect();
+        let mut last_read = Vec::with_capacity(blocks.len());
+        let mut first = Vec::with_capacity(blocks.len());
+        for data in blocks {
+            let (read_before_kill, last) = block_reads(data, (local, readers));
+            first.push(read_before_kill);
+            last_read.push(last);
+        }
+        let mut live_in: Vec<bool> = first.iter().map(|f| *f == Some(true)).collect();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in (0..blocks.len()).rev() {
+                let passes_through = first[block].is_none();
+                let live_out = successors[block].iter().any(|s| live_in[s.0]);
+                if passes_through && live_out && !live_in[block] {
+                    live_in[block] = true;
+                    changed = true;
+                }
+            }
+        }
+        Self {
+            live_in,
+            last_read,
+            successors,
+        }
+    }
+
+    /// Whether the local is read at or after position `index` of `block`, a
+    /// statement's index or the number of statements for the terminator.
+    fn is_read_from(&self, block: usize, index: usize) -> bool {
+        self.last_read[block].is_some_and(|last| last >= index)
+            || self.successors[block].iter().any(|s| self.live_in[s.0])
+    }
+}
+
+/// How block `data` reads one of `readers`: `Some(true)` when it reads one
+/// before any redefinition or end of `local`'s storage, `Some(false)` when
+/// one of those comes first, `None` when neither happens; with the position
+/// of its last read.
+fn block_reads(
+    data: &crate::mir::BasicBlockData,
+    (local, readers): (Local, &HashSet<Local>),
+) -> (Option<bool>, Option<usize>) {
+    let mut first = None;
+    let mut last = None;
+    for (index, statement) in data.statements.iter().enumerate() {
+        let kills = ends_range(statement, local);
+        let reads = readers
+            .iter()
+            .any(|&reader| statement_reads(statement, reader));
+        if reads {
+            last = Some(index);
+        }
+        if first.is_none() && (reads || kills) {
+            first = Some(reads);
+        }
+    }
+    let terminator_reads = (data.terminator.as_ref()).is_some_and(|terminator| {
+        (mentioned_locals(terminator).iter()).any(|mentioned| readers.contains(mentioned))
+    });
+    if terminator_reads {
+        last = Some(data.statements.len());
+        first.get_or_insert(true);
+    }
+    (first, last)
+}
+
+/// Whether `statement` reads `local`: names it anywhere but in the start or
+/// end of a storage, or as the whole place it defines.
+fn statement_reads(statement: &Statement, local: Local) -> bool {
+    let mut mentions = Mentions::default();
+    match &statement.kind {
+        StatementKind::StorageLive(_) | StatementKind::StorageDead(..) => return false,
+        StatementKind::Assign(place, rvalue) if *place == Place::new(local) => {
+            mentions.visit_rvalue(rvalue, BasicBlock(0));
+        }
+        StatementKind::Assign(..)
+        | StatementKind::Reassign(..)
+        | StatementKind::IncRef(_)
+        | StatementKind::DecRef(_)
+        | StatementKind::Dealloc(_)
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => mentions.visit_statement(BasicBlock(0), statement),
+    }
+    mentions.locals.contains(&local)
+}
+
 /// Whether `statement` ends the storage of `local` or defines it again.
 fn ends_range(statement: &Statement, local: Local) -> bool {
     match &statement.kind {
@@ -717,6 +858,12 @@ fn ends_range(statement: &Statement, local: Local) -> bool {
 
 /// Whether `statement` changes one of `owners`: writes, ends, releases or
 /// retains it whole, or reads it other than through a projection.
+// TODO: a store to a field of an owner disjoint from the place a borrow
+// reads (`h.count = 1` while a payload of `h.pack` is borrowed) counts as a
+// change here, so a `match` over a field holding a hooked enum gives its
+// subject a reference of its own and the hook check traps; a store whose
+// projection leaves the read place's first differing field untouched should
+// leave the borrow standing, in this inference and in its verifier alike.
 fn statement_changes(statement: &Statement, owners: &[Local]) -> bool {
     match &statement.kind {
         StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue) => {
@@ -770,9 +917,6 @@ fn operand_changes(operand: &Operand, owners: &[Local]) -> bool {
 /// place, by the count its caller hands it (`RECEIVER_UNIQUE`), and so free
 /// what a borrow reads; any other callee may reach the owner another way.
 fn terminator_changes(terminator: &Terminator, owners: &[Local]) -> bool {
-    // TODO: a method replacing the matched value while a payload binding reads it
-    // (`p.clear()` in the arm) leaves that binding a second holder of the
-    // payload; whether that is refused or hands the payload over is undecided.
     let (func, args, arg_modes, destination) = match &terminator.kind {
         TerminatorKind::Call {
             func,

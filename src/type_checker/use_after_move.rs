@@ -47,6 +47,7 @@ use super::instantiation_limits::spelled_type;
 use super::iteration_plan::{IterationPlan, IterationPlans};
 use super::lent_functions::some_class_hands_back;
 use super::open_consumption::{OpenBody, OpenRefusal};
+use super::out_positions::OutArguments;
 use super::place_reads::{
     handed_out_of_a_place, value_spelling, PlaceBindings, PlaceFacts, PlaceRepairs, ScrutineeOrigin,
 };
@@ -60,6 +61,7 @@ use crate::ast::captures::collect_lambda_captures;
 mod copy_sites;
 mod kept_defaults;
 mod lending;
+mod matched_writes;
 
 /// Why `value.drop()` is refused on a receiver the scope does not own.
 pub(crate) const BORROWED_DROP_MESSAGE: &str = "drop() can only release a value this scope owns";
@@ -369,7 +371,6 @@ fn error_key(error: &TypeError) -> (Span, Option<DiagnosticCode>) {
 #[derive(Clone)]
 struct ConsumedInfo {
     by_fn: String,
-    #[allow(dead_code)]
     at_span: Span,
     /// The "consumed because" chain, one note per step, each at the line
     /// that takes it when the report's file shows it; empty when no chain
@@ -379,6 +380,11 @@ struct ConsumedInfo {
     /// value of an open type ([`super::open_consumption`]): a use after it
     /// is refused only at copies reading it as a resource.
     open: Option<OpenSite>,
+    /// The matched value, as spelled, when this is a payload binding a
+    /// write to that value ended rather than a consumption
+    /// ([`matched_writes`]): a later use is refused only where it reads a
+    /// resource.
+    ended_by_write: Option<String>,
 }
 
 /// A site consuming a value of an open type: the parameter the value's type
@@ -505,6 +511,11 @@ pub struct UseAfterMoveChecker<'a> {
     open_copies: Vec<OpenCopy>,
     /// The method whose body is being checked, when it is one.
     current_method: Option<FunctionId>,
+    /// The `match` arms whose bodies enclose the point analysed, outermost
+    /// first, each with the place its subject reads and the names it binds.
+    matched_arms: Vec<matched_writes::MatchedArm>,
+    /// Which arguments of each checked call bind an `out` parameter.
+    out_arguments: Option<&'a OutArguments>,
 }
 
 /// What the checker reads of the program's declared functions: the function
@@ -580,6 +591,8 @@ impl<'a> UseAfterMoveChecker<'a> {
             open_body: None,
             open_refusals: Vec::new(),
             current_method: None,
+            matched_arms: Vec::new(),
+            out_arguments: None,
             places: PlaceBindings::default(),
             repairs: None,
             modules,
@@ -595,6 +608,14 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// consumes the value it walks.
     pub(crate) fn with_iteration_plans(mut self, plans: &'a IterationPlans) -> Self {
         self.iteration_plans = Some(plans);
+        self
+    }
+
+    /// The checker reading which arguments bind an `out` parameter from
+    /// `outs`, so a call handing the matched value `out` ends its payload
+    /// bindings.
+    pub(crate) fn with_out_arguments(mut self, outs: &'a OutArguments) -> Self {
+        self.out_arguments = Some(outs);
         self
     }
 
@@ -831,6 +852,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             consumed.insert(
                 name.clone(),
                 ConsumedInfo {
+                    ended_by_write: None,
                     by_fn: "return".to_string(),
                     at_span: returned.span,
                     chain: vec![],
@@ -886,6 +908,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             format!("assignment to '{}'", decl.name)
         };
         let info = ConsumedInfo {
+            ended_by_write: None,
             by_fn,
             at_span: init.span,
             chain: vec![],
@@ -905,6 +928,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.fn_bindings.insert(decl.name.clone());
         self.owned_locals.insert(decl.name.clone());
         self.lent_functions.remove(&decl.name);
+        self.forget_matched_binding(&decl.name);
         let facts = self.place_facts();
         let borrowed =
             (decl.initializer.as_ref()).and_then(|init| facts.borrowed_place(init, &self.places));
@@ -1220,18 +1244,30 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
+    /// A use of the binding `name`, written `expr`: refused after a
+    /// consumption, or, for a payload binding a write to its matched value
+    /// ended, where it reads a resource.
+    fn check_name_use(&mut self, name: &str, expr: &Expression, consumed: &Consumed) {
+        self.note_capture(name, expr);
+        let ended = (consumed.get(name)).filter(|info| info.ended_by_write.is_some());
+        match ended.cloned() {
+            Some(info) => self.refuse_use_after_matched_write((name, expr), &info),
+            None => self.report_use_after_consume(name, expr.span, consumed),
+        }
+    }
+
     fn check_expr(&mut self, expr: &Expression, consumed: &mut HashMap<String, ConsumedInfo>) {
         match &expr.node {
-            ExpressionKind::Identifier(name, _) => {
-                self.note_capture(name, expr);
-                self.report_use_after_consume(name, expr.span, consumed)
-            }
+            ExpressionKind::Identifier(name, _) => self.check_name_use(name, expr, consumed),
             // `super` is a read of the receiver.
             ExpressionKind::Super => {
                 self.note_capture(RECEIVER_PARAM_NAME, expr);
                 self.report_use_after_consume(RECEIVER_PARAM_NAME, expr.span, consumed)
             }
-            ExpressionKind::Call(callee, args) => self.check_call_expr(callee, args, consumed),
+            ExpressionKind::Call(callee, args) => {
+                self.check_call_expr(callee, args, consumed);
+                self.end_bindings_written_by_call(expr, (callee, args), consumed);
+            }
             ExpressionKind::Member(e, _)
             | ExpressionKind::Unary(_, e)
             | ExpressionKind::Guard(_, e)
@@ -1344,6 +1380,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             consumed.remove(name);
             self.places.forget(name);
         }
+        self.end_bindings_assigned(target, consumed);
     }
 
     /// Marks the resource binding `value` names moved into the place
@@ -1363,6 +1400,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             return;
         }
         let info = ConsumedInfo {
+            ended_by_write: None,
             by_fn: format!("assignment to '{}'", value_spelling(target)),
             at_span: value.span,
             chain: vec![],
@@ -1453,6 +1491,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             consumed.insert(
                 capture.name.clone(),
                 ConsumedInfo {
+                    ended_by_write: None,
                     by_fn: "a closure that captures it".to_string(),
                     at_span: capture.span,
                     chain: vec![],
@@ -1482,7 +1521,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         span: Span,
         consumed: &HashMap<String, ConsumedInfo>,
     ) {
-        if let Some(info) = consumed.get(name) {
+        if let Some(info) = consumed.get(name).filter(|i| i.ended_by_write.is_none()) {
             let error = TypeError {
                 kind: TypeErrorKind::Coded {
                     code: DiagnosticCode::OwnUseOfMovedValue,
@@ -1543,6 +1582,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     ) {
         self.consumed_arguments.open_expressions.insert(expr.id);
         let info = ConsumedInfo {
+            ended_by_write: None,
             by_fn,
             at_span: expr.span,
             chain: Vec::new(),
@@ -1568,16 +1608,16 @@ impl<'a> UseAfterMoveChecker<'a> {
         let origin = (self.place_facts()).scrutinee_origin(scrutinee, &self.places, is_bound);
         let arms: Vec<(Consumed, bool)> = branches
             .iter()
-            .map(|branch| self.check_match_arm(branch, &origin, consumed))
+            .map(|branch| self.check_match_arm((scrutinee, branch), &origin, consumed))
             .collect();
         *consumed = join_arms(consumed, arms);
     }
 
-    /// Check one arm of a match from `before`, returning the state at its
-    /// end and whether control reaches it.
+    /// Check one arm of a match over `subject` from `before`, returning the
+    /// state at its end and whether control reaches it.
     fn check_match_arm(
         &mut self,
-        branch: &crate::ast::pattern::MatchBranch,
+        (subject, branch): (&Expression, &crate::ast::pattern::MatchBranch),
         origin: &ScrutineeOrigin,
         before: &Consumed,
     ) -> (Consumed, bool) {
@@ -1599,11 +1639,15 @@ impl<'a> UseAfterMoveChecker<'a> {
         let prev_lent = self.lent_functions.clone();
         self.lent_functions
             .retain(|name, _| !arm_bindings.contains(name));
+        let entered = self.enter_matched_arm(subject, &arm_bindings);
         self.fn_bindings.extend(arm_bindings);
         if let Some(guard) = &branch.guard {
             self.check_expr(guard, &mut arm_consumed);
         }
         self.check_stmt(&branch.body, &mut arm_consumed);
+        if entered {
+            self.matched_arms.pop();
+        }
         self.lent_functions = prev_lent;
         self.fn_bindings = prev_bindings;
         self.owned_locals = prev_owned;
@@ -1858,6 +1902,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 consumed
                     .entry(name.clone())
                     .or_insert_with(|| ConsumedInfo {
+                        ended_by_write: None,
                         by_fn: DROP_HOOK_NAME.to_string(),
                         at_span: receiver.span,
                         chain: vec![],
@@ -2025,6 +2070,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         consumed.insert(
             name,
             ConsumedInfo {
+                ended_by_write: None,
                 by_fn: sink.to_string(),
                 at_span: ident_expr.span,
                 chain,
@@ -2120,6 +2166,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
         (self.consumed_arguments.payload_handovers).insert(value.id, owner.expression);
         let info = ConsumedInfo {
+            ended_by_write: None,
             by_fn: sink.to_string(),
             at_span: value.span,
             chain: Vec::new(),

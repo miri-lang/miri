@@ -139,6 +139,23 @@ fn use_copy(source: Place) -> Rvalue {
     Rvalue::Use(Operand::Copy(source))
 }
 
+/// A read of the copy in `local`: its length taken. A copy read only while
+/// its source stays borrows what it holds and is retained by nothing, so a
+/// test of the retain a copy needs reads the copy after its source's storage
+/// ends ([`ending_storage`]).
+fn length_of(local: usize) -> Rvalue {
+    Rvalue::Len(place(local))
+}
+
+/// The end of `local`'s storage, after which a copy read out of it must
+/// hold a reference of its own.
+fn ending_storage(local: usize) -> Statement {
+    Statement {
+        kind: StatementKind::storage_dead(place(local)),
+        span: span(),
+    }
+}
+
 fn use_move(source: Place) -> Rvalue {
     Rvalue::Use(Operand::Move(source))
 }
@@ -396,9 +413,18 @@ fn test_cast_of_moved_parameter_to_unmanaged_destination_gets_no_incref() {
 #[test]
 fn test_copy_of_managed_struct_field_increfs_the_projected_place() {
     let mut body = body_with(
-        &[ty(TypeKind::Void), custom("Holder"), ty(TypeKind::String)],
+        &[
+            ty(TypeKind::Void),
+            custom("Holder"),
+            ty(TypeKind::String),
+            ty(TypeKind::Int),
+        ],
         0,
-        vec![assign(place(2), use_copy(field(1, 0)))],
+        vec![
+            assign(place(2), use_copy(field(1, 0))),
+            ending_storage(1),
+            assign(place(3), length_of(2)),
+        ],
     );
     define_holder(&mut body, TypeKind::String);
 
@@ -407,6 +433,9 @@ fn test_copy_of_managed_struct_field_increfs_the_projected_place() {
         vec![
             StatementKind::IncRef(field(1, 0)),
             StatementKind::Assign(place(2), use_copy(field(1, 0))),
+            StatementKind::DecRef(place(1)),
+            StatementKind::storage_dead(place(1)),
+            StatementKind::Assign(place(3), length_of(2)),
         ],
         "the IncRef must name the projected field, not the owning struct"
     );
@@ -558,9 +587,14 @@ fn test_copy_of_managed_list_element_increfs_the_indexed_place() {
             collection("List", vec![TypeKind::String]),
             ty(TypeKind::Int),
             ty(TypeKind::String),
+            ty(TypeKind::Int),
         ],
         0,
-        vec![assign(place(3), use_copy(index(1, 2)))],
+        vec![
+            assign(place(3), use_copy(index(1, 2))),
+            ending_storage(1),
+            assign(place(4), length_of(3)),
+        ],
     );
 
     assert_eq!(
@@ -568,6 +602,9 @@ fn test_copy_of_managed_list_element_increfs_the_indexed_place() {
         vec![
             StatementKind::IncRef(index(1, 2)),
             StatementKind::Assign(place(3), use_copy(index(1, 2))),
+            StatementKind::DecRef(place(1)),
+            StatementKind::storage_dead(place(1)),
+            StatementKind::Assign(place(4), length_of(3)),
         ],
     );
 }
@@ -584,11 +621,14 @@ fn test_copy_of_scalar_list_increfs_the_list_but_not_its_element() {
             ty(TypeKind::Int),
             ty(TypeKind::Int),
             collection("List", vec![TypeKind::Int]),
+            ty(TypeKind::Int),
         ],
         0,
         vec![
             assign(place(4), use_copy(place(1))),
             assign(place(3), use_copy(index(1, 2))),
+            ending_storage(1),
+            assign(place(5), length_of(4)),
         ],
     );
 
@@ -598,6 +638,9 @@ fn test_copy_of_scalar_list_increfs_the_list_but_not_its_element() {
             StatementKind::IncRef(place(1)),
             StatementKind::Assign(place(4), use_copy(place(1))),
             StatementKind::Assign(place(3), use_copy(index(1, 2))),
+            StatementKind::DecRef(place(1)),
+            StatementKind::storage_dead(place(1)),
+            StatementKind::Assign(place(5), length_of(4)),
         ],
     );
 }
@@ -698,9 +741,14 @@ fn test_monomorphized_class_place_is_increfd() {
             ty(TypeKind::Void),
             custom("Box__String"),
             custom("Box__String"),
+            ty(TypeKind::Int),
         ],
         0,
-        vec![assign(place(2), use_copy(place(1)))],
+        vec![
+            assign(place(2), use_copy(place(1))),
+            ending_storage(1),
+            assign(place(3), length_of(2)),
+        ],
     );
 
     assert_eq!(
@@ -708,6 +756,9 @@ fn test_monomorphized_class_place_is_increfd() {
         vec![
             StatementKind::IncRef(place(1)),
             StatementKind::Assign(place(2), use_copy(place(1))),
+            StatementKind::DecRef(place(1)),
+            StatementKind::storage_dead(place(1)),
+            StatementKind::Assign(place(3), length_of(2)),
         ],
     );
 }

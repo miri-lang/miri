@@ -50,6 +50,7 @@ const VERIFIED: &[&str] = &[
     "MER_OWN_008",
     "MER_OWN_009",
     "MER_OWN_010",
+    "MER_OWN_011",
     "MER_PAR_001",
     "MER_PAR_002",
     "MER_PAR_003",

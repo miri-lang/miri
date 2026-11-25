@@ -1,0 +1,27 @@
+// summary: Accepted counterpart of MER_OWN_011: the payload binding is read before the method replaces the matched value.
+// expect-stdout: 1
+// expect-stdout: pack dropped
+// expect-stdout: released 1
+// expect-stdout: released 2
+// expect-stdout: pack dropped
+class Token
+    public var id int
+    fn drop(self)
+        println(f"released {self.id}")
+
+enum Pack
+    Two(Token, Token)
+    Empty
+    fn drop(self)
+        println("pack dropped")
+    fn clear(self)
+        self = Pack.Empty
+
+fn main()
+    var p = Pack.Two(Token(id: 1), Token(id: 2))
+    match p
+        Pack.Two(a, _)
+            println(f"{a.id}")
+            p.clear()
+        Pack.Empty: println("none")
+    p.drop()

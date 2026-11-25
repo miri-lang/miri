@@ -1,0 +1,23 @@
+// expect: MER_OWN_011
+// summary: Triggers MER_OWN_011: a payload binding is read after a method replaces the value its arm matched.
+class Token
+    public var id int
+    fn drop(self)
+        println(f"released {self.id}")
+
+enum Pack
+    Two(Token, Token)
+    Empty
+    fn drop(self)
+        println("pack dropped")
+    fn clear(self)
+        self = Pack.Empty
+
+fn main()
+    var p = Pack.Two(Token(id: 1), Token(id: 2))
+    match p
+        Pack.Two(a, _)
+            p.clear()
+            println(f"{a.id}")
+        Pack.Empty: println("none")
+    p.drop()

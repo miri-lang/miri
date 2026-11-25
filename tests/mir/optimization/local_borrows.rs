@@ -98,6 +98,28 @@ fn a_method_replacing_the_matched_value_ends_the_borrow() {
     );
 }
 
+/// A borrow's range runs to its last read: a binding read only before the
+/// method replacing the matched value borrows from it.
+#[test]
+fn a_payload_binding_read_only_before_the_matched_value_is_replaced_borrows() {
+    let source = format!(
+        "{PACK}
+fn main()
+    var p = Pack.Two(Item(n: 1), Item(n: 2))
+    match p
+        Pack.Two(a, _)
+            let _k = a.n
+            p.clear()
+        Pack.Empty: println(\"none\")
+"
+    );
+    let (owners, body) = owners_of(&source, "main", "a");
+    assert!(
+        owners.iter().any(|owner| owner == "p"),
+        "{owners:?}\n{body}"
+    );
+}
+
 /// The payload binding of a matched optional borrows from it across
 /// `is_some`, which only reads its receiver.
 #[test]

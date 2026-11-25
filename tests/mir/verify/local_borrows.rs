@@ -79,9 +79,17 @@ fn list_and_index() -> Vec<Statement> {
     ]
 }
 
-/// The end of `_3`'s storage, then the list's release and end.
+/// A read of the borrow: its length taken into `_2`. A borrow's range runs
+/// to its last read, so each body reads `_3` before its storage ends.
+fn read_of_borrow() -> Statement {
+    stmt(StatementKind::Assign(place(2), Rvalue::Len(place(3))))
+}
+
+/// The last read of `_3` and the end of its storage, then the list's
+/// release and end.
 fn end_of_borrow_and_list() -> Vec<Statement> {
     vec![
+        read_of_borrow(),
         super::storage_dead(3),
         super::decref(1),
         super::storage_dead(1),
@@ -210,17 +218,96 @@ fn a_borrow_asked_whether_it_is_shared_is_refused() {
     assert_refused(&body, "a uniqueness check on the borrow");
 }
 
-/// A path from the read that reaches the end of the body before the borrow's
-/// storage ends gives the borrow no end to rely on.
+/// A borrow's range runs to its last read: a path from the definition that
+/// never reads it again reaches the return with nothing to protect, while
+/// a path reading it after its owner is released is refused.
 #[test]
-fn a_borrow_reaching_the_return_before_its_storage_ends_is_refused() {
+fn a_borrow_read_on_one_path_and_not_the_other_ends_at_its_last_read() {
     let body = borrowing_body(vec![
         block(list_and_index(), super::branch(1, 2)),
         block(end_of_borrow_and_list(), ret()),
         block(Vec::new(), goto(3)),
         block(Vec::new(), ret()),
     ]);
-    assert_refused(&body, "a path to the return that skips the borrow's end");
+    assert_held(&body, "a path to the return that never reads the borrow");
+    let released = borrowing_body(vec![
+        block(list_and_index(), super::branch(1, 2)),
+        block(end_of_borrow_and_list(), ret()),
+        block(vec![super::decref(1), read_of_borrow()], goto(3)),
+        block(Vec::new(), ret()),
+    ]);
+    assert_refused(&released, "a read of the borrow after its list is released");
+}
+
+/// A borrow defined again on each pass of a loop ends at its last read of
+/// the pass: its list may be released and rebound before the next pass
+/// reads the borrow afresh, but not before the borrow is read again.
+#[test]
+fn a_borrow_redefined_on_each_pass_of_a_loop_ends_at_the_last_read_of_the_pass() {
+    let zero = super::constant(int_ty(), Literal::Integer(IntegerLiteral::I64(0)));
+    let start = vec![
+        super::storage_live(1),
+        super::assign_fresh(1),
+        stmt(StatementKind::Assign(place(2), Rvalue::Use(zero))),
+        super::storage_live(3),
+    ];
+    let pass = |middle: Vec<Statement>| {
+        let mut statements = vec![stmt(StatementKind::Assign(
+            place(3),
+            Rvalue::Use(Operand::Copy(element())),
+        ))];
+        statements.extend(middle);
+        statements
+    };
+    let end = vec![
+        super::storage_dead(3),
+        super::decref(1),
+        super::storage_dead(1),
+    ];
+    let body = borrowing_body(vec![
+        block(start.clone(), goto(1)),
+        block(
+            pass(vec![
+                read_of_borrow(),
+                super::decref(1),
+                super::assign_fresh(1),
+            ]),
+            super::branch(1, 2),
+        ),
+        block(end.clone(), ret()),
+    ]);
+    assert_held(&body, "a release after the last read of each pass");
+    let released_first = borrowing_body(vec![
+        block(start, goto(1)),
+        block(
+            pass(vec![
+                super::decref(1),
+                read_of_borrow(),
+                super::assign_fresh(1),
+            ]),
+            super::branch(1, 2),
+        ),
+        block(end, ret()),
+    ]);
+    assert_refused(&released_first, "a release before a read of the pass");
+}
+
+/// Past its last read a borrow protects nothing: its list may be released
+/// before its storage ends.
+#[test]
+fn a_borrow_whose_list_is_released_after_its_last_read_holds() {
+    let mut statements = list_and_index();
+    statements.extend([read_of_borrow(), super::decref(1), super::storage_dead(3)]);
+    statements.push(super::storage_dead(1));
+    let body = borrowing_body(vec![block(statements, ret())]);
+    let violations = verify_local_borrows(&body, &body.ownership, None);
+    assert!(
+        !violations
+            .iter()
+            .any(|violation| violation.local == Local(3)),
+        "the release follows the borrow's last read, got: {}",
+        messages(&violations)
+    );
 }
 
 /// The statements reading `_1[_2]` into `_3`, for a body whose list `_1`
@@ -242,6 +329,7 @@ fn parameter_element() -> Vec<Statement> {
 /// block 1 runs `middle` and ends the borrow.
 fn parameter_borrowing_body(terminator: Terminator, middle: Vec<Statement>) -> Recorded {
     let mut end = middle;
+    end.push(read_of_borrow());
     end.push(super::storage_dead(3));
     let mut body = borrowing_body(vec![
         block(parameter_element(), terminator),

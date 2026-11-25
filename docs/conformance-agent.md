@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 128
+## Error fixtures (`fail/`) — 129
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -38,6 +38,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_OWN_008_out_parameter | Triggers MER_OWN_008: a function keeps the value of its out parameter, which the caller gets back. |
 | MER_OWN_009 | Triggers MER_OWN_009: a mapping function returns the element map lends it. |
 | MER_OWN_010 | Triggers MER_OWN_010: a list of a resource that does not implement Cloneable is cloned. |
+| MER_OWN_011 | Triggers MER_OWN_011: a payload binding is read after a method replaces the value its arm matched. |
 | MER_PAR_001 | Triggers MER_PAR_001: Unexpected Token. |
 | MER_PAR_001_colon_annotation | Colon-style type annotation (Rust-like syntax, not Miri). |
 | MER_PAR_001_arrow_return_type | Arrow-style return type (Rust-like syntax, not Miri). |
@@ -162,7 +163,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 137
+## Accepted fixtures (`pass/`) — 138
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -202,6 +203,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_OWN_008_out_parameter | Accepted counterpart of MER_OWN_008: replace gives the caller a new value and hands the old one to the keeper. |
 | MER_OWN_009 | Accepted counterpart of MER_OWN_009: the mapping function builds a new value from the element it is lent. |
 | MER_OWN_010 | Accepted counterpart of MER_OWN_010: the resource implements Cloneable, so each element is copied by its own clone. |
+| MER_OWN_011 | Accepted counterpart of MER_OWN_011: the payload binding is read before the method replaces the matched value. |
 | MER_PAR_001 | Correct type annotation syntax without colon |
 | MER_PAR_002 | Accepted counterpart of MER_PAR_002: Unexpected End of File does not fire. |
 | MER_PAR_003 | Accepted counterpart of MER_PAR_003: Invalid Type Declaration does not fire. |

@@ -43,6 +43,7 @@ pub mod lent_function_parameters;
 pub mod loop_headers_across_calls;
 pub mod loops;
 pub mod match_arms;
+pub mod matched_value_writes;
 pub mod method_arg_temps;
 pub mod method_field_stores;
 pub mod nested_calls;

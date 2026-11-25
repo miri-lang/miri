@@ -68,7 +68,9 @@ use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
 use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::type_facts::DropHookReach;
 use crate::mir::visitor::Visitor;
-use crate::mir::{BasicBlock, Body, Local, Operand, Place, Rvalue, Statement, StatementKind};
+use crate::mir::{
+    BasicBlock, BasicBlockData, Body, Local, Operand, Place, Rvalue, Statement, StatementKind,
+};
 use crate::runtime_effects::RuntimeEffect;
 use std::collections::{HashMap, HashSet};
 
@@ -454,7 +456,8 @@ struct Range<'r> {
 }
 
 /// Whether, on every path from the definition of the range's local at its
-/// site to the end of its storage, each of its owners is reached only in
+/// site to its last read, or to the end of its storage when that comes
+/// first, each of its owners is reached only in
 /// ways that leave it as it was, and — when other code may reach the value
 /// (`is_exposed`) — every operation that runs is harmless by `harm`. A path
 /// reaching the body's end first does not end the range.
@@ -476,14 +479,13 @@ fn stays_over_range(
             .any(|(accessed, access)| owners.contains(&accessed) && !leaves_owner(access))
     };
     let loud = is_exposed.then_some(harm);
+    let ahead = ReadAhead::of(body, local);
     let mut pending = vec![(site.0, site.1 + 1)];
     let mut visited = HashSet::new();
     'blocks: while let Some((block, from)) = pending.pop() {
         let data = &body.basic_blocks[block];
-        for statement in data.statements.iter().skip(from) {
-            let ends = matches!(&statement.kind,
-                StatementKind::StorageDead(p, _) | StatementKind::Assign(p, _) if *p == Place::new(local));
-            if ends {
+        for (index, statement) in data.statements.iter().enumerate().skip(from) {
+            if ends_local(statement, local) || !ahead.is_read_from(block, index) {
                 continue 'blocks;
             }
             let is_loud = loud.is_some_and(|harm| !harm.is_harmless_statement(&statement.kind));
@@ -492,6 +494,9 @@ fn stays_over_range(
             if changes_owner || is_loud {
                 return false;
             }
+        }
+        if !ahead.is_read_from(block, data.statements.len()) {
+            continue 'blocks;
         }
         let Some(terminator) = &data.terminator else {
             return false;
@@ -514,6 +519,105 @@ fn stays_over_range(
         );
     }
     true
+}
+
+/// Where a local is read again, by this check's own access classification:
+/// each block's last access to it other than the start or end of its
+/// storage or a whole definition, the terminator counting as the position
+/// after the last statement, and whether a read follows each block before
+/// the local is defined again or its storage ends.
+struct ReadAhead {
+    last_read: Vec<Option<usize>>,
+    read_after: Vec<bool>,
+}
+
+/// What a block does to a local first: reads it, or ends it (its storage
+/// ends or it is defined whole) before any read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FirstTouch {
+    Read,
+    Ended,
+}
+
+impl ReadAhead {
+    fn of(body: &Body, local: Local) -> Self {
+        let mut last_read = Vec::with_capacity(body.basic_blocks.len());
+        let mut first_touch = Vec::with_capacity(body.basic_blocks.len());
+        for data in &body.basic_blocks {
+            let (first, last) = touches(data, local);
+            first_touch.push(first);
+            last_read.push(last);
+        }
+        let successors: Vec<Vec<BasicBlock>> = (body.basic_blocks.iter())
+            .map(|data| {
+                data.terminator
+                    .as_ref()
+                    .map_or_else(Vec::new, |t| t.successors())
+            })
+            .collect();
+        let mut read_on_entry: Vec<bool> = first_touch
+            .iter()
+            .map(|t| *t == Some(FirstTouch::Read))
+            .collect();
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for block in 0..successors.len() {
+                let untouched = first_touch[block].is_none();
+                if untouched
+                    && !read_on_entry[block]
+                    && successors[block].iter().any(|s| read_on_entry[s.0])
+                {
+                    read_on_entry[block] = true;
+                    grew = true;
+                }
+            }
+        }
+        let read_after = (successors.iter())
+            .map(|next| next.iter().any(|s| read_on_entry[s.0]))
+            .collect();
+        Self {
+            last_read,
+            read_after,
+        }
+    }
+
+    /// Whether the local is read at or after position `index` of `block`.
+    fn is_read_from(&self, block: usize, index: usize) -> bool {
+        self.last_read[block].is_some_and(|last| last >= index) || self.read_after[block]
+    }
+}
+
+/// Whether `statement` ends `local`'s storage or defines it whole.
+fn ends_local(statement: &Statement, local: Local) -> bool {
+    matches!(&statement.kind,
+        StatementKind::StorageDead(p, _) | StatementKind::Assign(p, _) if *p == Place::new(local))
+}
+
+/// What block `data` does to `local` first, and the position of its last
+/// read there.
+fn touches(data: &BasicBlockData, local: Local) -> (Option<FirstTouch>, Option<usize>) {
+    let reads = |accesses: Vec<(Local, Access)>| {
+        (accesses.into_iter()).any(|(accessed, access)| {
+            accessed == local && !matches!(access, Access::Storage | Access::Defined)
+        })
+    };
+    let mut first = None;
+    let mut last = None;
+    for (index, statement) in data.statements.iter().enumerate() {
+        if reads(statement_accesses(statement)) {
+            last = Some(index);
+            first.get_or_insert(FirstTouch::Read);
+        }
+        if ends_local(statement, local) {
+            first.get_or_insert(FirstTouch::Ended);
+        }
+    }
+    if (data.terminator.as_ref()).is_some_and(|terminator| reads(terminator_accesses(terminator))) {
+        last = Some(data.statements.len());
+        first.get_or_insert(FirstTouch::Read);
+    }
+    (first, last)
 }
 
 /// Every access in `body`, with the block it is in.
