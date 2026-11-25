@@ -546,28 +546,80 @@ fn hand_over_matched_payloads(
         let Some(payload) = arg_ops.get(position).and_then(moved_whole_local) else {
             continue;
         };
-        let handed = match matched_payload(ctx, scrutinee, payload) {
-            Some(MatchedPayload::OwnReference(optional)) => {
-                end_consumed(ctx, &[payload], call.span);
-                arg_ops[position] = Operand::Move(optional_payload(optional));
-                optional
-            }
-            Some(MatchedPayload::Boxed(take)) => {
-                match take_payload(ctx, &take, payload, call.span) {
-                    Some(taken) => {
-                        arg_ops[position] = Operand::Move(Place::new(taken));
-                        taken
-                    }
-                    None => continue,
-                }
-            }
-            None => continue,
+        let Some((handed_op, handed)) = matched_payload_operand(ctx, scrutinee, payload, call.span)
+        else {
+            continue;
         };
+        arg_ops[position] = handed_op;
         moved.retain(|&local| local != payload);
         moved.push(handed);
         ended.push((scrutinee, payload));
     }
     ended
+}
+
+/// Hands a runtime entry point storing the value `value` lowered to, `op`,
+/// the payload's one reference in place of the payload binding it reads,
+/// when a `Some(..)` pattern bound it out of a matched optional the store
+/// ends ([`TypeChecker::ended_scrutinee`]), as a keeper call is handed it
+/// ([`hand_over_matched_payloads`]). A store passes the element
+/// [`ArgMode::Donated`], which RC insertion funds only for a copy, so the
+/// container keeps the optional's own reference rather than a retained copy
+/// beside it. Answers the local the store takes over, which
+/// [`end_handed_over`] ends, moved, after the call; `None`, rewriting
+/// nothing, when `op` is not the binding's own read (a value wrapped for an
+/// optional slot, or one this copy of the body does not consume), and the
+/// store funds a copy as before.
+pub(crate) fn hand_over_stored_payload(
+    ctx: &mut LoweringContext,
+    value: &Expression,
+    op: &mut Operand,
+    span: Span,
+) -> Option<Local> {
+    let value = variable::argument_value(value);
+    let scrutinee = ctx.type_checker.ended_scrutinee(value)?;
+    // TODO: a payload wrapped for an optional slot (`r` pushed onto a
+    // `List<T?>`) is no whole read of the binding, so the store is handed a
+    // retained copy of the payload while the optional keeps its own; handing
+    // over the optional itself, which already is `Some(r)`, would keep one
+    // holder.
+    let payload = whole_local_copied(op)?;
+    let is_pending_read = matches!(
+        ctx.consumed_reads.get(&value.id),
+        Some(ConsumedRead::Pending(read)) if *read == payload
+    );
+    if !is_pending_read {
+        return None;
+    }
+    let (handed_op, handed) = matched_payload_operand(ctx, scrutinee, payload, span)?;
+    ctx.consumed_reads.insert(value.id, ConsumedRead::Ended);
+    *op = handed_op;
+    Some(handed)
+}
+
+/// The operand handing a call the one reference the payload binding
+/// `payload`, matched out of `scrutinee`, reads, with the local the call
+/// takes over; the binding, and every binding it was reached through, ends
+/// before the call. An optional held as its payload's own pointer hands over
+/// its own reference, `move o.0`; a payload held in a box the optional owns
+/// is taken out of it ([`take_payload`]). `None`, emitting nothing, when no
+/// optional the match holds alone holds the payload.
+fn matched_payload_operand(
+    ctx: &mut LoweringContext,
+    scrutinee: usize,
+    payload: Local,
+    span: Span,
+) -> Option<(Operand, Local)> {
+    match matched_payload(ctx, scrutinee, payload)? {
+        MatchedPayload::OwnReference(optional) => {
+            end_consumed(ctx, &[payload], span);
+            Some((Operand::Move(optional_payload(optional)), optional))
+        }
+        MatchedPayload::Boxed(take) => {
+            let taken = take_payload(ctx, &take, payload, span)?;
+            Some((Operand::Move(Place::new(taken)), taken))
+        }
+    }
 }
 
 /// Where the payload a keeper is handed sits in the optional it was matched

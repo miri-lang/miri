@@ -1521,7 +1521,9 @@ fn apply_terminator(
 /// here whatever mode it carries ([`verify_owned_argument_modes`] holds the
 /// mode to the record), and a call to a function of the program releases its
 /// `Owned` arguments instead ([`owned_bare_args`]), so each hand-over is
-/// released once.
+/// released once. A `move` of the payload of an optional held as its
+/// payload's own pointer, a matched payload a store takes, hands over the
+/// optional's reference ([`bare_local_moved`]).
 fn release_taken_args(
     body: &Body,
     func: Option<&Operand>,
@@ -1534,7 +1536,9 @@ fn release_taken_args(
         return;
     };
     for position in effect.handed_over_positions() {
-        let Some(local) = args.get(position).and_then(Operand::bare_local) else {
+        let Some(local) = (args.get(position))
+            .and_then(|arg| arg.bare_local().or_else(|| bare_local_moved(body, arg)))
+        else {
             continue;
         };
         release(body, &Place::new(local), tracked, state, violations);

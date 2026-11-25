@@ -838,6 +838,58 @@ fn a_donated_argument_transfers_however_it_is_spelled() {
     assert_clean(&moved, "a donated argument spelled as a move");
 }
 
+/// A body whose local 1, a `String?` held as its payload's own pointer, is
+/// made, then its payload moved into a list by `miri_rt_list_push`, then
+/// `after` runs before the optional ends.
+fn payload_pushed_out_of_its_optional(after: Vec<Statement>) -> Body {
+    let mut body = temp_body(vec![
+        block(
+            vec![storage_live(1), assign_fresh(1)],
+            runtime_call(
+                "miri_rt_list_push",
+                vec![
+                    constant(void_ty(), Literal::Identifier("receiver".to_string())),
+                    Operand::Move(Place {
+                        local: Local(1),
+                        projection: vec![miri::mir::place::PlaceElem::Field(0)],
+                    }),
+                ],
+                2,
+                1,
+            ),
+        ),
+        block([after, vec![storage_dead(1)]].concat(), ret()),
+    ]);
+    body.local_decls[1].ty = Type::new(TypeKind::Option(Box::new(string_ty())), span());
+    body
+}
+
+/// A store handed the payload of an optional held as its payload's own
+/// pointer by `move` takes the optional's one reference, so the optional
+/// ends holding nothing: the shape a matched payload pushed onto a list
+/// lowers to.
+#[test]
+fn a_payload_moved_out_of_its_optional_into_a_container_takes_the_optionals_reference() {
+    let stored = payload_pushed_out_of_its_optional(Vec::new());
+    assert_clean(&stored, "a payload moved out of its optional into a list");
+}
+
+/// The optional whose payload a store took holds nothing more, so releasing
+/// it as well is a double release rather than silence.
+#[test]
+fn releasing_an_optional_whose_payload_a_container_took_is_flagged() {
+    let released_twice = payload_pushed_out_of_its_optional(vec![decref(1)]);
+    let violations = verify_body(&released_twice, &OwnershipFacts::default());
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.local == Local(1)
+                && violation.message.contains("double-release")),
+        "releasing an optional a store took the payload of must be reported, got: {}",
+        messages(&violations)
+    );
+}
+
 /// Donating a value the caller does not own is a double-release, not silence:
 /// the container will release a reference that was never acquired.
 #[test]

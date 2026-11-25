@@ -377,6 +377,29 @@ fn main()
 }
 
 #[test]
+fn a_matched_payload_added_to_a_set_or_as_a_map_key_is_moved_in() {
+    assert_heap_guard_output(
+        &plain_resource(
+            r#"
+fn main()
+    var s = Set<Res>()
+    var m = Map<Res, int>()
+    let p Res? = Some(Res(1))
+    match p
+        Some(r): s.add(r)
+        None: println("none")
+    let q Res? = Some(Res(2))
+    match q
+        Some(r): m.set(r, 7)
+        None: println("none")
+    println(f"{s.length()} {m.length()}")
+"#,
+        ),
+        "1 1\ndrop 2\ndrop 1",
+    );
+}
+
+#[test]
 fn mapping_a_list_of_a_resource_that_is_not_cloneable_copies_nothing() {
     assert_heap_guard_output(
         &plain_resource(

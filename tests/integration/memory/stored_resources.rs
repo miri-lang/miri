@@ -720,3 +720,118 @@ fn main()
         "MER_OWN_003",
     );
 }
+
+#[test]
+fn a_payload_pushed_onto_a_list_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var l = List([Token(id: 1), Token(id: 2)])
+    var kept = List<Token>()
+    match l.remove_at(0)
+        Some(r): kept.push(r)
+        None: println("none")
+    println(f"kept {kept.length()}")
+"#,
+        ),
+        "kept 1\nreleased 1\nreleased 2",
+    );
+}
+
+#[test]
+fn a_payload_pushed_onto_a_list_on_some_paths_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var l = List([Token(id: 1), Token(id: 2), Token(id: 3)])
+    var kept = List<Token>()
+    while l.length() > 0
+        match l.remove_at(0)
+            Some(r):
+                if r.id != 2: kept.push(r)
+            None: break
+    println(f"kept {kept.length()}")
+"#,
+        ),
+        "released 2\nkept 2\nreleased 1\nreleased 3",
+    );
+}
+
+#[test]
+fn a_payload_inserted_into_a_list_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var kept = List([Token(id: 1)])
+    let p Token? = Some(Token(id: 2))
+    match p
+        Some(r): kept.insert(0, r)
+        None: println("none")
+    println(f"first {kept[0].id}")
+"#,
+        ),
+        "first 2\nreleased 2\nreleased 1",
+    );
+}
+
+#[test]
+fn a_payload_stored_as_a_map_value_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+use system.collections.map
+
+fn main()
+    var m = Map<int, Token>()
+    let p Token? = Some(Token(id: 4))
+    match p
+        Some(r): m.set(7, r)
+        None: println("none")
+    println(f"size {m.length()}")
+"#,
+        ),
+        "size 1\nreleased 4",
+    );
+}
+
+#[test]
+fn a_payload_of_a_nested_optional_pushed_onto_a_list_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var kept = List<Token>()
+    let p Option<Token?> = Some(Some(Token(id: 0)))
+    match p
+        Some(q)
+            match q
+                Some(r): kept.push(r)
+                None: println("inner none")
+        None: println("none")
+    println(f"kept {kept.length()}")
+"#,
+        ),
+        "kept 1\nreleased 0",
+    );
+}
+
+#[test]
+fn an_optional_read_after_its_payload_was_pushed_onto_a_list_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    var kept = List<Token>()
+    let p Token? = Some(Token(id: 0))
+    match p
+        Some(r): kept.push(r)
+        None: println("none")
+    println(f"{p.is_some()}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}

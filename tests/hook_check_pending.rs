@@ -42,11 +42,6 @@ const CLASS_FIELD_ARGUMENT: &str = "a class field lent to a call is copied for i
 /// release that frees the block without the fields already moved.
 const ENUM_PAYLOAD: &str = "an enum block's payload handed to a keeper is copied out of it";
 
-/// A payload matched out of an optional and stored into a collection by a
-/// runtime entry point (`push`) is retained for the store while the payload
-/// binding still holds its own reference.
-const STORED_PAYLOAD: &str = "a matched payload stored by a runtime entry point is retained for it";
-
 /// A closure lent to a call holds a reference of its own to a resource it
 /// only reads, beside the binding that owns it.
 const CAPTURED_RESOURCE: &str = "a lent closure takes a reference of its own to what it reads";
@@ -151,7 +146,6 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("integration::memory::kept_operator_and_loop_calls::a_value_looked_for_with_in_is_still_the_callers", GENERIC_BODY),
     ("integration::memory::kept_operator_and_loop_calls::an_element_at_keeping_its_receiver_is_handed_a_reference_each_pass", FUNDED_PLACE),
     ("integration::generics::field_arguments::a_generic_instance_built_from_another_ones_optional_fields_releases_everything", GENERIC_BODY),
-    ("integration::memory::collection_element_copies::moving_the_elements_out_repairs_a_refused_copy", STORED_PAYLOAD),
     ("integration::memory::consumed_arguments::a_resource_read_by_a_closure_passed_to_a_call_stays_usable", CAPTURED_RESOURCE),
     ("integration::option::nullable_pointer_aliases::test_an_optional_of_a_generic_alias_flows_through_fields_lists_and_parameters", CLASS_FIELD_ARGUMENT),
 ];

@@ -30,6 +30,13 @@ pub(crate) fn lower_array_expr(
     // would hold a bare word where its readers expect an optional.
     let element_ty = collection_slot_type(ctx, &ty, ELEMENT_SLOT)
         .map(|element| canonical_declared_type(ctx.type_checker, &element));
+    // TODO: a `Some(r)` payload binding written as an element (`[r]`) is
+    // stored as a retained copy while the matched optional keeps its own
+    // reference, so a resource has two holders until the optional ends; the
+    // literal should take the optional's reference, `move o.0`, as a runtime
+    // store does (`kept_parameters::hand_over_stored_payload`). An index
+    // assignment, `l[i] = r` or `m[k] = r` (`assignment_expr::assign_to_index_map`),
+    // funds the same copy.
     let mut ops: Vec<Operand> = Vec::with_capacity(elements.len());
     for element in elements {
         let watermark = ctx.body.local_decls.len();
