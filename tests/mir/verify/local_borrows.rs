@@ -545,6 +545,25 @@ fn a_borrowed_row_handed_to_a_method_as_its_receiver_is_refused() {
     assert_refused(&body, "the row as a method's receiver");
 }
 
+/// A method the verifiers find harmless stores into nothing but its own
+/// locals, so it never writes the receiver it is lent and a borrowed row's
+/// count is never asked to answer for a write.
+#[test]
+fn a_borrowed_row_lent_as_the_receiver_of_a_harmless_method_holds() {
+    let body = row_borrowing_body(call(method_named("is_empty"), vec![lent(3)]));
+    let harmless = HashSet::from([BasicBlock(0)]);
+    let violations = verify_local_borrows(&body, &body.ownership, Some(&harmless));
+    assert!(violations.is_empty(), "got: {}", messages(&violations));
+    let violations = verify_local_borrows(&body, &body.ownership, Some(&HashSet::new()));
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.local == Local(3)),
+        "a method not found harmless may write its receiver: {}",
+        messages(&violations)
+    );
+}
+
 /// Past the receiver, a method's parameters are copied on entry like a
 /// function's.
 #[test]

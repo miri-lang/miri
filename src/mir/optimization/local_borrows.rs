@@ -36,6 +36,9 @@
 //!   own, so the write copies. A method's receiver gets no such copy — a write
 //!   through it relies on the caller's copy-on-write, or checks that it arrived
 //!   unique (`RECEIVER_UNIQUE`), which a borrowed count would answer yes to.
+//!   A call to a quiet function or method of the program (`CallFlags::quiet`)
+//!   may be lent `l` by copy at any position, the receiver included: a quiet
+//!   callee writes no parameter, so it only reads what it is lent.
 //! - **Its root holds a reference.** The root is a counted local the body owns,
 //!   or a parameter — lent, taken over, or the receiver — but never an `out`
 //!   parameter, a capture or a local whose address is taken; every step from
@@ -489,7 +492,9 @@ fn refused_by_rvalue(rvalue: &Rvalue) -> Vec<Local> {
 /// one copying it on entry before a write ([`lends_to_entry_copy`], for a
 /// local `is_copied` holds a value a write copies). A method's receiver gets
 /// no such copy and is written in place by the count its caller hands it, and
-/// a borrowed value's count is its owner's.
+/// a borrowed value's count is its owner's — unless the method is quiet
+/// ([`lends_to_quiet_callee`]): a quiet callee writes no parameter, its
+/// receiver included, so what it is lent by copy is only read.
 fn refused_by_terminator(
     terminator: &Terminator,
     is_reference: impl Fn(Local) -> bool,
@@ -529,15 +534,13 @@ fn refused_by_terminator(
             keeps_or_checks(func, position) || arg_mode(arg_modes, position) == ArgMode::Out;
         let copies_on_entry = is_copied(place.local)
             && lends_to_entry_copy(func, position, arg, arg_mode(arg_modes, position));
-        // TODO: a borrow of a type that is no reference by design, lent by
-        // copy as the receiver of a quiet method (`q.is_none()` on an inner
-        // payload binding of a nested optional), is refused here though the
-        // method only reads it, so the binding takes a reference of its own
-        // and a resource it holds has two holders. Accepting it needs
-        // `lends_to_quiet_callee` here and the same rule in
-        // `verify/local_borrows.rs`.
-        let may_write_a_value =
-            !is_reference(place.local) && !only_reads(func, position) && !copies_on_entry;
+        let lent_to_quiet_callee = matches!(arg, Operand::Copy(_))
+            && arg_mode(arg_modes, position) == ArgMode::Borrowed
+            && lends_to_quiet_callee(terminator);
+        let may_write_a_value = !is_reference(place.local)
+            && !only_reads(func, position)
+            && !copies_on_entry
+            && !lent_to_quiet_callee;
         (keeps || may_write_a_value).then_some(place.local)
     });
     let moved_callee = match func {

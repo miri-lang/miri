@@ -835,3 +835,53 @@ fn main()
         "MER_OWN_003",
     );
 }
+
+#[test]
+fn a_payload_binding_matched_again_and_read_by_a_quiet_method_in_the_inner_arm_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn shelve(t Token) Slot
+    return Slot(held: Some(t))
+
+fn main()
+    let p Option<Token?> = Some(Some(Token(id: 0)))
+    match p
+        Some(q)
+            match q
+                Some(r)
+                    let _s = shelve(r)
+                    println("shelved")
+                None: println(f"inner none {q.is_none()}")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "shelved\nreleased 0\nafter",
+    );
+}
+
+#[test]
+fn an_empty_payload_binding_matched_again_and_read_by_a_quiet_method_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn shelve(t Token) Slot
+    return Slot(held: Some(t))
+
+fn main()
+    let p Option<Token?> = Some(None)
+    match p
+        Some(q)
+            match q
+                Some(r)
+                    let _s = shelve(r)
+                    println("shelved")
+                None: println(f"inner none {q.is_none()}")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "inner none true\nafter",
+    );
+}

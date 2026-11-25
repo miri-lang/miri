@@ -21,7 +21,9 @@
 //!   shared, passed `out`, handed by `move` to a position its callee owns,
 //!   or launched over; and unless its
 //!   type is a reference by design, never written through nor handed to any
-//!   callee but a runtime entry point that only reads it — except that a value
+//!   callee but a runtime entry point that only reads it or a function of the
+//!   program its caller found harmless ([`super::callee_effects`]), which
+//!   writes no parameter, its receiver included — except that a value
 //!   a write copies (`type_facts::unsharing`) may be lent whole, by copy, to a
 //!   function of the program or to a method past its receiver, since a body
 //!   writing such a parameter binds a copy of it on entry. A method's receiver
@@ -229,9 +231,9 @@ impl Checker<'_> {
             );
         }
         let writes = written_as(body, &decl.ty);
-        accesses_in(body)
-            .find(|(accessed, access, _)| *accessed == local && refuses(*access, writes))
-            .map(|(_, access, _)| format!("the body reaches it as {access:?}"))
+        credited_accesses_in(body, &self.harm)
+            .find(|(accessed, access)| *accessed == local && refuses(*access, writes))
+            .map(|(_, access)| format!("the body reaches it as {access:?}"))
     }
 
     /// The owners whose value `local` holds while it borrows, when every one
@@ -504,7 +506,7 @@ fn stays_over_range(
         let at = BasicBlock(block);
         let is_loud = loud.is_some_and(|harm| !harm.is_harmless_terminator(at, terminator));
         if matches!(terminator.kind, TerminatorKind::Return)
-            || changes(owner_accesses(
+            || changes(credited_accesses(
                 terminator,
                 harm.calls_harmless_program(at, terminator),
             ))
@@ -634,6 +636,26 @@ fn accesses_in(body: &Body) -> impl Iterator<Item = (Local, Access, usize)> + '_
         })
 }
 
+/// Every access in `body`, with what a call to a function of the program
+/// found harmless by `harm` is lent credited as only read
+/// ([`credited_accesses`]).
+fn credited_accesses_in<'a>(
+    body: &'a Body,
+    harm: &'a BodyHarm,
+) -> impl Iterator<Item = (Local, Access)> + 'a {
+    body.basic_blocks
+        .iter()
+        .enumerate()
+        .flat_map(move |(block, data)| {
+            let statements = data.statements.iter().flat_map(statement_accesses);
+            let terminator = data.terminator.iter().flat_map(move |terminator| {
+                let at = BasicBlock(block);
+                credited_accesses(terminator, harm.calls_harmless_program(at, terminator))
+            });
+            statements.chain(terminator)
+        })
+}
+
 /// How `statement` reaches each local it names.
 fn statement_accesses(statement: &Statement) -> Vec<(Local, Access)> {
     let mut accesses = Vec::new();
@@ -733,12 +755,14 @@ fn rvalue_accesses(rvalue: &Rvalue, accesses: &mut Vec<(Local, Access)>) {
     }
 }
 
-/// How `terminator` reaches each local it names, as an owner a borrow
-/// relies on sees it: a call to a harmless function of the program
-/// (`calls_harmless`) stores into nothing but its own locals — a copy it
-/// binds on entry of a parameter it writes among them — so what it is lent by
-/// copy, at any position, is only read.
-fn owner_accesses(terminator: &Terminator, calls_harmless: bool) -> Vec<(Local, Access)> {
+/// How `terminator` reaches each local it names, crediting a call to a
+/// harmless function of the program (`calls_harmless`): such a callee stores
+/// into nothing but its own locals — a copy it binds on entry of a parameter
+/// it writes among them — so what it is lent by copy, at any position and its
+/// receiver included, is only read. An owner a borrow relies on stays as it
+/// was, and a borrow lent so is never written through by the count its owner
+/// holds.
+fn credited_accesses(terminator: &Terminator, calls_harmless: bool) -> Vec<(Local, Access)> {
     let mut accesses = terminator_accesses(terminator);
     if calls_harmless {
         for (_, access) in &mut accesses {

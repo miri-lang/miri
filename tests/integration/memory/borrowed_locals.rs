@@ -565,10 +565,11 @@ println(run())
 
 /// A method's receiver is written in place, relying on its caller's
 /// copy-on-write or a check that it arrived unique, which a borrowed row
-/// would answer with its owner's count. A row a method is called on — one
-/// that only reads it, or `sort`, which writes it — keeps its reference.
+/// would answer with its owner's count. A row `sort` is called on keeps its
+/// reference; a row lent to `contains`, a quiet method that writes no
+/// parameter, borrows: the three rows it reads take none.
 #[test]
-fn test_an_element_a_method_is_called_on_keeps_its_reference() {
+fn test_an_element_a_quiet_method_reads_borrows_and_one_a_method_writes_keeps_its_reference() {
     assert_borrowing(
         r#"
 use system.io
@@ -590,16 +591,17 @@ fn run() String
 println(run())
 "#,
         "1 4 2 4",
-        7,
-        30,
+        4,
+        27,
     );
 }
 
 /// A string, an optional and a closure's argument are not copied on entry by
-/// the callee writing them, so each keeps its reference when lent: the
-/// counts are those of a program with no borrowing of them.
+/// a callee writing them. The strings are lent to `width`, a quiet function
+/// that writes no parameter, so they borrow: no release of the three. The
+/// optional and the closure's argument keep their reference.
 #[test]
-fn test_a_string_an_optional_or_a_closure_argument_keeps_its_reference() {
+fn test_a_quiet_callee_borrows_a_string_and_an_optional_or_closure_argument_keeps_its_count() {
     assert_borrowing(
         r#"
 use system.io
@@ -641,7 +643,7 @@ println(run())
 "#,
         "6 9 3",
         7,
-        33,
+        30,
     );
 }
 
