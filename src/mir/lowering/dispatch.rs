@@ -48,8 +48,8 @@ pub(crate) use super::kernel_launch::try_lower_kernel_launch;
 use super::expression::function_reference::{adapt_runtime_slot_closures, SlotCall};
 use super::generic_method_calls::{generic_method_symbol, GenericMethodSite};
 use super::kept_parameters::{
-    end_handed_over, hand_over_kept_arguments, hand_over_stored_payload, release_after_kept_call,
-    value_call_convention, HandedOver, KeptCall,
+    end_stored_payloads, hand_over_kept_arguments, hand_over_stored_payload,
+    release_after_kept_call, value_call_convention, HandedOver, KeptCall,
 };
 use super::method_dispatch::{
     residency_specialize_call, static_method_call_args, with_mutated_receiver,
@@ -938,20 +938,6 @@ pub(crate) fn emit_list_push(
         ctx.emit_temp_drop(src, item_watermark, item_arg.span);
     }
     Ok(Operand::Copy(Place::new(dummy_dest)))
-}
-
-/// Ends, moved, after a runtime store returns, each local it took over in
-/// place of a matched payload binding ([`hand_over_stored_payload`]).
-fn end_stored_payloads<const N: usize>(
-    ctx: &mut LoweringContext,
-    handed: [Option<Local>; N],
-    span: Span,
-) {
-    let handed = HandedOver {
-        moved: handed.into_iter().flatten().collect(),
-        consumed: Vec::new(),
-    };
-    end_handed_over(ctx, &handed, span);
 }
 
 /// Convert `op` to the slot's type when it arrived as something narrower.

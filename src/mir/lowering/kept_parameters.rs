@@ -597,6 +597,20 @@ pub(crate) fn hand_over_stored_payload(
     Some(handed)
 }
 
+/// Ends, moved, after a store returns, each local it took over in place of
+/// a matched payload binding ([`hand_over_stored_payload`]).
+pub(crate) fn end_stored_payloads(
+    ctx: &mut LoweringContext,
+    handed: impl IntoIterator<Item = Option<Local>>,
+    span: Span,
+) {
+    let handed = HandedOver {
+        moved: handed.into_iter().flatten().collect(),
+        consumed: Vec::new(),
+    };
+    end_handed_over(ctx, &handed, span);
+}
+
 /// The operand handing a call the one reference the payload binding
 /// `payload`, matched out of `scrutinee`, reads, with the local the call
 /// takes over; the binding, and every binding it was reached through, ends

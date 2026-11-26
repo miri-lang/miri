@@ -837,6 +837,207 @@ fn main()
 }
 
 #[test]
+fn a_resource_written_into_an_array_literal_moves_there() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    let t = Token(id: 1)
+    let l = [t, Token(id: 2)]
+    println(f"held {l.length()}")
+"#,
+        ),
+        "held 2\nreleased 1\nreleased 2",
+    );
+}
+
+#[test]
+fn a_resource_read_after_an_array_literal_moved_it_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    let t = Token(id: 1)
+    let l = [t]
+    println(f"{t.id} {l.length()}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+#[test]
+fn a_resource_written_into_an_array_literal_twice_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    let t = Token(id: 1)
+    let l = [t, t]
+    println(f"{l.length()}")
+"#,
+        ),
+        "is written into the array literal more than once",
+    );
+}
+
+#[test]
+fn a_payload_written_into_an_array_literal_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    let p Token? = Some(Token(id: 1))
+    match p
+        Some(r)
+            let l = [r]
+            println(f"held {l.length()}")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "held 1\nreleased 1\nafter",
+    );
+}
+
+#[test]
+fn a_payload_of_a_nested_optional_written_into_an_array_literal_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    let p Option<Token?> = Some(Some(Token(id: 0)))
+    match p
+        Some(q)
+            match q
+                Some(r)
+                    let l = [Token(id: 5), r]
+                    println(f"last {l[1].id}")
+                None: println("inner none")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "last 0\nreleased 5\nreleased 0\nafter",
+    );
+}
+
+#[test]
+fn an_optional_read_after_its_payload_was_written_into_an_array_literal_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    let p Token? = Some(Token(id: 0))
+    match p
+        Some(r)
+            let l = [r]
+            println(f"{l.length()}")
+        None: println("none")
+    println(f"{p.is_some()}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+#[test]
+fn a_payload_stored_by_an_index_assignment_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var l = List([Token(id: 9)])
+    let p Token? = Some(Token(id: 1))
+    match p
+        Some(r): l[0] = r
+        None: println("none")
+    println(f"first {l[0].id}")
+"#,
+        ),
+        "released 9\nfirst 1\nreleased 1",
+    );
+}
+
+#[test]
+fn a_payload_stored_by_an_index_assignment_on_some_paths_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var l = List([Token(id: 0)])
+    var source = List([Token(id: 1), Token(id: 2)])
+    while source.length() > 0
+        match source.remove_at(0)
+            Some(r):
+                if r.id == 2: l[0] = r
+            None: break
+    println(f"first {l[0].id}")
+"#,
+        ),
+        "released 1\nreleased 0\nfirst 2\nreleased 2",
+    );
+}
+
+#[test]
+fn a_payload_stored_by_a_map_index_assignment_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+use system.collections.map
+
+fn main()
+    var m = Map<int, Token>()
+    let p Token? = Some(Token(id: 4))
+    match p
+        Some(r): m[7] = r
+        None: println("none")
+    println(f"size {m.length()}")
+"#,
+        ),
+        "size 1\nreleased 4",
+    );
+}
+
+#[test]
+fn an_optional_read_after_its_payload_was_stored_by_an_index_assignment_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    var l = List([Token(id: 9)])
+    let p Token? = Some(Token(id: 0))
+    match p
+        Some(r): l[0] = r
+        None: println("none")
+    println(f"{p.is_some()}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+#[test]
+fn an_optional_read_after_its_payload_was_stored_by_a_map_index_assignment_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+use system.collections.map
+
+fn main()
+    var m = Map<int, Token>()
+    let p Token? = Some(Token(id: 0))
+    match p
+        Some(r): m[1] = r
+        None: println("none")
+    println(f"{p.is_some()}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+#[test]
 fn a_payload_binding_matched_again_and_read_by_a_quiet_method_in_the_inner_arm_has_one_holder() {
     assert_one_holder_output(
         &with_token(

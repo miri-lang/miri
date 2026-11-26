@@ -92,6 +92,15 @@ enum Sink {
     DynamicFn(String),
 }
 
+/// Whether the program reads the value an expression gives back.
+#[derive(Clone, Copy)]
+enum ValueUse {
+    /// The value is read, as an operand or what a function returns.
+    Read,
+    /// The expression stands as a statement of its own, its value unused.
+    Discarded,
+}
+
 /// How a diagnostic names what consumed the argument.
 impl std::fmt::Display for Sink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -664,8 +673,14 @@ impl<'a> UseAfterMoveChecker<'a> {
             StatementKind::FunctionDeclaration(decl) => self.check_function(stmt.id, decl),
             StatementKind::Block(stmts) => self.check_block(stmts, consumed),
             StatementKind::Expression(expr) => {
-                self.check_expr(expr, consumed);
-                if self.tail_values.contains(&expr.id) {
+                let is_returned = self.tail_values.contains(&expr.id);
+                match &expr.node {
+                    ExpressionKind::Assignment(lhs, _, rhs) if !is_returned => {
+                        self.check_assignment_expr((lhs, rhs), ValueUse::Discarded, consumed)
+                    }
+                    _ => self.check_expr(expr, consumed),
+                }
+                if is_returned {
                     self.consume_returned_resource(expr, consumed);
                 }
             }
@@ -1283,7 +1298,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.check_expr(r, consumed);
             }
             ExpressionKind::Assignment(lhs, _, rhs) => {
-                self.check_assignment_expr(lhs, rhs, consumed)
+                self.check_assignment_expr((lhs, rhs), ValueUse::Read, consumed)
             }
             ExpressionKind::Conditional(then, cond, else_, _) => {
                 self.check_conditional_expr(then, cond, else_.as_deref(), consumed)
@@ -1294,11 +1309,19 @@ impl<'a> UseAfterMoveChecker<'a> {
                     self.check_expr(e, consumed);
                 }
             }
+            // TODO: a resource binding written into a tuple, set or map
+            // literal (`(a, 1)`, `{a}`, `{1: a}`) is only read here, so it
+            // stays usable after the literal and the literal retains a
+            // reference beside it; each element is a place the binding should
+            // move into, as an array literal's is (`consume_array_elements`).
             ExpressionKind::FormattedString(parts, _)
             | ExpressionKind::List(parts)
             | ExpressionKind::Set(parts)
             | ExpressionKind::Tuple(parts) => self.check_each(parts, consumed),
-            ExpressionKind::Array(elems, _) => self.check_each(elems, consumed),
+            ExpressionKind::Array(elems, _) => {
+                self.check_each(elems, consumed);
+                self.consume_array_elements(elems, consumed);
+            }
             ExpressionKind::Map(pairs) => {
                 for (k, v) in pairs {
                     self.check_expr(k, consumed);
@@ -1361,10 +1384,15 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
+    /// `lhs = rhs`, whose own value `value_use` says is read or discarded.
+    /// A payload binding an element store hands on ends its matched
+    /// scrutinee only where the assignment's value is discarded: the store
+    /// then takes the scrutinee's own reference, which leaves no value for
+    /// the assignment to give back.
     fn check_assignment_expr(
         &mut self,
-        lhs: &LeftHandSideExpression,
-        rhs: &Expression,
+        (lhs, rhs): (&LeftHandSideExpression, &Expression),
+        value_use: ValueUse,
         consumed: &mut HashMap<String, ConsumedInfo>,
     ) {
         self.check_expr(rhs, consumed);
@@ -1373,8 +1401,16 @@ impl<'a> UseAfterMoveChecker<'a> {
             LeftHandSideExpression::Identifier(_) => named_binding(target),
             LeftHandSideExpression::Member(_) | LeftHandSideExpression::Index(_) => None,
         };
+        // TODO: a payload binding stored into a variable or a field
+        // (`x = r`, `o.f = r`), or bound by `let b = r`, is still a funded
+        // copy beside the matched optional's own reference; those stores
+        // would end the scrutinee once their lowering hands the store
+        // `move o.0` as an element store does.
+        let ends_scrutinee = matches!(lhs, LeftHandSideExpression::Index(_))
+            && matches!(value_use, ValueUse::Discarded);
         if rebound.is_none() || rebound != named_binding(rhs) {
-            self.consume_stored_binding(target, rhs, consumed);
+            let by_fn = format!("assignment to '{}'", value_spelling(target));
+            self.consume_stored_binding((&by_fn, ends_scrutinee), rhs, consumed);
         }
         if let Some(name) = rebound {
             consumed.remove(name);
@@ -1383,13 +1419,32 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.end_bindings_assigned(target, consumed);
     }
 
-    /// Marks the resource binding `value` names moved into the place
-    /// `target` an assignment stores it in, and records it for lowering to
-    /// end where it is stored: a resource has one owner, so storing it in a
-    /// variable, a field or an element moves it there.
+    /// Marks each resource binding an array literal's element names moved
+    /// into the literal: an element is a place, so writing a resource there
+    /// moves it as storing it in any other place does. A payload binding so
+    /// written ends its matched scrutinee, whose own reference the literal
+    /// takes.
+    /// A resource written as two elements would have two holders, and is
+    /// refused at the second.
+    fn consume_array_elements(&mut self, elements: &[Expression], consumed: &mut Consumed) {
+        let consumed_before: HashSet<String> = consumed.keys().cloned().collect();
+        for element in elements {
+            self.consume_stored_binding(("array literal", true), element, consumed);
+        }
+        let refusal = written_again_error;
+        self.refuse_a_resource_kept_twice(elements, refusal, (&consumed_before, consumed));
+    }
+
+    /// Marks the resource binding `value` names moved into the place a store,
+    /// spelled `by_fn`, writes it to, and records it for lowering to end
+    /// where it is stored: a resource has one owner, so storing it in a
+    /// variable, a field or an element moves it there. When
+    /// `ends_scrutinee`, a payload binding stored ends the scrutinee it was
+    /// matched out of ([`Self::end_owned_scrutinee`]), and the store takes
+    /// the scrutinee's own reference.
     fn consume_stored_binding(
         &mut self,
-        target: &Expression,
+        (by_fn, ends_scrutinee): (&str, bool),
         value: &Expression,
         consumed: &mut Consumed,
     ) {
@@ -1401,7 +1456,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
         let info = ConsumedInfo {
             ended_by_write: None,
-            by_fn: format!("assignment to '{}'", value_spelling(target)),
+            by_fn: by_fn.to_string(),
             at_span: value.span,
             chain: vec![],
             open: None,
@@ -1409,6 +1464,9 @@ impl<'a> UseAfterMoveChecker<'a> {
         consumed.insert(src.to_string(), info);
         if self.hands_on_its_reference(value) {
             self.consumed_arguments.expressions.insert(value.id);
+            if ends_scrutinee {
+                self.end_owned_scrutinee(src, value, by_fn, consumed);
+            }
         }
     }
 
@@ -1849,6 +1907,20 @@ impl<'a> UseAfterMoveChecker<'a> {
         consumed_before: &HashSet<String>,
         consumed: &HashMap<String, ConsumedInfo>,
     ) {
+        let refusal = |name: &str, span| passed_again_error(name, fn_name, span);
+        self.refuse_a_resource_kept_twice(operands, refusal, (consumed_before, consumed));
+    }
+
+    /// Refuses, with `refusal`, a resource one site consumes that the site
+    /// is also handed at another of its `operands`; `consumed_before` is what
+    /// was consumed before the site. Reported at the second operand naming
+    /// it.
+    fn refuse_a_resource_kept_twice<'e>(
+        &mut self,
+        operands: impl IntoIterator<Item = &'e Expression>,
+        refusal: impl Fn(&str, Span) -> TypeError,
+        (consumed_before, consumed): (&HashSet<String>, &HashMap<String, ConsumedInfo>),
+    ) {
         let mut seen: HashSet<&str> = HashSet::new();
         for passed in operands {
             let ExpressionKind::Identifier(name, _) = &passed.node else {
@@ -1858,7 +1930,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 .get(name)
                 .filter(|_| !consumed_before.contains(name));
             if let Some(info) = kept_here.filter(|_| !seen.insert(name.as_str())) {
-                self.refuse(passed_again_error(name, fn_name, passed.span), info);
+                self.refuse(refusal(name, passed.span), info);
             }
         }
     }
@@ -2064,7 +2136,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
         if self.hands_on_its_reference(ident_expr) {
             self.consumed_arguments.expressions.insert(ident_expr.id);
-            self.end_owned_scrutinee(&name, ident_expr, sink, consumed);
+            self.end_owned_scrutinee(&name, ident_expr, &sink.to_string(), consumed);
         }
         let chain = self.build_chain(sink, callee_param_idx);
         consumed.insert(
@@ -2146,7 +2218,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     }
 
     /// When `name`, which `value` reads, is a payload the scope's own
-    /// scrutinee bound and `sink` keeps it, consumes the scrutinee too, and
+    /// scrutinee bound and `by_fn` keeps it, consumes the scrutinee too, and
     /// every payload binding of it matched again on the way to `name`, and
     /// records the hand-over for lowering, which ends them there. A
     /// scrutinee an earlier hand-over consumed on this path is ended
@@ -2155,7 +2227,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         &mut self,
         name: &str,
         value: &Expression,
-        sink: &Sink,
+        by_fn: &str,
         consumed: &mut Consumed,
     ) {
         let Some(owner) = self.places.payload_owner(name) else {
@@ -2167,7 +2239,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         (self.consumed_arguments.payload_handovers).insert(value.id, owner.expression);
         let info = ConsumedInfo {
             ended_by_write: None,
-            by_fn: sink.to_string(),
+            by_fn: by_fn.to_string(),
             at_span: value.span,
             chain: Vec::new(),
             open: None,
@@ -2493,6 +2565,25 @@ fn passed_again_error(name: &str, fn_name: &str, span: Span) -> TypeError {
             code: DiagnosticCode::OwnUseOfMovedValue,
             message: format!(
                 "'{name}' is passed to '{fn_name}' more than once, and '{fn_name}' keeps it: a resource has one owner\n  fix: pass '{name}' once, and read what the other argument needs from it before the call"
+            ),
+            help: None,
+            expected: None,
+            actual: None,
+        },
+        span,
+        source_override: None,
+        repair: None,
+        related: Vec::new(),
+    }
+}
+
+/// The refusal of a resource written as two elements of one array literal.
+fn written_again_error(name: &str, span: Span) -> TypeError {
+    TypeError {
+        kind: TypeErrorKind::Coded {
+            code: DiagnosticCode::OwnUseOfMovedValue,
+            message: format!(
+                "'{name}' is written into the array literal more than once, and each element keeps it: a resource has one owner\n  fix: write '{name}' into the literal once, and build the other element as a value of its own"
             ),
             help: None,
             expected: None,

@@ -30,6 +30,7 @@ use crate::mir::lowering::helpers::{
     coerce_rvalue_in, ensure_place, release_coerced_source, resolve_arg_type,
     spellings_of_one_value, wrap_for_optional_slot,
 };
+use crate::mir::lowering::kept_parameters::{end_stored_payloads, hand_over_stored_payload};
 
 fn assign_to_identifier(
     ctx: &mut LoweringContext,
@@ -640,6 +641,35 @@ fn assign_to_member_compound(
     Ok(())
 }
 
+/// Hands the element store an assignment `expr` makes, of the value it
+/// lowered to `val`, the matched optional's own reference in place of the
+/// payload binding it stores ([`hand_over_stored_payload`]), and answers the
+/// local it takes over, which ends moved once the store is made. Only an
+/// assignment whose value is discarded hands over (`dest` is `None`, and the
+/// type checker records the hand-over only for an assignment standing as a
+/// statement): its value would otherwise read the reference the store took.
+fn hand_over_stored_rhs(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    val: &mut Operand,
+    dest: Option<&Place>,
+) -> Option<crate::mir::Local> {
+    let ExpressionKind::Assignment(_, _, rhs) = &expr.node else {
+        return None;
+    };
+    if dest.is_some() {
+        return None;
+    }
+    hand_over_stored_payload(ctx, rhs, val, expr.span)
+}
+
+/// The value of an assignment whose store took the reference its value
+/// would read: nothing, as no one reads it.
+fn discarded_value(ctx: &mut LoweringContext, span: crate::error::syntax::Span) -> Operand {
+    let nothing = ctx.push_temp(Type::new(TypeKind::Void, span), span);
+    Operand::Copy(Place::new(nothing))
+}
+
 /// Store `val_op` under `key_op` in the map `obj_op` through
 /// `miri_rt_map_set`. The map keeps both; the call passes them in the mode
 /// the entry point's declaration states, which is what funds the references
@@ -710,14 +740,19 @@ fn assign_to_index_map(
     // The value arrives lowered by the assignment that owns it, so it is the one
     // stored operand that never passed through `lower_stored_value`; it is read
     // at the map's own value width here instead.
-    let (val, _) =
+    let (mut val, _) =
         conform_operand_to_collection_slot(ctx, val, val_ty, obj_ty, MAP_VALUE_SLOT, expr.span);
+    let handed = hand_over_stored_rhs(ctx, expr, &mut val, dest.as_ref());
 
-    let _dummy_dest = emit_map_set_call(ctx, obj_op, key_op, val.clone(), expr)?;
+    let set_result = emit_map_set_call(ctx, obj_op, key_op, val.clone(), expr)?;
+    end_stored_payloads(ctx, [handed], expr.span);
     if let Some(src) = key_src {
         ctx.emit_temp_drop(src, key_watermark, idx.span);
     }
     TemporaryRoot::release(receiver, ctx, expr.span);
+    if handed.is_some() {
+        return Ok(Operand::Copy(Place::new(set_result)));
+    }
 
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
@@ -951,12 +986,16 @@ fn assign_to_index_array(
     let mut target_place = obj_place;
     target_place.projection.push(PlaceElem::index(index_local));
 
+    let mut val = val;
+    let mut handed = None;
     match op {
         crate::ast::operator::AssignmentOp::Assign => {
+            handed = hand_over_stored_rhs(ctx, expr, &mut val, dest.as_ref());
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(target_place, Rvalue::Use(val.clone())),
                 span: expr.span,
             });
+            end_stored_payloads(ctx, [handed], expr.span);
         }
         crate::ast::operator::AssignmentOp::AssignAdd
         | crate::ast::operator::AssignmentOp::AssignSub
@@ -970,6 +1009,9 @@ fn assign_to_index_array(
     // The write is done, so the copy taken to reach through has nothing left to
     // do.
     TemporaryRoot::release(receiver, ctx, expr.span);
+    if handed.is_some() {
+        return Ok(discarded_value(ctx, expr.span));
+    }
 
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
