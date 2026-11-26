@@ -788,6 +788,10 @@ fn fill_optional_layers(
 ) -> (Operand, Type) {
     let mut inner = operand;
     let mut inner_ty = op_ty.clone();
+    // TODO: the next box up retains each intermediate layer while the scope
+    // temp keeps its own reference, so a resource wrapped two layers deep (a
+    // value pushed onto a `List<Option<T?>>`) has two holders until the scope
+    // ends; handing each layer to the next by `move` would keep one.
     for layer_ty in intermediate_optional_layers(op_ty, target_ty) {
         let temp = ctx.push_temp(layer_ty.clone(), span);
         let rvalue = coerce_rvalue(inner, &inner_ty, &layer_ty);

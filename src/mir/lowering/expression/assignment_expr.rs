@@ -17,8 +17,7 @@ use crate::runtime_fns::rt;
 use crate::ast::literal::Literal;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::{
-    collection_slot_type, conform_operand_to_collection_slot, emit_call_terminator,
-    lower_stored_value, ELEMENT_SLOT, MAP_VALUE_SLOT,
+    collection_slot_type, emit_call_terminator, lower_stored_value, ELEMENT_SLOT, MAP_VALUE_SLOT,
 };
 use crate::mir::lowering::expression::field_append::{
     append_in_place, appended_pieces, field_append_target, lower_field_append, same_path,
@@ -30,7 +29,8 @@ use crate::mir::lowering::helpers::{
     coerce_rvalue_in, ensure_place, release_coerced_source, resolve_arg_type,
     spellings_of_one_value, wrap_for_optional_slot,
 };
-use crate::mir::lowering::kept_parameters::{end_stored_payloads, hand_over_stored_payload};
+use crate::mir::lowering::kept_parameters::end_stored_payloads;
+use crate::mir::lowering::stored_values::{lower_kept_value, StoreOperand, StoredValue};
 
 fn assign_to_identifier(
     ctx: &mut LoweringContext,
@@ -641,26 +641,38 @@ fn assign_to_member_compound(
     Ok(())
 }
 
-/// Hands the element store an assignment `expr` makes, of the value it
-/// lowered to `val`, the matched optional's own reference in place of the
-/// payload binding it stores ([`hand_over_stored_payload`]), and answers the
-/// local it takes over, which ends moved once the store is made. Only an
-/// assignment whose value is discarded hands over (`dest` is `None`, and the
-/// type checker records the hand-over only for an assignment standing as a
-/// statement): its value would otherwise read the reference the store took.
+/// The operand the element store an assignment `expr` makes is handed for
+/// the value it lowered to `val`: the matched optional's own reference in
+/// place of the payload binding it stores ([`StoredValue::hand_over`]),
+/// whose local ends moved once the store is made. Only an assignment whose
+/// value is discarded hands over (`dest` is `None`, and the type checker
+/// records the hand-over only for an assignment standing as a statement):
+/// its value would otherwise read the reference the store took.
 fn hand_over_stored_rhs(
     ctx: &mut LoweringContext,
     expr: &Expression,
-    val: &mut Operand,
+    val: StoredValue,
     dest: Option<&Place>,
-) -> Option<crate::mir::Local> {
-    let ExpressionKind::Assignment(_, _, rhs) = &expr.node else {
-        return None;
-    };
-    if dest.is_some() {
-        return None;
+) -> StoreOperand {
+    match &expr.node {
+        ExpressionKind::Assignment(_, _, rhs) if dest.is_none() => {
+            val.hand_over(ctx, rhs, expr.span)
+        }
+        _ => val.into_store_operand(ctx, expr.span),
     }
-    hand_over_stored_payload(ctx, rhs, val, expr.span)
+}
+
+/// Releases the temp an element store that took a matched payload's
+/// reference read it from: the `Some(..)` the store wrapped it in, which no
+/// one reads once the store keeps it.
+fn release_handed_store_temp(
+    ctx: &mut LoweringContext,
+    stored: &StoreOperand,
+    span: crate::error::syntax::Span,
+) {
+    if let Some(source) = stored.source {
+        ctx.emit_temp_drop(source, stored.watermark, span);
+    }
 }
 
 /// The value of an assignment whose store took the reference its value
@@ -727,7 +739,7 @@ fn assign_to_index_map(
     obj: &Expression,
     obj_ty: &Type,
     idx: &Expression,
-    (val, val_ty): (Operand, Type),
+    val: StoredValue,
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
@@ -736,21 +748,17 @@ fn assign_to_index_map(
     let (key_op, _) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
     let key_src = key_op.place().map(|place| place.local);
     let obj_op = pending.make_own(ctx)?;
-
-    // The value arrives lowered by the assignment that owns it, so it is the one
-    // stored operand that never passed through `lower_stored_value`; it is read
-    // at the map's own value width here instead.
-    let (mut val, _) =
-        conform_operand_to_collection_slot(ctx, val, val_ty, obj_ty, MAP_VALUE_SLOT, expr.span);
-    let handed = hand_over_stored_rhs(ctx, expr, &mut val, dest.as_ref());
+    let stored = hand_over_stored_rhs(ctx, expr, val, dest.as_ref());
+    let val = stored.op.clone();
 
     let set_result = emit_map_set_call(ctx, obj_op, key_op, val.clone(), expr)?;
-    end_stored_payloads(ctx, [handed], expr.span);
+    end_stored_payloads(ctx, [stored.handed], expr.span);
     if let Some(src) = key_src {
         ctx.emit_temp_drop(src, key_watermark, idx.span);
     }
     TemporaryRoot::release(receiver, ctx, expr.span);
-    if handed.is_some() {
+    if stored.handed.is_some() {
+        release_handed_store_temp(ctx, &stored, expr.span);
         return Ok(Operand::Copy(Place::new(set_result)));
     }
 
@@ -965,7 +973,7 @@ fn assign_to_index_array(
     obj: &Expression,
     idx: &Expression,
     op: &crate::ast::operator::AssignmentOp,
-    val: Operand,
+    val: StoredValue,
     elem_ty: Option<&Type>,
     expr: &Expression,
     dest: Option<Place>,
@@ -986,30 +994,33 @@ fn assign_to_index_array(
     let mut target_place = obj_place;
     target_place.projection.push(PlaceElem::index(index_local));
 
-    let mut val = val;
-    let mut handed = None;
-    match op {
+    let stored = match op {
         crate::ast::operator::AssignmentOp::Assign => {
-            handed = hand_over_stored_rhs(ctx, expr, &mut val, dest.as_ref());
+            let stored = hand_over_stored_rhs(ctx, expr, val, dest.as_ref());
             ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(target_place, Rvalue::Use(val.clone())),
+                kind: MirStatementKind::Assign(target_place, Rvalue::Use(stored.op.clone())),
                 span: expr.span,
             });
-            end_stored_payloads(ctx, [handed], expr.span);
+            end_stored_payloads(ctx, [stored.handed], expr.span);
+            stored
         }
         crate::ast::operator::AssignmentOp::AssignAdd
         | crate::ast::operator::AssignmentOp::AssignSub
         | crate::ast::operator::AssignmentOp::AssignMul
         | crate::ast::operator::AssignmentOp::AssignDiv
         | crate::ast::operator::AssignmentOp::AssignMod => {
-            assign_to_index_compound(ctx, &target_place, op, val.clone(), elem_ty, expr)?;
+            let stored = val.into_store_operand(ctx, expr.span);
+            assign_to_index_compound(ctx, &target_place, op, stored.op.clone(), elem_ty, expr)?;
+            stored
         }
-    }
+    };
+    let val = stored.op.clone();
 
     // The write is done, so the copy taken to reach through has nothing left to
     // do.
     TemporaryRoot::release(receiver, ctx, expr.span);
-    if handed.is_some() {
+    if stored.handed.is_some() {
+        release_handed_store_temp(ctx, &stored, expr.span);
         return Ok(discarded_value(ctx, expr.span));
     }
 
@@ -1185,14 +1196,19 @@ fn lower_assignment_store(
                                 ctx, obj, obj_ty, idx, op, rhs, expr, dest,
                             );
                         }
-                        let val = lower_stored_value(ctx, rhs, obj_ty, MAP_VALUE_SLOT)?;
+                        let val = lower_kept_value(ctx, rhs, obj_ty, MAP_VALUE_SLOT)?;
                         return assign_to_index_map(ctx, obj, obj_ty, idx, val, expr, dest);
                     }
                 }
                 let is_plain_write = matches!(op, crate::ast::operator::AssignmentOp::Assign);
                 let val = match obj_ty.as_ref().filter(|_| is_plain_write) {
-                    Some(obj_ty) => lower_stored_value(ctx, rhs, obj_ty, ELEMENT_SLOT)?.0,
-                    None => lower_expression(ctx, rhs, None)?,
+                    Some(obj_ty) => lower_kept_value(ctx, rhs, obj_ty, ELEMENT_SLOT)?,
+                    None => {
+                        let watermark = ctx.body.local_decls.len();
+                        let op = lower_expression(ctx, rhs, None)?;
+                        let ty = op.ty(&ctx.body).clone();
+                        StoredValue::fitted(op, ty, watermark)
+                    }
                 };
                 // A compound write combines into a value of the element's own
                 // type, so the element type travels with the call the way a

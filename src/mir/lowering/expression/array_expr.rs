@@ -113,7 +113,7 @@ fn hand_over_element_payloads(
 }
 
 /// Moves `op`, of type `ty`, into a temp and answers the temp's read.
-fn spill_to_element_temp(
+pub(crate) fn spill_to_element_temp(
     ctx: &mut LoweringContext,
     (op, ty): (Operand, Type),
     span: Span,

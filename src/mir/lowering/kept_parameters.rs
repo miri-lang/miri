@@ -567,9 +567,10 @@ fn hand_over_matched_payloads(
 /// container keeps the optional's own reference rather than a retained copy
 /// beside it. Answers the local the store takes over, which
 /// [`end_handed_over`] ends, moved, after the call; `None`, rewriting
-/// nothing, when `op` is not the binding's own read (a value wrapped for an
-/// optional slot, or one this copy of the body does not consume), and the
-/// store funds a copy as before.
+/// nothing, when `op` is not the binding's own read (one this copy of the
+/// body does not consume), and the store funds a copy as before. A value
+/// headed for an optional slot reaches here unwrapped: its `Some(..)` is
+/// built around what this hands over (`StoredValue::hand_over`).
 pub(crate) fn hand_over_stored_payload(
     ctx: &mut LoweringContext,
     value: &Expression,
@@ -578,11 +579,6 @@ pub(crate) fn hand_over_stored_payload(
 ) -> Option<Local> {
     let value = variable::argument_value(value);
     let scrutinee = ctx.type_checker.ended_scrutinee(value)?;
-    // TODO: a payload wrapped for an optional slot (`r` pushed onto a
-    // `List<T?>`) is no whole read of the binding, so the store is handed a
-    // retained copy of the payload while the optional keeps its own; handing
-    // over the optional itself, which already is `Some(r)`, would keep one
-    // holder.
     let payload = whole_local_copied(op)?;
     let is_pending_read = matches!(
         ctx.consumed_reads.get(&value.id),

@@ -48,8 +48,8 @@ pub(crate) use super::kernel_launch::try_lower_kernel_launch;
 use super::expression::function_reference::{adapt_runtime_slot_closures, SlotCall};
 use super::generic_method_calls::{generic_method_symbol, GenericMethodSite};
 use super::kept_parameters::{
-    end_stored_payloads, hand_over_kept_arguments, hand_over_stored_payload,
-    release_after_kept_call, value_call_convention, HandedOver, KeptCall,
+    end_stored_payloads, hand_over_kept_arguments, release_after_kept_call, value_call_convention,
+    HandedOver, KeptCall,
 };
 use super::method_dispatch::{
     residency_specialize_call, static_method_call_args, with_mutated_receiver,
@@ -57,6 +57,7 @@ use super::method_dispatch::{
 use super::out_places::{Restores, TakenArguments};
 use super::runtime_writes::{self, RuntimeCallee};
 use super::sequencing::lower_operand;
+use super::stored_values::lower_kept_value;
 use super::written_receiver::{PendingReceiver, Receiver};
 
 pub fn lower_call(
@@ -915,15 +916,12 @@ pub(crate) fn emit_list_push(
     item_arg: &Expression,
     span: &Span,
 ) -> Result<Operand, LoweringError> {
-    let item_watermark = ctx.body.local_decls.len();
-    let (mut item_op, _) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
-
-    let item_op_src = item_op.place().map(|place| place.local);
+    let item = lower_kept_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
     let obj_op = receiver.make_own(ctx)?;
-    let handed = hand_over_stored_payload(ctx, item_arg, &mut item_op, *span);
+    let item = item.hand_over(ctx, item_arg, *span);
     let func_op = ctx.declared_runtime_operand(rt::LIST_PUSH, *span)?;
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
-    let args = vec![obj_op, item_op];
+    let args = vec![obj_op, item.op];
     emit_call_terminator(
         ctx,
         func_op,
@@ -933,9 +931,9 @@ pub(crate) fn emit_list_push(
         Place::new(dummy_dest),
         *span,
     );
-    end_stored_payloads(ctx, [handed], *span);
-    if let Some(src) = item_op_src {
-        ctx.emit_temp_drop(src, item_watermark, item_arg.span);
+    end_stored_payloads(ctx, [item.handed], *span);
+    if let Some(src) = item.source {
+        ctx.emit_temp_drop(src, item.watermark, item_arg.span);
     }
     Ok(Operand::Copy(Place::new(dummy_dest)))
 }
@@ -1012,14 +1010,28 @@ pub(super) fn lower_stored_value(
     let Some(slot_ty) = collection_slot_type(ctx, collection_ty, slot) else {
         return Ok((op, op_ty));
     };
-    let (op, op_ty) = wrap_for_optional_slot(ctx, op, op_ty, &slot_ty, watermark, value_arg.span);
-    Ok(conform_operand_to_slot(
+    Ok(fit_to_slot(
         ctx,
-        op,
-        op_ty,
+        (op, op_ty),
         &slot_ty,
+        watermark,
         value_arg.span,
     ))
+}
+
+/// Convert `op`, of type `op_ty`, to the slot type `slot_ty` a collection
+/// stores it as: wrapped as `Some` for an optional slot, widened for a wider
+/// number. A wrap releases the temp it read when the value's lowering, past
+/// `watermark`, created it.
+pub(super) fn fit_to_slot(
+    ctx: &mut LoweringContext,
+    (op, op_ty): (Operand, Type),
+    slot_ty: &Type,
+    watermark: usize,
+    span: Span,
+) -> (Operand, Type) {
+    let (op, op_ty) = wrap_for_optional_slot(ctx, op, op_ty, slot_ty, watermark, span);
+    conform_operand_to_slot(ctx, op, op_ty, slot_ty, span)
 }
 
 /// Convert `op` to the collection's declared slot type when both are numbers of
@@ -1156,19 +1168,15 @@ pub(crate) fn emit_map_set(
     span: &Span,
 ) -> Result<Operand, LoweringError> {
     let watermark = ctx.body.local_decls.len();
-    let (mut key_op, _) = lower_stored_value(ctx, key_arg, obj_ty, ELEMENT_SLOT)?;
-    let key_src = key_op.place().map(|place| place.local);
-    let (mut value_op, _) = lower_stored_value(ctx, value_arg, obj_ty, MAP_VALUE_SLOT)?;
-    let value_src = value_op.place().map(|place| place.local);
+    let key = lower_kept_value(ctx, key_arg, obj_ty, ELEMENT_SLOT)?;
+    let value = lower_kept_value(ctx, value_arg, obj_ty, MAP_VALUE_SLOT)?;
     let obj_op = receiver.make_own(ctx)?;
-    let handed = [
-        hand_over_stored_payload(ctx, key_arg, &mut key_op, *span),
-        hand_over_stored_payload(ctx, value_arg, &mut value_op, *span),
-    ];
+    let key = key.hand_over(ctx, key_arg, *span);
+    let value = value.hand_over(ctx, value_arg, *span);
 
     let func_op = ctx.declared_runtime_operand(rt::MAP_SET, *span)?;
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
-    let args = vec![obj_op, key_op, value_op];
+    let args = vec![obj_op, key.op, value.op];
     emit_call_terminator(
         ctx,
         func_op,
@@ -1178,11 +1186,11 @@ pub(crate) fn emit_map_set(
         Place::new(dummy_dest),
         *span,
     );
-    end_stored_payloads(ctx, handed, *span);
-    if let Some(src) = key_src {
+    end_stored_payloads(ctx, [key.handed, value.handed], *span);
+    if let Some(src) = key.source {
         ctx.emit_temp_drop(src, watermark, key_arg.span);
     }
-    if let Some(src) = value_src {
+    if let Some(src) = value.source {
         ctx.emit_temp_drop(src, watermark, value_arg.span);
     }
     Ok(Operand::Copy(Place::new(dummy_dest)))
@@ -1220,18 +1228,16 @@ pub(crate) fn emit_set_add(
     dest: Option<Place>,
     span: &Span,
 ) -> Result<Operand, LoweringError> {
-    let watermark = ctx.body.local_decls.len();
-    let (mut elem_op, _) = lower_stored_value(ctx, elem_arg, obj_ty, ELEMENT_SLOT)?;
-    let elem_src = elem_op.place().map(|place| place.local);
+    let elem = lower_kept_value(ctx, elem_arg, obj_ty, ELEMENT_SLOT)?;
     let obj_op = receiver.make_own(ctx)?;
-    let handed = hand_over_stored_payload(ctx, elem_arg, &mut elem_op, *span);
+    let elem = elem.hand_over(ctx, elem_arg, *span);
 
     // The intrinsic reports whether the element was newly inserted, so the
     // result has to land in the caller's destination when it asked for one.
     let destination = dest
         .unwrap_or_else(|| Place::new(ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span)));
     let func_op = ctx.declared_runtime_operand(rt::SET_ADD, *span)?;
-    let args = vec![obj_op, elem_op];
+    let args = vec![obj_op, elem.op];
     emit_call_terminator(
         ctx,
         func_op,
@@ -1241,9 +1247,9 @@ pub(crate) fn emit_set_add(
         destination.clone(),
         *span,
     );
-    end_stored_payloads(ctx, [handed], *span);
-    if let Some(src) = elem_src {
-        ctx.emit_temp_drop(src, watermark, elem_arg.span);
+    end_stored_payloads(ctx, [elem.handed], *span);
+    if let Some(src) = elem.source {
+        ctx.emit_temp_drop(src, elem.watermark, elem_arg.span);
     }
     Ok(Operand::Copy(destination))
 }
@@ -1282,14 +1288,12 @@ fn emit_list_insert(
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
     let index_op = lower_operand(ctx, index_arg)?;
-    let (mut item_op, _) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
-
-    let item_op_src = item_op.place().map(|place| place.local);
+    let item = lower_kept_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
     let obj_op = receiver.make_own(ctx)?;
-    let handed = hand_over_stored_payload(ctx, item_arg, &mut item_op, *span);
+    let item = item.hand_over(ctx, item_arg, *span);
     let func_op = ctx.declared_runtime_operand(rt::LIST_INSERT, *span)?;
     let result_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
-    let args = vec![obj_op, index_op, item_op];
+    let args = vec![obj_op, index_op, item.op];
     emit_call_terminator(
         ctx,
         func_op,
@@ -1299,8 +1303,8 @@ fn emit_list_insert(
         Place::new(result_temp),
         *span,
     );
-    end_stored_payloads(ctx, [handed], *span);
-    if let Some(src) = item_op_src {
+    end_stored_payloads(ctx, [item.handed], *span);
+    if let Some(src) = item.source {
         ctx.emit_temp_drop(src, item_watermark, item_arg.span);
     }
     Ok(Some(Operand::Copy(Place::new(result_temp))))

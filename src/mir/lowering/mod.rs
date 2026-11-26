@@ -45,6 +45,7 @@ pub(crate) mod sequencing;
 pub mod slot_adapters;
 pub mod statement;
 mod stepped_range;
+pub(crate) mod stored_values;
 pub mod variable;
 pub mod vtable_demand;
 mod written_parameters;
