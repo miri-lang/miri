@@ -3,6 +3,7 @@
 
 pub mod aggregate_resources;
 pub mod aliasing;
+pub mod assignment_values;
 pub mod borrowed_locals;
 pub mod classes;
 pub mod cloneable;

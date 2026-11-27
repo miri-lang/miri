@@ -58,6 +58,7 @@ use super::vtable_selectors::DispatchTable;
 use super::ModuleId;
 use crate::ast::captures::collect_lambda_captures;
 
+mod assignment_values;
 mod copy_sites;
 mod kept_defaults;
 mod lending;
@@ -1334,7 +1335,8 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.check_expr(r, consumed);
             }
             ExpressionKind::Assignment(lhs, _, rhs) => {
-                self.check_assignment_expr((lhs, rhs), ValueUse::Read, consumed)
+                self.check_assignment_expr((lhs, rhs), ValueUse::Read, consumed);
+                self.refuse_reading_a_resource_store(expr, lhs.expression());
             }
             ExpressionKind::Conditional(then, cond, else_, _) => {
                 self.check_conditional_expr(then, cond, else_.as_deref(), consumed)
@@ -1429,7 +1431,9 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// A payload binding the store hands on, into a variable, a field or an
     /// element, ends its matched scrutinee only where the assignment's value
     /// is discarded: the store then takes the scrutinee's own reference,
-    /// which leaves no value for the assignment to give back.
+    /// which leaves no value for the assignment to give back. Reading the
+    /// value of a store of a resource is refused where it is read
+    /// ([`Self::refuse_reading_a_resource_store`]).
     fn check_assignment_expr(
         &mut self,
         (lhs, rhs): (&LeftHandSideExpression, &Expression),
@@ -2000,6 +2004,10 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// sound only for a value this scope owns: a local it declared, which the
     /// call then consumes, or a call result nothing else holds. Any other
     /// receiver is still held by someone who will release it again.
+    // TODO: a `let` bound to an element, field or payload read (`let y =
+    // l[0]`) is in `owned_locals` here, but lowering makes it a borrow, so
+    // `y.drop()` is accepted and runs nothing; the borrow should be refused
+    // like any other, and the scope-exit warning should not fire on it.
     fn check_drop_hook_call(
         &mut self,
         receiver: &Expression,

@@ -1,0 +1,18 @@
+// summary: Accepted counterpart of MER_OWN_012: the assignment stands as a statement and the element is passed after it.
+// expect-stdout: released 9
+// expect-stdout: 1
+// expect-stdout: released 1
+use system.collections.list
+
+class Token
+    var id int
+    fn drop(self)
+        println(f"released {self.id}")
+
+fn show(token Token)
+    println(f"{token.id}")
+
+fn main()
+    var tokens = List([Token(id: 9)])
+    tokens[0] = Token(id: 1)
+    show(tokens[0])

@@ -765,6 +765,7 @@ A **loop binding is the element it iterates**: `for e in es` binds `es[i]`. Call
 - a write nobody can read: a method that writes its receiver called on a temporary that is then discarded, a copy written and never read, and a method that adds or removes elements of the collection a loop is walking, called through the loop's binding;
 - a call that lends a value containing a place the same call writes (`world.entities[0].strike(world)`, where `strike` writes its receiver and reads `world`).
 - a resource a `match` arm's pattern reads out of the matched value, used after the arm writes that value or a place containing it — an assignment, an `out` argument, or a method that writes its receiver — or handed to the call making that write: the binding borrows the payload and the write releases it. Use the binding before the write, or write after the match; a binding read only before the write stays a borrow to its last use, and a write to a sibling field leaves it standing.
+- reading the value of an assignment whose target's type holds a resource (`let y = (l[0] = a)`, `show(x = a)`, `p = q = a`): the target keeps what the assignment stores, so the value would be a second holder of it. Write the assignment as a statement of its own, then read the target (`l[0] = a`, then `let y = l[0]`); the value of an assignment that stores a plain value is read as before.
 
 ### `out` Parameters
 

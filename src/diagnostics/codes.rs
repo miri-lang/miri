@@ -1152,7 +1152,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
-    // OWN — Ownership and resource management (11 codes: 001-011)
+    // OWN — Ownership and resource management (12 codes: 001-012)
     "OWN",
     "001",
     OwnResourceNotConsumedAtScopeExit,
@@ -1230,6 +1230,13 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
+    "OWN",
+    "012",
+    OwnResourceStoreValueRead,
+    "Value of a Resource Store Read",
+    Severity::Error,
+    false,
+    FixSafety::LocalEdit,
     // MIR — MIR lowering (18 codes: 001-018)
     "MIR",
     "001",
