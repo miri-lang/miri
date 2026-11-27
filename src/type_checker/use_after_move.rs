@@ -101,6 +101,36 @@ enum ValueUse {
     Discarded,
 }
 
+/// A literal whose elements are places: a resource binding written as one
+/// of them moves into the literal.
+#[derive(Clone, Copy)]
+enum StoringLiteral {
+    Array,
+    Tuple,
+    Set,
+    Map,
+}
+
+impl StoringLiteral {
+    /// How a diagnostic names the literal.
+    fn spelling(self) -> &'static str {
+        match self {
+            StoringLiteral::Array => "array literal",
+            StoringLiteral::Tuple => "tuple literal",
+            StoringLiteral::Set => "set literal",
+            StoringLiteral::Map => "map literal",
+        }
+    }
+
+    /// How a diagnostic names one of the places the literal stores.
+    fn slot(self) -> &'static str {
+        match self {
+            StoringLiteral::Array | StoringLiteral::Tuple | StoringLiteral::Set => "element",
+            StoringLiteral::Map => "entry",
+        }
+    }
+}
+
 /// How a diagnostic names what consumed the argument.
 impl std::fmt::Display for Sink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1309,24 +1339,29 @@ impl<'a> UseAfterMoveChecker<'a> {
                     self.check_expr(e, consumed);
                 }
             }
-            // TODO: a resource binding written into a tuple, set or map
-            // literal (`(a, 1)`, `{a}`, `{1: a}`) is only read here, so it
-            // stays usable after the literal and the literal retains a
-            // reference beside it; each element is a place the binding should
-            // move into, as an array literal's is (`consume_array_elements`).
-            ExpressionKind::FormattedString(parts, _)
-            | ExpressionKind::List(parts)
-            | ExpressionKind::Set(parts)
-            | ExpressionKind::Tuple(parts) => self.check_each(parts, consumed),
+            // A list literal is built only by the compiler, never parsed from
+            // source (`[a]` is an array literal), so its elements are read.
+            ExpressionKind::FormattedString(parts, _) | ExpressionKind::List(parts) => {
+                self.check_each(parts, consumed)
+            }
             ExpressionKind::Array(elems, _) => {
                 self.check_each(elems, consumed);
-                self.consume_array_elements(elems, consumed);
+                self.consume_literal_elements(StoringLiteral::Array, elems, consumed);
+            }
+            ExpressionKind::Tuple(elems) => {
+                self.check_each(elems, consumed);
+                self.consume_literal_elements(StoringLiteral::Tuple, elems, consumed);
+            }
+            ExpressionKind::Set(elems) => {
+                self.check_each(elems, consumed);
+                self.consume_literal_elements(StoringLiteral::Set, elems, consumed);
             }
             ExpressionKind::Map(pairs) => {
-                for (k, v) in pairs {
-                    self.check_expr(k, consumed);
-                    self.check_expr(v, consumed);
+                let entries = pairs.iter().flat_map(|(k, v)| [k, v]);
+                for part in entries.clone() {
+                    self.check_expr(part, consumed);
                 }
+                self.consume_literal_elements(StoringLiteral::Map, entries, consumed);
             }
             ExpressionKind::Match(scrutinee, branches) => {
                 self.check_match_expr(scrutinee, branches, consumed);
@@ -1419,19 +1454,24 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.end_bindings_assigned(target, consumed);
     }
 
-    /// Marks each resource binding an array literal's element names moved
-    /// into the literal: an element is a place, so writing a resource there
-    /// moves it as storing it in any other place does. A payload binding so
-    /// written ends its matched scrutinee, whose own reference the literal
-    /// takes.
+    /// Marks each resource binding a `literal`'s element (a map literal's
+    /// key or value) names moved into the literal: an element is a place, so
+    /// writing a resource there moves it as storing it in any other place
+    /// does. A payload binding so written ends its matched scrutinee, whose
+    /// own reference the literal takes.
     /// A resource written as two elements would have two holders, and is
     /// refused at the second.
-    fn consume_array_elements(&mut self, elements: &[Expression], consumed: &mut Consumed) {
+    fn consume_literal_elements<'e>(
+        &mut self,
+        literal: StoringLiteral,
+        elements: impl IntoIterator<Item = &'e Expression> + Clone,
+        consumed: &mut Consumed,
+    ) {
         let consumed_before: HashSet<String> = consumed.keys().cloned().collect();
-        for element in elements {
-            self.consume_stored_binding(("array literal", true), element, consumed);
+        for element in elements.clone() {
+            self.consume_stored_binding((literal.spelling(), true), element, consumed);
         }
-        let refusal = written_again_error;
+        let refusal = |name: &str, span| written_again_error(literal, name, span);
         self.refuse_a_resource_kept_twice(elements, refusal, (&consumed_before, consumed));
     }
 
@@ -2577,13 +2617,14 @@ fn passed_again_error(name: &str, fn_name: &str, span: Span) -> TypeError {
     }
 }
 
-/// The refusal of a resource written as two elements of one array literal.
-fn written_again_error(name: &str, span: Span) -> TypeError {
+/// The refusal of a resource written as two elements of one `literal`.
+fn written_again_error(literal: StoringLiteral, name: &str, span: Span) -> TypeError {
+    let (spelling, slot) = (literal.spelling(), literal.slot());
     TypeError {
         kind: TypeErrorKind::Coded {
             code: DiagnosticCode::OwnUseOfMovedValue,
             message: format!(
-                "'{name}' is written into the array literal more than once, and each element keeps it: a resource has one owner\n  fix: write '{name}' into the literal once, and build the other element as a value of its own"
+                "'{name}' is written into the {spelling} more than once, and each {slot} keeps it: a resource has one owner\n  fix: write '{name}' into the literal once, and build the other {slot} as a value of its own"
             ),
             help: None,
             expected: None,

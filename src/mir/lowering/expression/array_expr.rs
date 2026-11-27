@@ -4,19 +4,17 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::Type;
 use crate::error::lowering::LoweringError;
-use crate::error::syntax::Span;
-use crate::mir::{AggregateKind, Local, Operand, Place, Rvalue, StatementKind as MirStatementKind};
+use crate::mir::{AggregateKind, Operand, Place, Rvalue, StatementKind as MirStatementKind};
 
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::dispatch::{coerce_arg_to_declared, collection_slot_type, ELEMENT_SLOT};
-use crate::mir::lowering::helpers::resolve_type;
-use crate::mir::lowering::kept_parameters::{end_stored_payloads, hand_over_stored_payload};
-use crate::mir::lowering::sequencing::lower_operand;
-use crate::mir::lowering::variable::{
-    canonical_declared_type, consumed_operand_locals, end_consumed_binding,
+use crate::mir::lowering::dispatch::{collection_slot_type, ELEMENT_SLOT};
+use crate::mir::lowering::expression::literal_elements::{
+    end_moved_elements, lower_aggregate_elements, LoweredElements,
 };
+use crate::mir::lowering::helpers::resolve_type;
+use crate::mir::lowering::kept_parameters::end_stored_payloads;
+use crate::mir::lowering::variable::canonical_declared_type;
 
 pub(crate) fn lower_array_expr(
     ctx: &mut LoweringContext,
@@ -35,16 +33,8 @@ pub(crate) fn lower_array_expr(
     // would hold a bare word where its readers expect an optional.
     let element_ty = collection_slot_type(ctx, &ty, ELEMENT_SLOT)
         .map(|element| canonical_declared_type(ctx.type_checker, &element));
-    let mut ops: Vec<Operand> = Vec::with_capacity(elements.len());
-    for element in elements {
-        let watermark = ctx.body.local_decls.len();
-        let op = lower_operand(ctx, element)?;
-        ops.push(match &element_ty {
-            Some(target) => coerce_arg_to_declared(ctx, op, element, target, watermark),
-            None => op,
-        });
-    }
-    let handed = hand_over_element_payloads(ctx, elements, &mut ops);
+    let slots = vec![element_ty; elements.len()];
+    let LoweredElements { ops, handed } = lower_aggregate_elements(ctx, elements, &slots)?;
 
     let result = if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
@@ -71,9 +61,7 @@ pub(crate) fn lower_array_expr(
     // ends here, and a matched optional whose payload the literal took ends
     // moved.
     end_stored_payloads(ctx, handed, expr.span);
-    for (_, binding) in consumed_operand_locals(ctx, None, elements)? {
-        end_consumed_binding(ctx, binding, expr.span);
-    }
+    end_moved_elements(ctx, elements, expr.span)?;
     // Release managed element temps — the Aggregate IncRef transferred ownership
     // into the array, so the original temp references are no longer needed.
     for op in &ops {
@@ -83,45 +71,4 @@ pub(crate) fn lower_array_expr(
     }
 
     Ok(result)
-}
-
-/// Hands each element that reads a payload binding matched out of an
-/// optional the literal ends the optional's own reference
-/// ([`hand_over_stored_payload`]), and answers the locals that ends, which
-/// end moved once the literal is built. Every element is lowered first, so a
-/// later element may still read a payload binding an earlier one stores. The
-/// reference is moved into an element temp of its own: the literal funds
-/// each element it stores and its temps are released after it, so the
-/// element keeps the one reference the optional held.
-fn hand_over_element_payloads(
-    ctx: &mut LoweringContext,
-    elements: &[Expression],
-    ops: &mut [Operand],
-) -> Vec<Option<Local>> {
-    let mut handed = Vec::with_capacity(elements.len());
-    for (element, op) in elements.iter().zip(ops.iter_mut()) {
-        // The binding's own read, before the hand-over re-spells it as a
-        // projection of the optional, carries the element's type.
-        let ty = op.ty(&ctx.body).clone();
-        let taken = hand_over_stored_payload(ctx, element, op, element.span);
-        if taken.is_some() {
-            *op = spill_to_element_temp(ctx, (op.clone(), ty), element.span);
-        }
-        handed.push(taken);
-    }
-    handed
-}
-
-/// Moves `op`, of type `ty`, into a temp and answers the temp's read.
-pub(crate) fn spill_to_element_temp(
-    ctx: &mut LoweringContext,
-    (op, ty): (Operand, Type),
-    span: Span,
-) -> Operand {
-    let temp = ctx.push_temp(ty, span);
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(op)),
-        span,
-    });
-    Operand::Copy(Place::new(temp))
 }

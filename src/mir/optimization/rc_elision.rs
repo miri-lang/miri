@@ -620,6 +620,14 @@ fn owned_transfers_from(
         let Some(local) = arg.bare_local() else {
             continue;
         };
+        // TODO: a sibling argument reading a field of `local` (`m.set(t.id,
+        // t)` passes `_t.0` beside `_t`) counts as a second mention, so the
+        // retain funding the store survives and a resource has two holders
+        // while the call runs; the aggregate rule in `transfers_local` refuses
+        // `(u, u.id)` and `Pair(t: u, n: u.id)` the same way. A call or an
+        // aggregate reads every operand before anything is released, so a
+        // projection read beside the moved local could be accepted, or
+        // lowering could read it into a temp before the store.
         let is_passed_once = args
             .iter()
             .filter(|other| mentions(local, |mention| mention.visit_operand(other, BasicBlock(0))))

@@ -57,7 +57,7 @@ use super::method_dispatch::{
 use super::out_places::{Restores, TakenArguments};
 use super::runtime_writes::{self, RuntimeCallee};
 use super::sequencing::lower_operand;
-use super::stored_values::lower_kept_value;
+use super::stored_values::{lower_kept_value, StoredValue};
 use super::written_receiver::{PendingReceiver, Receiver};
 
 pub fn lower_call(
@@ -1167,9 +1167,49 @@ pub(crate) fn emit_map_set(
     value_arg: &Expression,
     span: &Span,
 ) -> Result<Operand, LoweringError> {
+    let entry = lower_map_entry(ctx, obj_ty, (key_arg, value_arg))?;
+    store_map_entry(ctx, receiver, entry, span)
+}
+
+/// A map entry lowered for its slots, waiting to be stored
+/// ([`store_map_entry`]).
+pub(crate) struct LoweredEntry<'e> {
+    key: (StoredValue, &'e Expression),
+    value: (StoredValue, &'e Expression),
+    /// The local count before the entry was lowered.
+    watermark: usize,
+}
+
+/// Lowers `key_arg` → `value_arg` for the slots of the map type `obj_ty`,
+/// without storing it.
+pub(crate) fn lower_map_entry<'e>(
+    ctx: &mut LoweringContext,
+    obj_ty: &Type,
+    (key_arg, value_arg): (&'e Expression, &'e Expression),
+) -> Result<LoweredEntry<'e>, LoweringError> {
     let watermark = ctx.body.local_decls.len();
     let key = lower_kept_value(ctx, key_arg, obj_ty, ELEMENT_SLOT)?;
     let value = lower_kept_value(ctx, value_arg, obj_ty, MAP_VALUE_SLOT)?;
+    Ok(LoweredEntry {
+        key: (key, key_arg),
+        value: (value, value_arg),
+        watermark,
+    })
+}
+
+/// Stores a lowered `entry` into the map `receiver` through
+/// `miri_rt_map_set`, which keeps both its key and its value.
+pub(crate) fn store_map_entry(
+    ctx: &mut LoweringContext,
+    receiver: Receiver<'_>,
+    entry: LoweredEntry<'_>,
+    span: &Span,
+) -> Result<Operand, LoweringError> {
+    let LoweredEntry {
+        key: (key, key_arg),
+        value: (value, value_arg),
+        watermark,
+    } = entry;
     let obj_op = receiver.make_own(ctx)?;
     let key = key.hand_over(ctx, key_arg, *span);
     let value = value.hand_over(ctx, value_arg, *span);
@@ -1229,6 +1269,19 @@ pub(crate) fn emit_set_add(
     span: &Span,
 ) -> Result<Operand, LoweringError> {
     let elem = lower_kept_value(ctx, elem_arg, obj_ty, ELEMENT_SLOT)?;
+    store_set_element(ctx, receiver, (elem, elem_arg), dest, span)
+}
+
+/// Adds `elem`, which `elem_arg` was lowered to for the set's element slot,
+/// to the set `receiver` through `miri_rt_set_add`, which keeps it, and
+/// answers whether it was newly inserted.
+pub(crate) fn store_set_element(
+    ctx: &mut LoweringContext,
+    receiver: Receiver<'_>,
+    (elem, elem_arg): (StoredValue, &Expression),
+    dest: Option<Place>,
+    span: &Span,
+) -> Result<Operand, LoweringError> {
     let obj_op = receiver.make_own(ctx)?;
     let elem = elem.hand_over(ctx, elem_arg, *span);
 

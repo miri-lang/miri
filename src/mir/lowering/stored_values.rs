@@ -24,7 +24,7 @@ use crate::error::syntax::Span;
 use crate::mir::{Local, Operand};
 
 use super::dispatch::{collection_slot_type, fit_to_slot, lower_stored_value};
-use super::expression::array_expr::spill_to_element_temp;
+use super::expression::literal_elements::spill_to_element_temp;
 use super::helpers::{coercion_wraps_in_some, resolve_arg_type};
 use super::kept_parameters::hand_over_stored_payload;
 use super::sequencing::lower_operand;

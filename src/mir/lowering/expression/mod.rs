@@ -31,6 +31,7 @@ pub mod identifier_expr;
 pub mod index_expr;
 pub mod lambda_expr;
 pub mod list_expr;
+pub mod literal_elements;
 pub mod literal_expr;
 pub mod logical_expr;
 pub mod map_expr;

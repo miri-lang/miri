@@ -1240,3 +1240,348 @@ fn main()
         "inner none true\nafter",
     );
 }
+
+/// A resource that a set can hold: a hashed key whose release runs a hook.
+const KEY: &str = r#"
+class Key
+    public var id int
+    fn equals(self, other Key) bool: return self.id == other.id
+    fn hash(self) int: return self.id
+    fn drop(self)
+        println(f"released key {self.id}")
+"#;
+
+fn with_token_and_key(program: &str) -> String {
+    format!("{TOKEN}{KEY}{program}")
+}
+
+#[test]
+fn a_resource_written_into_a_tuple_literal_moves_there() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    let t = Token(id: 1)
+    let l = (t, 7)
+    println(f"held {l.0.id} {l.1}")
+"#,
+        ),
+        "held 1 7\nreleased 1",
+    );
+}
+
+#[test]
+fn a_resource_read_after_a_tuple_literal_moved_it_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    let t = Token(id: 1)
+    let l = (t, 1)
+    println(f"{l.1}")
+    println(f"{t.id}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+#[test]
+fn a_resource_written_into_a_tuple_literal_twice_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    let t = Token(id: 1)
+    let l = (t, t)
+    println(f"{l.0.id}")
+"#,
+        ),
+        "is written into the tuple literal more than once",
+    );
+}
+
+#[test]
+fn a_payload_written_into_a_tuple_literal_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    let p Token? = Some(Token(id: 1))
+    match p
+        Some(r)
+            let l = (Token(id: 5), r)
+            println(f"held {l.1.id}")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "held 1\nreleased 5\nreleased 1\nafter",
+    );
+}
+
+#[test]
+fn an_optional_read_after_its_payload_was_written_into_a_tuple_literal_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    let p Token? = Some(Token(id: 0))
+    match p
+        Some(r)
+            let l = (r, 1)
+            println(f"{l.1}")
+        None: println("none")
+    println(f"{p.is_some()}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+/// [`assert_one_holder_output`] for a program printing `expected` in any
+/// order: a set or a map releases its elements in an unspecified one.
+fn assert_one_holder_lines(code: &str, expected: &[&str]) {
+    let result = miri_run_with_env(code, "MIRI_HOOK_CHECK", "1");
+    assert!(
+        result.success,
+        "expected a clean run under MIRI_HOOK_CHECK=1:\n{}",
+        result.output()
+    );
+    let mut lines: Vec<&str> = result.stdout.lines().collect();
+    lines.sort_unstable();
+    let mut expected = expected.to_vec();
+    expected.sort_unstable();
+    assert_eq!(lines, expected, "{}", result.stderr);
+}
+
+#[test]
+fn a_resource_written_into_a_set_literal_moves_there() {
+    assert_one_holder_lines(
+        &with_token_and_key(
+            r#"
+fn main()
+    let k = Key(id: 1)
+    let s = {k, Key(id: 2)}
+    println(f"held {s.length()}")
+"#,
+        ),
+        &["held 2", "released key 1", "released key 2"],
+    );
+}
+
+#[test]
+fn an_entry_read_beside_a_resource_a_map_literal_moves_sees_it_whole() {
+    assert_one_holder_lines(
+        &with_token_and_key(
+            r#"
+use system.collections.map
+
+fn main()
+    let t = Token(id: 1)
+    let m = {1: t, t.id + 1: Token(id: t.id + 1)}
+    println(f"held {m.length()} {m[2].id}")
+"#,
+        ),
+        &["held 2 2", "released 1", "released 2"],
+    );
+}
+
+#[test]
+fn a_resource_read_after_a_set_literal_moved_it_is_refused() {
+    assert_compiler_error(
+        &with_token_and_key(
+            r#"
+fn main()
+    let k = Key(id: 1)
+    let s = {k}
+    println(f"{s.length()}")
+    println(f"{k.id}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+#[test]
+fn a_resource_written_into_a_set_literal_twice_is_refused() {
+    assert_compiler_error(
+        &with_token_and_key(
+            r#"
+fn main()
+    let k = Key(id: 1)
+    let s = {k, k}
+    println(f"{s.length()}")
+"#,
+        ),
+        "is written into the set literal more than once",
+    );
+}
+
+#[test]
+fn a_payload_written_into_a_set_literal_has_one_holder() {
+    assert_one_holder_output(
+        &with_token_and_key(
+            r#"
+fn main()
+    let p Key? = Some(Key(id: 1))
+    match p
+        Some(r)
+            let s = {r}
+            println(f"held {s.length()}")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "held 1\nreleased key 1\nafter",
+    );
+}
+
+#[test]
+fn an_optional_read_after_its_payload_was_written_into_a_set_literal_is_refused() {
+    assert_compiler_error(
+        &with_token_and_key(
+            r#"
+fn main()
+    let p Key? = Some(Key(id: 0))
+    match p
+        Some(r)
+            let s = {r}
+            println(f"{s.length()}")
+        None: println("none")
+    println(f"{p.is_some()}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+#[test]
+fn a_resource_written_into_a_map_literal_moves_there() {
+    assert_one_holder_output(
+        &with_token_and_key(
+            r#"
+fn main()
+    let t = Token(id: 1)
+    let k = Key(id: 2)
+    let m = {1: t}
+    let n = {k: 3}
+    println(f"held {m.length()} {n.length()}")
+"#,
+        ),
+        "held 1 1\nreleased key 2\nreleased 1",
+    );
+}
+
+#[test]
+fn a_resource_read_after_a_map_literal_moved_it_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    let t = Token(id: 1)
+    let m = {1: t}
+    println(f"{m.length()}")
+    println(f"{t.id}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+#[test]
+fn a_resource_written_into_a_map_literal_twice_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    let t = Token(id: 1)
+    let m = {1: t, 2: t}
+    println(f"{m.length()}")
+"#,
+        ),
+        "is written into the map literal more than once",
+    );
+}
+
+#[test]
+fn a_payload_written_into_a_map_literal_has_one_holder() {
+    assert_one_holder_output(
+        &with_token_and_key(
+            r#"
+fn main()
+    let p Token? = Some(Token(id: 1))
+    let q Key? = Some(Key(id: 2))
+    match p
+        Some(r)
+            let m = {4: r}
+            println(f"value {m.length()}")
+        None: println("none")
+    match q
+        Some(k)
+            let n = {k: 4}
+            println(f"key {n.length()}")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "value 1\nreleased 1\nkey 1\nreleased key 2\nafter",
+    );
+}
+
+#[test]
+fn an_optional_read_after_its_payload_was_written_into_a_map_literal_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    let p Token? = Some(Token(id: 0))
+    match p
+        Some(r)
+            let m = {1: r}
+            println(f"{m.length()}")
+        None: println("none")
+    println(f"{p.is_some()}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+#[test]
+fn a_payload_written_into_an_optional_tuple_element_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    let p Token? = Some(Token(id: 1))
+    match p
+        Some(r)
+            let l (Token?, int) = (r, 2)
+            println(f"held {l.1}")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "held 2\nreleased 1\nafter",
+    );
+}
+
+#[test]
+fn a_payload_written_into_an_optional_array_element_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    let p Token? = Some(Token(id: 1))
+    match p
+        Some(r)
+            let l [Token?; 2] = [r, None]
+            println(f"held {l.length()}")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "held 2\nreleased 1\nafter",
+    );
+}

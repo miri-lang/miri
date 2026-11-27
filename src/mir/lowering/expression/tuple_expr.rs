@@ -9,9 +9,11 @@ use crate::mir::{AggregateKind, Operand, Place, Rvalue, StatementKind as MirStat
 
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::dispatch::coerce_arg_to_declared;
+use crate::mir::lowering::expression::literal_elements::{
+    end_moved_elements, lower_aggregate_elements, LoweredElements,
+};
 use crate::mir::lowering::helpers::resolve_type;
-use crate::mir::lowering::sequencing::lower_operand;
+use crate::mir::lowering::kept_parameters::end_stored_payloads;
 use crate::mir::lowering::variable::canonical_declared_type;
 
 pub(crate) fn lower_tuple_expr(
@@ -38,15 +40,10 @@ pub(crate) fn lower_tuple_expr(
     } else {
         Vec::new()
     };
-    let mut ops: Vec<Operand> = Vec::with_capacity(elements.len());
-    for (position, element) in elements.iter().enumerate() {
-        let watermark = ctx.body.local_decls.len();
-        let op = lower_operand(ctx, element)?;
-        ops.push(match element_types.get(position) {
-            Some(target) => coerce_arg_to_declared(ctx, op, element, target, watermark),
-            None => op,
-        });
-    }
+    let slots: Vec<Option<Type>> = (0..elements.len())
+        .map(|position| element_types.get(position).cloned())
+        .collect();
+    let LoweredElements { ops, handed } = lower_aggregate_elements(ctx, elements, &slots)?;
 
     let built = AggregateKind::Tuple(built_tuple_type(&ty, element_types));
     let result = if let Some(d) = dest {
@@ -64,6 +61,11 @@ pub(crate) fn lower_tuple_expr(
         Operand::Copy(Place::new(temp))
     };
 
+    // A resource binding written as an element moved into the literal: it
+    // ends here, and a matched optional whose payload the literal took ends
+    // moved.
+    end_stored_payloads(ctx, handed, expr.span);
+    end_moved_elements(ctx, elements, expr.span)?;
     // Release managed element temps — the Aggregate IncRef transferred ownership
     // into the tuple, so the original temp references are no longer needed.
     for op in &ops {
