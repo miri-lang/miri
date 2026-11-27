@@ -1,0 +1,6 @@
+# Written by niobe. The session store holds every prompt and tool output of
+# every session recorded here, and is not meant to be committed.
+sessions.db
+sessions.db-*
+# The local config grants this machine's tool permissions; it stays local.
+config.toml
