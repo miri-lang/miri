@@ -1585,3 +1585,212 @@ fn main()
         "held 2\nreleased 1\nafter",
     );
 }
+
+/// `TOKEN` with a class holding a `Token` field of its own, not optional.
+fn with_token_and_box(program: &str) -> String {
+    format!("{TOKEN}\nclass Crate\n    public var held Token\n{program}")
+}
+
+#[test]
+fn a_payload_bound_by_let_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    let p Token? = Some(Token(id: 1))
+    match p
+        Some(r)
+            let b = r
+            println(f"bound {b.id}")
+        None: println("none")
+    println("after")
+"#,
+        ),
+        "bound 1\nreleased 1\nafter",
+    );
+}
+
+#[test]
+fn a_payload_bound_by_let_on_some_paths_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var source = List([Token(id: 1), Token(id: 2)])
+    while source.length() > 0
+        match source.remove_at(0)
+            Some(r):
+                if r.id == 2
+                    let b = r
+                    println(f"bound {b.id}")
+            None: break
+    println("after")
+"#,
+        ),
+        "released 1\nbound 2\nreleased 2\nafter",
+    );
+}
+
+#[test]
+fn a_payload_stored_into_a_variable_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var x = Token(id: 9)
+    let p Token? = Some(Token(id: 1))
+    match p
+        Some(r): x = r
+        None: println("none")
+    println(f"held {x.id}")
+"#,
+        ),
+        "released 9\nheld 1\nreleased 1",
+    );
+}
+
+#[test]
+fn a_payload_stored_into_an_optional_variable_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var x Token? = None
+    let p Token? = Some(Token(id: 1))
+    match p
+        Some(r): x = r
+        None: println("none")
+    println(f"held {x.is_some()}")
+"#,
+        ),
+        "held true\nreleased 1",
+    );
+}
+
+#[test]
+fn a_payload_stored_into_a_field_has_one_holder() {
+    assert_one_holder_output(
+        &with_token_and_box(
+            r#"
+fn main()
+    var c = Crate(held: Token(id: 9))
+    let p Token? = Some(Token(id: 1))
+    match p
+        Some(r): c.held = r
+        None: println("none")
+    println(f"held {c.held.id}")
+"#,
+        ),
+        "released 9\nheld 1\nreleased 1",
+    );
+}
+
+#[test]
+fn a_payload_stored_into_an_optional_field_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var s = Slot(held: None)
+    let p Token? = Some(Token(id: 1))
+    match p
+        Some(r): s.held = r
+        None: println("none")
+    println(f"held {s.held.is_some()}")
+"#,
+        ),
+        "held true\nreleased 1",
+    );
+}
+
+#[test]
+fn an_optional_read_after_its_payload_was_bound_by_let_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    let p Token? = Some(Token(id: 0))
+    match p
+        Some(r)
+            let b = r
+            println(f"{b.id}")
+        None: println("none")
+    println(f"{p.is_some()}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+#[test]
+fn an_optional_read_after_its_payload_was_stored_into_a_variable_is_refused() {
+    assert_compiler_error(
+        &with_token(
+            r#"
+fn main()
+    var x = Token(id: 9)
+    let p Token? = Some(Token(id: 0))
+    match p
+        Some(r): x = r
+        None: println("none")
+    println(f"{p.is_some()} {x.id}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+#[test]
+fn an_optional_read_after_its_payload_was_stored_into_a_field_is_refused() {
+    assert_compiler_error(
+        &with_token_and_box(
+            r#"
+fn main()
+    var c = Crate(held: Token(id: 9))
+    let p Token? = Some(Token(id: 0))
+    match p
+        Some(r): c.held = r
+        None: println("none")
+    println(f"{p.is_some()} {c.held.id}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+#[test]
+fn a_payload_stored_into_an_optional_variable_on_some_paths_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var x Token? = None
+    var source = List([Token(id: 1), Token(id: 2), Token(id: 3)])
+    while source.length() > 0
+        match source.remove_at(0)
+            Some(r):
+                if r.id != 2: x = r
+            None: break
+    println(f"held {x.is_some()}")
+"#,
+        ),
+        "released 2\nreleased 1\nheld true\nreleased 3",
+    );
+}
+
+#[test]
+fn a_payload_stored_back_into_the_optional_it_was_matched_out_of_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var p Token? = Some(Token(id: 1))
+    match p
+        Some(r): p = r
+        None: println("none")
+    println(f"held {p.is_some()}")
+"#,
+        ),
+        "held true\nreleased 1",
+    );
+}

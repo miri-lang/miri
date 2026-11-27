@@ -68,6 +68,17 @@ impl StoredValue {
         }
     }
 
+    /// A value lowered on its own whose conversion to `slot_ty`, the type of
+    /// the variable or field a store writes it to, waits for the hand-over.
+    pub(crate) fn owing(op: Operand, ty: Type, slot_ty: Type, watermark: usize) -> Self {
+        StoredValue {
+            op,
+            ty,
+            owed_slot: Some(slot_ty),
+            watermark,
+        }
+    }
+
     /// The operand the store is handed, converted to its slot: the matched
     /// payload's one reference in place of the payload binding the value
     /// reads, when the store ends the optional it was matched out of, and
@@ -126,6 +137,17 @@ impl StoredValue {
             op,
             handed: None,
             watermark: self.watermark,
+        }
+    }
+}
+
+impl StoreOperand {
+    /// Releases the temp the store read the value from once the store keeps
+    /// it, when the store's own lowering created it: the `Some(..)` a
+    /// handed-over payload was wrapped in, which no one reads after.
+    pub(crate) fn release_source(&self, ctx: &mut LoweringContext, span: Span) {
+        if let Some(source) = self.source {
+            ctx.emit_temp_drop(source, self.watermark, span);
         }
     }
 }

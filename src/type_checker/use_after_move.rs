@@ -922,7 +922,9 @@ impl<'a> UseAfterMoveChecker<'a> {
     }
 
     /// Check `decl`'s initializer; one that names a resource, or a gpu
-    /// binding bound to another gpu binding, moves it to the new binding.
+    /// binding bound to another gpu binding, moves it to the new binding. A
+    /// payload binding so moved ends the scrutinee it was matched out of,
+    /// whose own reference the new binding takes.
     fn check_initializer(
         &mut self,
         decl: &crate::ast::statement::VariableDeclaration,
@@ -962,6 +964,10 @@ impl<'a> UseAfterMoveChecker<'a> {
         consumed.insert(src.clone(), info);
         if self.hands_on_its_reference(init) {
             self.consumed_arguments.expressions.insert(init.id);
+            if !gpu_move {
+                let by_fn = format!("assignment to '{}'", decl.name);
+                self.end_owned_scrutinee(src, init, &by_fn, consumed);
+            }
         }
     }
 
@@ -1420,10 +1426,10 @@ impl<'a> UseAfterMoveChecker<'a> {
     }
 
     /// `lhs = rhs`, whose own value `value_use` says is read or discarded.
-    /// A payload binding an element store hands on ends its matched
-    /// scrutinee only where the assignment's value is discarded: the store
-    /// then takes the scrutinee's own reference, which leaves no value for
-    /// the assignment to give back.
+    /// A payload binding the store hands on, into a variable, a field or an
+    /// element, ends its matched scrutinee only where the assignment's value
+    /// is discarded: the store then takes the scrutinee's own reference,
+    /// which leaves no value for the assignment to give back.
     fn check_assignment_expr(
         &mut self,
         (lhs, rhs): (&LeftHandSideExpression, &Expression),
@@ -1436,13 +1442,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             LeftHandSideExpression::Identifier(_) => named_binding(target),
             LeftHandSideExpression::Member(_) | LeftHandSideExpression::Index(_) => None,
         };
-        // TODO: a payload binding stored into a variable or a field
-        // (`x = r`, `o.f = r`), or bound by `let b = r`, is still a funded
-        // copy beside the matched optional's own reference; those stores
-        // would end the scrutinee once their lowering hands the store
-        // `move o.0` as an element store does.
-        let ends_scrutinee = matches!(lhs, LeftHandSideExpression::Index(_))
-            && matches!(value_use, ValueUse::Discarded);
+        let ends_scrutinee = matches!(value_use, ValueUse::Discarded);
         if rebound.is_none() || rebound != named_binding(rhs) {
             let by_fn = format!("assignment to '{}'", value_spelling(target));
             self.consume_stored_binding((&by_fn, ends_scrutinee), rhs, consumed);

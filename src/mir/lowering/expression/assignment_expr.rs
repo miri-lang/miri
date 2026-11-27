@@ -31,6 +31,7 @@ use crate::mir::lowering::helpers::{
 };
 use crate::mir::lowering::kept_parameters::end_stored_payloads;
 use crate::mir::lowering::stored_values::{lower_kept_value, StoreOperand, StoredValue};
+use crate::mir::lowering::variable;
 
 fn assign_to_identifier(
     ctx: &mut LoweringContext,
@@ -52,7 +53,23 @@ fn assign_to_identifier(
         if let Some(&local) = ctx.variable_map.get(name.as_str()) {
             match op {
                 crate::ast::operator::AssignmentOp::Assign => {
-                    assign_to_var_simple(ctx, local, val.clone(), expr, dest, &rhs_watermark)
+                    let slot_ty = ctx.body.local_decls[local.0].ty.clone();
+                    let stored = stored_rhs(
+                        ctx,
+                        (expr, rhs),
+                        (val, rhs_watermark),
+                        &slot_ty,
+                        dest.as_ref(),
+                    );
+                    if stored.handed.is_some() {
+                        return Ok(store_handed_payload(
+                            ctx,
+                            Place::new(local),
+                            &stored,
+                            expr.span,
+                        ));
+                    }
+                    assign_to_var_simple(ctx, local, stored.op, expr, dest, &rhs_watermark)
                 }
                 crate::ast::operator::AssignmentOp::AssignAdd
                 | crate::ast::operator::AssignmentOp::AssignSub
@@ -364,7 +381,7 @@ fn assign_to_member(
                 slot_ty,
             },
             op,
-            rhs.span,
+            rhs,
             expr,
             dest,
         )?;
@@ -390,29 +407,42 @@ struct FieldTarget {
 }
 
 /// Store the right-hand value into the field, wrapping it first when the field
-/// declares an optional and the value arrived bare.
+/// declares an optional and the value arrived bare. A plain store ending the
+/// optional a payload binding it writes was matched out of takes the
+/// optional's own reference ([`stored_rhs`]).
 fn store_into_field(
     ctx: &mut LoweringContext,
     assigned: AssignedValue,
     target: FieldTarget,
     op: &crate::ast::operator::AssignmentOp,
-    rhs_span: crate::error::syntax::Span,
+    rhs: &Expression,
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let val = wrap_value_for_field_slot(ctx, assigned, target.slot_ty.as_ref(), op, rhs_span);
-    let mut target_place = ensure_place(ctx, target.base, target.base_span);
-    target_place.projection.push(PlaceElem::Field(target.idx));
+    let is_plain_write = matches!(op, crate::ast::operator::AssignmentOp::Assign);
+    let mut assigned = assigned;
+    if let Some(slot_ty) = target.slot_ty.as_ref().filter(|_| is_plain_write) {
+        let value = (assigned.operand, assigned.watermark);
+        let stored = stored_rhs(ctx, (expr, rhs), value, slot_ty, dest.as_ref());
+        if stored.handed.is_some() {
+            let target_place = field_place(ctx, target);
+            return Ok(store_handed_payload(ctx, target_place, &stored, expr.span));
+        }
+        assigned.operand = stored.op;
+    }
+    let val = wrap_value_for_field_slot(ctx, assigned, target.slot_ty.as_ref(), op, rhs.span);
+    let slot_ty = target.slot_ty.clone();
+    let target_place = field_place(ctx, target);
 
-    dispatch_member_assign(
-        ctx,
-        &target_place,
-        op,
-        val.clone(),
-        target.slot_ty.as_ref(),
-        expr,
-    )?;
+    dispatch_member_assign(ctx, &target_place, op, val.clone(), slot_ty.as_ref(), expr)?;
     finalize_member_result(ctx, val, dest, expr)
+}
+
+/// The place of the field `target` names.
+fn field_place(ctx: &mut LoweringContext, target: FieldTarget) -> Place {
+    let mut place = ensure_place(ctx, target.base, target.base_span);
+    place.projection.push(PlaceElem::Field(target.idx));
+    place
 }
 
 fn dispatch_member_assign(
@@ -641,7 +671,7 @@ fn assign_to_member_compound(
     Ok(())
 }
 
-/// The operand the element store an assignment `expr` makes is handed for
+/// The operand the store an assignment `expr` makes is handed for
 /// the value it lowered to `val`: the matched optional's own reference in
 /// place of the payload binding it stores ([`StoredValue::hand_over`]),
 /// whose local ends moved once the store is made. Only an assignment whose
@@ -662,17 +692,55 @@ fn hand_over_stored_rhs(
     }
 }
 
-/// Releases the temp an element store that took a matched payload's
-/// reference read it from: the `Some(..)` the store wrapped it in, which no
-/// one reads once the store keeps it.
-fn release_handed_store_temp(
+/// The operand a plain assignment `expr` writing `rhs`, lowered to `val`,
+/// into a variable or a field of type `slot_ty` is handed
+/// ([`hand_over_stored_rhs`]). When the store ends the optional a payload
+/// binding it writes was matched out of, the value is converted to the
+/// slot only once the hand-over is made; any other value is handed as it
+/// was lowered, and the store converts it as before.
+fn stored_rhs(
     ctx: &mut LoweringContext,
+    (expr, rhs): (&Expression, &Expression),
+    (val, watermark): (Operand, usize),
+    slot_ty: &Type,
+    dest: Option<&Place>,
+) -> StoreOperand {
+    let ty = resolve_arg_type(ctx, rhs, &val);
+    let value = variable::argument_value(rhs);
+    let stored = match ctx.type_checker.ended_scrutinee(value) {
+        Some(_) => StoredValue::owing(val, ty, slot_ty.clone(), watermark),
+        None => StoredValue::fitted(val, ty, watermark),
+    };
+    hand_over_stored_rhs(ctx, expr, stored, dest)
+}
+
+/// Writes into the variable or field `target` the matched payload's
+/// reference a plain assignment took over ([`stored_rhs`]), ends the local
+/// it took over, moved, and releases the temp it was wrapped in. The
+/// assignment's value is nothing, as no one reads it.
+///
+/// A store into the very optional the payload was matched out of (`p = r`
+/// in `match p`) takes the payload out first, so the optional ends before
+/// the store and the store binds it afresh: it holds nothing left to
+/// release, and the value it is bound to is the one it keeps.
+fn store_handed_payload(
+    ctx: &mut LoweringContext,
+    target: Place,
     stored: &StoreOperand,
     span: crate::error::syntax::Span,
-) {
-    if let Some(source) = stored.source {
-        ctx.emit_temp_drop(source, stored.watermark, span);
+) -> Operand {
+    let value = Rvalue::Use(stored.op.clone());
+    if target.projection.is_empty() && stored.handed == Some(target.local) {
+        end_stored_payloads(ctx, [stored.handed], span);
+        let kind = MirStatementKind::Assign(target, value);
+        ctx.push_statement(crate::mir::Statement { kind, span });
+    } else {
+        let kind = MirStatementKind::Reassign(target, value);
+        ctx.push_statement(crate::mir::Statement { kind, span });
+        end_stored_payloads(ctx, [stored.handed], span);
     }
+    stored.release_source(ctx, span);
+    discarded_value(ctx, span)
 }
 
 /// The value of an assignment whose store took the reference its value
@@ -758,7 +826,7 @@ fn assign_to_index_map(
     }
     TemporaryRoot::release(receiver, ctx, expr.span);
     if stored.handed.is_some() {
-        release_handed_store_temp(ctx, &stored, expr.span);
+        stored.release_source(ctx, expr.span);
         return Ok(Operand::Copy(Place::new(set_result)));
     }
 
@@ -1020,7 +1088,7 @@ fn assign_to_index_array(
     // do.
     TemporaryRoot::release(receiver, ctx, expr.span);
     if stored.handed.is_some() {
-        release_handed_store_temp(ctx, &stored, expr.span);
+        stored.release_source(ctx, expr.span);
         return Ok(discarded_value(ctx, expr.span));
     }
 

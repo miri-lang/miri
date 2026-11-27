@@ -17,6 +17,8 @@ use crate::mir::{
 };
 
 use super::helpers::{coerce_rvalue_in, release_coerced_source};
+use super::kept_parameters::end_stored_payloads;
+use super::stored_values::StoredValue;
 use super::{lower_expression, LoweringContext};
 use crate::error::lowering::LoweringError;
 
@@ -430,6 +432,33 @@ pub(crate) fn end_consumed_binding(
     true
 }
 
+/// Initializes `local` with the payload binding `init_expr` names, when the
+/// declaration ends the optional the binding was matched out of
+/// ([`TypeChecker::ended_scrutinee`]): the new binding takes the optional's
+/// own reference rather than a retained copy beside it, converted to the
+/// declared type only once it is taken over (`StoredValue::hand_over`).
+///
+/// [`TypeChecker::ended_scrutinee`]: crate::type_checker::TypeChecker::ended_scrutinee
+fn initialize_with_handed_payload(
+    ctx: &mut LoweringContext,
+    local: crate::mir::Local,
+    init_expr: &Expression,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    let op = lower_expression(ctx, init_expr, None)?;
+    let ty = super::helpers::resolve_arg_type(ctx, init_expr, &op);
+    let declared = ctx.body.local_decls[local.0].ty.clone();
+    let stored = StoredValue::owing(op, ty, declared, watermark).hand_over(ctx, init_expr, span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(Place::new(local), Rvalue::Use(stored.op.clone())),
+        span,
+    });
+    end_stored_payloads(ctx, [stored.handed], span);
+    stored.release_source(ctx, span);
+    Ok(())
+}
+
 /// Apply shared-storage and host/gpu residency metadata to a freshly-declared
 /// local, allocating a device handle (and opening its activation) for gpu vars.
 fn apply_variable_residency(
@@ -519,6 +548,14 @@ fn assign_variable_initializer(
             span: *span,
         });
         return Ok(());
+    }
+
+    if ctx
+        .type_checker
+        .ended_scrutinee(argument_value(init_expr))
+        .is_some()
+    {
+        return initialize_with_handed_payload(ctx, local, init_expr, *span);
     }
 
     let init_ty = ctx.recorded_type(init_expr.id);

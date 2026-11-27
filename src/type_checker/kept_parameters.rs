@@ -672,6 +672,11 @@ fn owned_parameters(
         return None;
     }
     let summary = (facts.escape_summaries).get(&FunctionId::Declared(function.clone()))?;
+    // TODO: a parameter bound by `let` (`let b = t`, or a `Some(r)` payload
+    // of a matched parameter) does not escape, so the function lends it, and
+    // the new binding is a retained copy beside the caller's reference: the
+    // resource has two holders. Binding it should keep it, as storing it in
+    // a field or a collection does.
     let is_owned = |(index, param): (usize, &Parameter)| {
         summary.directly_escapes(index) && is_declared_handed_on(param, facts)
     };
