@@ -767,43 +767,48 @@ fn intermediate_optional_layers(op_ty: &Type, target_ty: &Type) -> Vec<Type> {
     layers
 }
 
-/// Build every `Some` layer `operand` needs beyond the one an Rvalue can hold,
-/// and return the operand and type for that final layer.
+/// Box `operand` into every `Some` layer `target_ty` is deeper than `op_ty`,
+/// the outermost included, and return the temp holding the outermost box.
+/// `None` when the target is at most one layer deeper, which one Rvalue holds.
 ///
 /// One `Rvalue` holds one `Aggregate(Option, ..)`, so a target two or more
 /// layers deeper than its source — an `int` stored as an `Option<int?>`, or a
 /// `String?` as an `Option<Option<String?>>` — would otherwise be boxed once and
 /// the consumer would read the payload as the address of an optional.
 ///
-/// Each intermediate layer lives in a temp the enclosing scope owns, because the
-/// next box up retains it and that retain has to be answered on every exit path,
-/// not just the one that falls out of the block. Every layer but the innermost
-/// is a box; the innermost, around a reference-counted pointer, is that pointer.
+/// Each layer is a temp the next box up retains, so it is released right after
+/// that box is built: the value inside has one holder, the outermost box,
+/// before anything else runs, and no exit path can leave a layer's reference
+/// behind. Every layer but the innermost is a box; the innermost, around a
+/// reference-counted pointer, is that pointer.
 fn fill_optional_layers(
     ctx: &mut LoweringContext,
     operand: Operand,
     op_ty: &Type,
     target_ty: &Type,
     span: Span,
-) -> (Operand, Type) {
+) -> Option<crate::mir::Local> {
+    let layers = intermediate_optional_layers(op_ty, target_ty);
+    if layers.is_empty() {
+        return None;
+    }
     let mut inner = operand;
     let mut inner_ty = op_ty.clone();
-    // TODO: the next box up retains each intermediate layer while the scope
-    // temp keeps its own reference, so a resource wrapped two layers deep (a
-    // value pushed onto a `List<Option<T?>>`) has two holders until the scope
-    // ends; handing each layer to the next by `move` would keep one.
-    for layer_ty in intermediate_optional_layers(op_ty, target_ty) {
+    let mut held: Option<crate::mir::Local> = None;
+    for layer_ty in layers.into_iter().chain(std::iter::once(target_ty.clone())) {
         let temp = ctx.push_temp(layer_ty.clone(), span);
         let rvalue = coerce_rvalue(inner, &inner_ty, &layer_ty);
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(Place::new(temp), rvalue),
             span,
         });
-        ctx.register_scope_temp(temp);
+        if let Some(layer) = held.replace(temp) {
+            ctx.emit_temp_drop(layer, layer.0, span);
+        }
         inner = Operand::Copy(Place::new(temp));
         inner_ty = layer_ty;
     }
-    (inner, inner_ty)
+    held
 }
 
 /// Coerce `operand` into `target_ty`, emitting whatever statements the coercion
@@ -811,7 +816,8 @@ fn fill_optional_layers(
 ///
 /// The counterpart to [`coerce_rvalue`] for callers that assign the result: they
 /// have a `ctx` to emit into, so a target several optional layers deep can be
-/// boxed layer by layer instead of once.
+/// boxed layer by layer instead of once, its outermost box moved into the place
+/// the caller assigns.
 pub fn coerce_rvalue_in(
     ctx: &mut LoweringContext,
     operand: Operand,
@@ -819,8 +825,10 @@ pub fn coerce_rvalue_in(
     target_ty: &Type,
     span: Span,
 ) -> Rvalue {
-    let (filled, filled_ty) = fill_optional_layers(ctx, operand, op_ty, target_ty, span);
-    coerce_rvalue(filled, &filled_ty, target_ty)
+    match fill_optional_layers(ctx, operand.clone(), op_ty, target_ty, span) {
+        Some(outermost) => Rvalue::Use(Operand::Move(Place::new(outermost))),
+        None => coerce_rvalue(operand, op_ty, target_ty),
+    }
 }
 
 /// Helper to construct an Rvalue that coerces `operand` of type `op_ty` into `target_ty`.

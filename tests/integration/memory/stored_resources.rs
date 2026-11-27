@@ -1794,3 +1794,120 @@ fn main()
         "held true\nreleased 1",
     );
 }
+
+/// `TOKEN` with a class holding a `Token` two optional layers deep.
+fn with_token_and_deep_slot(program: &str) -> String {
+    format!("{TOKEN}\nclass Deep\n    public var held Option<Token?>\n{program}")
+}
+
+#[test]
+fn a_resource_pushed_two_optional_layers_deep_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var kept = List<Option<Token?>>()
+    kept.push(Token(id: 1))
+    println(f"kept {kept.length()}")
+"#,
+        ),
+        "kept 1\nreleased 1",
+    );
+}
+
+#[test]
+fn a_payload_pushed_two_optional_layers_deep_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn main()
+    var kept = List<Option<Token?>>()
+    let p Token? = Some(Token(id: 1))
+    match p
+        Some(r): kept.push(r)
+        None: println("none")
+    println(f"kept {kept.length()}")
+"#,
+        ),
+        "kept 1\nreleased 1",
+    );
+}
+
+#[test]
+fn a_resource_passed_two_optional_layers_deep_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn show(o Option<Token?>)
+    match o
+        Some(inner)
+            match inner
+                Some(t): println(f"shown {t.id}")
+                None: println("inner none")
+        None: println("none")
+
+fn main()
+    show(Token(id: 1))
+    println("after")
+"#,
+        ),
+        "shown 1\nreleased 1\nafter",
+    );
+}
+
+#[test]
+fn a_resource_stored_in_a_two_layer_field_has_one_holder() {
+    assert_one_holder_output(
+        &with_token_and_deep_slot(
+            r#"
+fn main()
+    let d = Deep(held: Token(id: 1))
+    println(f"held {d.held.is_some()}")
+    var e = Deep(held: None)
+    e.held = Token(id: 2)
+    println(f"held {e.held.is_some()}")
+"#,
+        ),
+        "held true\nheld true\nreleased 2\nreleased 1",
+    );
+}
+
+#[test]
+fn a_resource_returned_or_bound_two_optional_layers_deep_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn wrap(t Token) Option<Token?>
+    return t
+
+fn main()
+    let w = wrap(Token(id: 1))
+    println(f"wrapped {w.is_some()}")
+    let b Option<Token?> = Token(id: 2)
+    println(f"bound {b.is_some()}")
+"#,
+        ),
+        "wrapped true\nbound true\nreleased 2\nreleased 1",
+    );
+}
+
+#[test]
+fn a_resource_wrapped_three_optional_layers_deep_before_an_early_return_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(
+            r#"
+fn early(n int) Option<Option<Token?>>
+    var kept = List<Option<Option<Token?>>>()
+    for i in 0..n
+        kept.push(Token(id: 10 + i))
+        if i == 1: return Token(id: 99)
+    return None
+
+fn main()
+    let e = early(3)
+    println(f"early {e.is_some()}")
+"#,
+        ),
+        "released 10\nreleased 11\nearly true\nreleased 99",
+    );
+}
