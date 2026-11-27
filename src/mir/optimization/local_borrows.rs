@@ -53,7 +53,14 @@
 //!   borrow read out of another borrowed local inherits that local's root, so
 //!   its root's root must stay as well, and the end of its root's storage is a
 //!   change. A path that reaches the end of the body before `l`'s storage ends
-//!   is refused.
+//!   is refused. A write into an owner beside every place read out of it on
+//!   the way to `l` — parting from each at a field of a struct, a tuple or a
+//!   class instance, which keep each field in a slot of its own — leaves
+//!   what `l` reads where it was: `h.count = 1` while `l` reads out of
+//!   `h.pack`. The value it stores still counts, and for a borrow other code
+//!   may reach so does a drop hook the overwritten value may run. An enum's
+//!   or an optional's payload fields may share a slot, so a write parting
+//!   from the read there is a change.
 //! - **Nothing that may release a value another name holds runs while it
 //!   borrows, when other code may reach what it reads.** A value held behind a
 //!   class field is reached by every holder of the instance, and a parameter's
@@ -79,8 +86,11 @@
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::analysis::heap_effects::{borrowed_entries, BodyNoise, Phase};
 use crate::mir::facts::OwnershipFacts;
-use crate::mir::optimization::rc_insertion::{place_declared_type, RcContext, RcInsertion};
+use crate::mir::optimization::rc_insertion::{
+    place_declared_type, place_types, RcContext, RcInsertion,
+};
 use crate::mir::place::PlaceContext;
+use crate::mir::place_type::PlaceTypes;
 use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
 use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::type_facts::DropHookReach;
@@ -115,9 +125,11 @@ pub(super) fn infer_local_borrows(
     let entries = entry_collections(body);
     let noise = (!exposed_sites.is_empty() || !entries.is_empty())
         .then(|| BodyNoise::of(body, ownership, Phase::Lowered, &hooks));
+    let types = place_types(ctx);
     let mut settled = Settled {
         body,
         ownership,
+        types: &types,
         reads: &reads,
         exposed_sites: &exposed_sites,
         entries: &entries,
@@ -191,6 +203,9 @@ fn entry_collections(body: &Body) -> HashMap<Local, Vec<Local>> {
 struct Settled<'b> {
     body: &'b Body,
     ownership: &'b OwnershipFacts,
+    /// The declared type of each place, which says whether a store parts
+    /// from what a borrow reads at a field of its own.
+    types: &'b PlaceTypes<'b>,
     reads: &'b Reads,
     /// The reads other code may reach what they read through.
     exposed_sites: &'b HashSet<Site>,
@@ -226,15 +241,23 @@ impl Settled<'_> {
         let read_out_of = reads_out_of(reads, local);
         let readers = readers_through(reads, local);
         for (site, source) in reads.get(&local).into_iter().flatten() {
-            let Some((owners, parent_exposed)) = self.owners_of(source.local) else {
+            let Some(Holders {
+                owners,
+                mut read,
+                exposed: parent_exposed,
+            }) = self.owners_of(source.local)
+            else {
                 answer = None;
                 continue;
             };
+            read.push(source.clone());
             let read_exposed = parent_exposed || self.exposed_sites.contains(site);
             let watch = Watch {
                 body: self.body,
                 ownership: self.ownership,
                 owners: &owners,
+                read: &read,
+                types: self.types,
                 noise: self.noise.filter(|_| read_exposed),
                 read_out_of: &read_out_of,
                 readers: &readers,
@@ -262,28 +285,50 @@ impl Settled<'_> {
     /// `root` and, while it is itself a borrowed read, the owners of what it
     /// reads — or, for an entry a collection lends, the locals holding that
     /// collection: every local whose change could release what a borrow out
-    /// of `root` holds; with whether other code may reach what `root` holds.
-    /// An entry is reached by whatever else holds its collection. `None` on a
-    /// cycle of reads.
-    fn owners_of(&mut self, root: Local) -> Option<(Vec<Local>, bool)> {
-        let mut owners = vec![root];
+    /// of `root` holds; with the places read out of them on the way to `root`
+    /// and whether other code may reach what `root` holds. An entry is
+    /// reached by whatever else holds its collection. `None` on a cycle of
+    /// reads.
+    fn owners_of(&mut self, root: Local) -> Option<Holders> {
+        let mut holders = Holders {
+            owners: vec![root],
+            read: Vec::new(),
+            exposed: false,
+        };
         if let Some(collections) = self.entries.get(&root) {
-            owners.extend(collections.iter().filter(|&&c| c != root));
-            return Some((owners, true));
+            (holders.owners).extend(collections.iter().filter(|&&c| c != root));
+            holders.exposed = true;
+            return Some(holders);
         }
         if !self.reads.contains_key(&root) || !self.borrows(root)? {
-            return Some((owners, false));
+            return Some(holders);
         }
         let reads = self.reads;
         for (_, source) in reads.get(&root).into_iter().flatten() {
-            for owner in self.owners_of(source.local)?.0 {
-                if !owners.contains(&owner) {
-                    owners.push(owner);
+            let parent = self.owners_of(source.local)?;
+            for owner in parent.owners {
+                if !holders.owners.contains(&owner) {
+                    holders.owners.push(owner);
                 }
             }
+            holders.read.extend(parent.read);
+            holders.read.push(source.clone());
         }
-        Some((owners, self.exposed.contains(&root)))
+        holders.exposed = self.exposed.contains(&root);
+        Some(holders)
     }
+}
+
+/// The locals whose change could release what a borrow holds, with the
+/// places read out of them on the way to it, and whether other code may
+/// reach what it holds.
+struct Holders {
+    owners: Vec<Local>,
+    /// Each place a read on the way copies, rooted at one of `owners`. An
+    /// owner no place is read out of — a local holding the collection an
+    /// entry is lent from — has none.
+    read: Vec<Place>,
+    exposed: bool,
 }
 
 /// `local` and every candidate read, at any depth, out of it.
@@ -638,6 +683,11 @@ struct Watch<'w> {
     body: &'w Body,
     ownership: &'w OwnershipFacts,
     owners: &'w [Local],
+    /// Every place read out of an owner on the way to the borrow: a store
+    /// into an owner beside each of them leaves the borrow's value where it
+    /// was.
+    read: &'w [Place],
+    types: &'w PlaceTypes<'w>,
     /// For a borrow other code may reach what it holds through: the rule
     /// finding each operation that may release a value another name holds,
     /// every one of which ends it.
@@ -718,10 +768,58 @@ impl Watch<'_> {
                 return false;
             }
         }
+        if let Some(beside) = self.write_beside(statement) {
+            return self.is_changed_by_write_beside(&beside);
+        }
         statement_changes(statement, self.owners)
             || self
                 .noise
                 .is_some_and(|noise| noise.is_loud_statement(&statement.kind))
+    }
+
+    /// `statement` as a write into an owner beside every place the borrow
+    /// reads out of it ([`parts_at_own_field`]), or `None` for any other
+    /// statement.
+    fn write_beside<'s>(&self, statement: &'s Statement) -> Option<WriteBeside<'s>> {
+        let (place, write) = match &statement.kind {
+            StatementKind::Assign(dest, rvalue) => (dest, WriteBeside::Store(rvalue)),
+            StatementKind::Reassign(dest, rvalue) => (dest, WriteBeside::Replace(dest, rvalue)),
+            StatementKind::DecRef(place) => (place, WriteBeside::Release(place)),
+            StatementKind::StorageLive(_)
+            | StatementKind::StorageDead(..)
+            | StatementKind::IncRef(_)
+            | StatementKind::Dealloc(_)
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => return None,
+        };
+        let mut read_out_of_root = (self.read.iter())
+            .filter(|read| read.local == place.local)
+            .peekable();
+        let is_beside = self.owners.contains(&place.local)
+            && read_out_of_root.peek().is_some()
+            && read_out_of_root.all(|read| parts_at_own_field(place, read, self.types));
+        is_beside.then_some(write)
+    }
+
+    /// Whether a write beside what the borrow reads changes it: the value it
+    /// stores moves or copies an owner whole, or — for a borrow other code
+    /// may reach — the value it overwrites or releases may run a drop hook.
+    // TODO: a hook run by releasing a slot beside the read path receives only
+    // that slot's value, which cannot reach the owner, yet it still ends the
+    // borrow here and in the verifier's `WriteBeside::is_harmless`, so
+    // `h.other = Token(..)` inside `match h.pack` gives the subject a second
+    // reference and the hook check traps; relaxing it needs the argument
+    // stated against the memory model first.
+    fn is_changed_by_write_beside(&self, write: &WriteBeside) -> bool {
+        let (released, stored) = match *write {
+            WriteBeside::Store(rvalue) => (None, Some(rvalue)),
+            WriteBeside::Replace(place, rvalue) => (Some(place), Some(rvalue)),
+            WriteBeside::Release(place) => (Some(place), None),
+        };
+        stored.is_some_and(|rvalue| rvalue_changes(rvalue, self.owners))
+            || released.is_some_and(|place| {
+                (self.noise).is_some_and(|noise| noise.release_may_run_drop_hook(place))
+            })
     }
 
     fn is_changed_by_terminator(&self, terminator: &Terminator) -> bool {
@@ -859,14 +957,64 @@ fn ends_range(statement: &Statement, local: Local) -> bool {
     }
 }
 
+/// A write into an owner beside every place a borrow reads out of it.
+enum WriteBeside<'s> {
+    /// A first store into the place.
+    Store(&'s Rvalue),
+    /// A store over the value the place holds, which it releases.
+    Replace(&'s Place, &'s Rvalue),
+    /// A release of the value the place holds.
+    Release(&'s Place),
+}
+
+/// Whether `written` and `read`, rooted at one local, part at a field of a
+/// value that holds each field in a slot of its own — a struct, a tuple or
+/// an instance of a class — so a write into `written` leaves `read` as it
+/// was. Two payload fields of an enum, or an optional's, may share a slot
+/// between variants; a place inside the other, or a step this rule cannot
+/// type, parts at no field.
+fn parts_at_own_field(written: &Place, read: &Place, types: &PlaceTypes) -> bool {
+    let shared = (written.projection.iter())
+        .zip(&read.projection)
+        .take_while(|(w, r)| w == r)
+        .count();
+    let parts_at_field = matches!(
+        (written.projection.get(shared), read.projection.get(shared)),
+        (Some(PlaceElem::Field(_)), Some(PlaceElem::Field(_)))
+    );
+    let container = Place {
+        local: written.local,
+        projection: written.projection[..shared].to_vec(),
+    };
+    parts_at_field
+        && (types.declared(&container))
+            .is_some_and(|ty| holds_fields_apart(&ty.kind, types.definitions))
+}
+
+/// Whether a value of `kind` holds each of its fields in a slot of its own:
+/// a tuple, a struct, or an instance of a class other than a collection.
+fn holds_fields_apart(kind: &TypeKind, definitions: &HashMap<String, TypeDefinition>) -> bool {
+    if let TypeKind::Tuple(_) = kind {
+        return true;
+    }
+    let TypeKind::Custom(name, _) = kind else {
+        return false;
+    };
+    kind.as_builtin_collection().is_none()
+        && match definitions.get(name) {
+            Some(TypeDefinition::Struct(_) | TypeDefinition::Class(_)) => true,
+            Some(
+                TypeDefinition::Enum(_)
+                | TypeDefinition::Trait(_)
+                | TypeDefinition::Generic(_)
+                | TypeDefinition::Alias(_),
+            )
+            | None => false,
+        }
+}
+
 /// Whether `statement` changes one of `owners`: writes, ends, releases or
 /// retains it whole, or reads it other than through a projection.
-// TODO: a store to a field of an owner disjoint from the place a borrow
-// reads (`h.count = 1` while a payload of `h.pack` is borrowed) counts as a
-// change here, so a `match` over a field holding a hooked enum gives its
-// subject a reference of its own and the hook check traps; a store whose
-// projection leaves the read place's first differing field untouched should
-// leave the borrow standing, in this inference and in its verifier alike.
 fn statement_changes(statement: &Statement, owners: &[Local]) -> bool {
     match &statement.kind {
         StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue) => {

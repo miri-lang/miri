@@ -36,7 +36,11 @@
 //!   to a runtime entry point that only reads it or to a function of the
 //!   program its caller found harmless ([`super::callee_effects`]), which
 //!   stores into nothing but its own locals; the end of a lent parameter's
-//!   binding leaves its caller's reference in place;
+//!   binding leaves its caller's reference in place; a store into or release
+//!   of an owner that parts from every place copied out of it on the way at a
+//!   field of a tuple, a struct or a class instance ([`parts_at_own_field`])
+//!   leaves the value where it was, and is harmful only through a drop hook
+//!   the value it releases may run;
 //! - an entry a runtime getter lends out of a collection
 //!   ([`RuntimeEffect::hands_back_a_borrow`]) holds no reference of its own: a
 //!   borrow read out of one counts the locals holding the collection among
@@ -60,7 +64,7 @@
 //! An entry that passes is a borrow, and the ownership check leaves the local
 //! untracked, as it does a borrowed parameter. One that fails is a violation.
 
-use super::borrow_reach::{is_reference_by_design, reach_of, Reach};
+use super::borrow_reach::{is_reference_by_design, parts_at_own_field, reach_of, Reach};
 use super::callee_effects::BodyHarm;
 use super::{local_display_name, VerificationViolation};
 use crate::ast::types::Type;
@@ -175,9 +179,17 @@ pub fn verify_local_borrows(
     held_borrows(body, ownership, harmless_calls).1
 }
 
-/// The owners a borrow's value is held by, with whether other code may
-/// reach it — through a class field or out of a parameter.
-type Owners = (Vec<Local>, bool);
+/// The owners a borrow's value is held by, the places read out of them on
+/// the way to it, and whether other code may reach it — through a class
+/// field or out of a parameter.
+#[derive(Clone)]
+struct Owners {
+    locals: Vec<Local>,
+    /// Each place a definition on the way copies, rooted at one of `locals`.
+    /// A local holding the collection an entry is lent from has none.
+    read: Vec<Place>,
+    is_exposed: bool,
+}
 
 /// Checks records, remembering each local decided, so a borrow out of a
 /// borrowed local reads that local's owners once.
@@ -201,7 +213,7 @@ impl Checker<'_> {
         if let Some(reason) = self.local_refusal(local) {
             return Some(reason);
         }
-        let Some((owners, _)) = self.owners(local) else {
+        let Some(Owners { locals: owners, .. }) = self.owners(local) else {
             return Some(
                 "an owner of what it reads changes while it holds the value, or is not a \
                  counted local or parameter reached through value steps and class fields"
@@ -250,35 +262,43 @@ impl Checker<'_> {
 
     fn settle(&mut self, local: Local) -> Option<Owners> {
         let body = self.body;
-        let mut all_owners = Vec::new();
-        let mut is_exposed = false;
+        let mut all = Owners {
+            locals: Vec::new(),
+            read: Vec::new(),
+            is_exposed: false,
+        };
         for (site, source) in definitions_of(body, local)? {
             if !is_root(body, source.local) {
                 return None;
             }
             let reach = reach_of(body, &source)?;
             let mut owners = vec![source.local];
+            let mut read = Vec::new();
             let mut read_exposed = reach == Reach::ThroughField || is_parameter(body, source.local);
             if let Some(collections) = self.entries.get(&source.local) {
                 owners.extend(collections);
                 read_exposed = true;
             } else if self.ownership.is_borrowed(source.local) {
-                let (parents, parent_exposed) = self.owners(source.local)?;
-                owners.extend(parents);
-                read_exposed |= parent_exposed;
+                let parents = self.owners(source.local)?;
+                owners.extend(parents.locals);
+                read.extend(parents.read);
+                read_exposed |= parents.is_exposed;
             }
+            read.push(source);
             let range = Range {
                 local,
                 site,
                 owners: &owners,
+                read: &read,
             };
             if !stays_over_range(body, self.ownership, &range, &self.harm, read_exposed) {
                 return None;
             }
-            all_owners.extend(owners);
-            is_exposed |= read_exposed;
+            all.locals.extend(owners);
+            all.read.extend(read);
+            all.is_exposed |= read_exposed;
         }
-        Some((all_owners, is_exposed))
+        Some(all)
     }
 }
 
@@ -455,6 +475,8 @@ struct Range<'r> {
     local: Local,
     site: (usize, usize),
     owners: &'r [Local],
+    /// Every place copied out of an owner on the way to the borrow.
+    read: &'r [Place],
 }
 
 /// Whether, on every path from the definition of the range's local at its
@@ -474,12 +496,8 @@ fn stays_over_range(
         local,
         site,
         owners,
+        ..
     } = *range;
-    let changes = |accesses: Vec<(Local, Access)>| {
-        accesses
-            .into_iter()
-            .any(|(accessed, access)| owners.contains(&accessed) && !leaves_owner(access))
-    };
     let loud = is_exposed.then_some(harm);
     let ahead = ReadAhead::of(body, local);
     let mut pending = vec![(site.0, site.1 + 1)];
@@ -490,10 +508,7 @@ fn stays_over_range(
             if ends_local(statement, local) || !ahead.is_read_from(block, index) {
                 continue 'blocks;
             }
-            let is_loud = loud.is_some_and(|harm| !harm.is_harmless_statement(&statement.kind));
-            let changes_owner = !ends_lent_parameter(body, ownership, statement)
-                && changes(statement_accesses(statement));
-            if changes_owner || is_loud {
+            if statement_breaks_range(body, ownership, statement, range, loud) {
                 return false;
             }
         }
@@ -506,10 +521,10 @@ fn stays_over_range(
         let at = BasicBlock(block);
         let is_loud = loud.is_some_and(|harm| !harm.is_harmless_terminator(at, terminator));
         if matches!(terminator.kind, TerminatorKind::Return)
-            || changes(credited_accesses(
-                terminator,
-                harm.calls_harmless_program(at, terminator),
-            ))
+            || changes_owner(
+                credited_accesses(terminator, harm.calls_harmless_program(at, terminator)),
+                owners,
+            )
             || is_loud
         {
             return false;
@@ -521,6 +536,109 @@ fn stays_over_range(
         );
     }
     true
+}
+
+/// Whether `statement`, inside `range`, changes one of its owners, or — when
+/// other code may reach the borrowed value (`loud` given) — may release a
+/// value another name holds by `loud`'s rule. A write beside every place read
+/// out of an owner ([`write_beside`]) changes it only through the value it
+/// stores, and is harmless unless what it releases runs a drop hook.
+fn statement_breaks_range(
+    body: &Body,
+    ownership: &OwnershipFacts,
+    statement: &Statement,
+    range: &Range,
+    loud: Option<&BodyHarm>,
+) -> bool {
+    let beside = write_beside(body, statement, (range.owners, range.read));
+    let is_loud = loud.is_some_and(|harm| match &beside {
+        Some(write) => !write.is_harmless(harm),
+        None => !harm.is_harmless_statement(&statement.kind),
+    });
+    let accesses = match &beside {
+        Some(write) => write.accesses(),
+        None => statement_accesses(statement),
+    };
+    is_loud
+        || (!ends_lent_parameter(body, ownership, statement)
+            && changes_owner(accesses, range.owners))
+}
+
+/// Whether one of `accesses` reaches one of `owners` in a way that does not
+/// leave it as it was.
+fn changes_owner(accesses: Vec<(Local, Access)>, owners: &[Local]) -> bool {
+    accesses
+        .into_iter()
+        .any(|(accessed, access)| owners.contains(&accessed) && !leaves_owner(access))
+}
+
+/// A write into an owner that parts, at a field of its own
+/// ([`parts_at_own_field`]), from every place copied out of that owner on the
+/// way to a borrow: it leaves the borrow's value where it was.
+struct WriteBeside<'s> {
+    place: &'s Place,
+    /// The value it stores, if it stores one.
+    stored: Option<&'s Rvalue>,
+    /// Whether it releases the value the place held.
+    releases: bool,
+}
+
+impl WriteBeside<'_> {
+    /// Every local it reaches other than the owner it writes into: the
+    /// locals indexing its place, and those its stored value reads.
+    fn accesses(&self) -> Vec<(Local, Access)> {
+        let mut accesses: Vec<(Local, Access)> = (self.place.index_locals())
+            .map(|index| (index, Access::ProjectedRead))
+            .collect();
+        if let Some(rvalue) = self.stored {
+            rvalue_accesses(rvalue, &mut accesses);
+        }
+        accesses
+    }
+
+    /// Whether it is harmless by `harm`: the value it releases, if any, runs
+    /// no drop hook.
+    fn is_harmless(&self, harm: &BodyHarm) -> bool {
+        !self.releases || harm.is_harmless_release(self.place)
+    }
+}
+
+/// `statement` as a write beside what a borrow reads out of `owners` through
+/// the places `read`, or `None` when it is anything else.
+fn write_beside<'s>(
+    body: &Body,
+    statement: &'s Statement,
+    (owners, read): (&[Local], &[Place]),
+) -> Option<WriteBeside<'s>> {
+    let write = match &statement.kind {
+        StatementKind::Assign(place, rvalue) => WriteBeside {
+            place,
+            stored: Some(rvalue),
+            releases: false,
+        },
+        StatementKind::Reassign(place, rvalue) => WriteBeside {
+            place,
+            stored: Some(rvalue),
+            releases: true,
+        },
+        StatementKind::DecRef(place) => WriteBeside {
+            place,
+            stored: None,
+            releases: true,
+        },
+        StatementKind::StorageLive(_)
+        | StatementKind::StorageDead(..)
+        | StatementKind::IncRef(_)
+        | StatementKind::Dealloc(_)
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => return None,
+    };
+    let root = write.place.local;
+    let mut read_out_of_root = read.iter().filter(|place| place.local == root).peekable();
+    let is_beside = owners.contains(&root)
+        && read_out_of_root.peek().is_some()
+        && read_out_of_root.all(|place| parts_at_own_field(body, write.place, place));
+    is_beside.then_some(write)
 }
 
 /// Where a local is read again, by this check's own access classification:

@@ -839,6 +839,11 @@ fn lower_match_subject(
         .then_some(place.local),
         Operand::Constant(_) | Operand::Function(_) => None,
     };
+    // TODO: a copy of a place holding an enum with a drop hook cannot borrow
+    // across a write to that place, so when a payload binding that reaches no
+    // hook is read after `h.bag = Bag.Empty` the copy keeps the old enum and
+    // its hook runs at the end of the match rather than at the write; the
+    // binding should hold its payload, not the copy the whole enum.
     let local = match made_here.or(ended_binding) {
         Some(local) => local,
         None => {

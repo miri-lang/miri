@@ -664,6 +664,11 @@ fn place_is_counted(place: &Place, ctx: &RcContext) -> bool {
 
 /// The declared type of what `place` reaches; see [`PlaceTypes::declared`].
 pub(super) fn place_declared_type(place: &Place, ctx: &RcContext) -> Option<Type> {
+    place_types(ctx).declared(place)
+}
+
+/// The declared type of each place of the body `ctx` counts references in.
+pub(super) fn place_types<'a>(ctx: &RcContext<'a>) -> PlaceTypes<'a> {
     PlaceTypes {
         local_decls: ctx.local_decls,
         instance: ctx.instance,
@@ -672,5 +677,4 @@ pub(super) fn place_declared_type(place: &Place, ctx: &RcContext) -> Option<Type
         open_params: ctx.open_params,
         strict: true,
     }
-    .declared(place)
 }

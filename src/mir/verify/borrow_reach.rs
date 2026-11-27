@@ -66,6 +66,51 @@ pub(super) fn reach_of(body: &Body, place: &Place) -> Option<Reach> {
     Some(reach)
 }
 
+/// Whether `written` and `read`, rooted at one local, part at a field of a
+/// value that keeps each field in a slot of its own — a tuple, a struct or an
+/// instance of a class — so a write into `written` leaves `read` as it was.
+/// An enum's payload fields, and an optional's, may share a slot between
+/// variants; a place inside the other, or a step this check cannot type,
+/// parts at no field.
+pub(super) fn parts_at_own_field(body: &Body, written: &Place, read: &Place) -> bool {
+    if written.local != read.local {
+        return false;
+    }
+    let common = (written.projection.iter())
+        .zip(&read.projection)
+        .position(|(w, r)| w != r);
+    let Some(depth) = common else {
+        return false;
+    };
+    let (PlaceElem::Field(_), PlaceElem::Field(_)) =
+        (&written.projection[depth], &read.projection[depth])
+    else {
+        return false;
+    };
+    let container = Place {
+        local: written.local,
+        projection: written.projection[..depth].to_vec(),
+    };
+    let definitions = body.rc_classifier.definitions();
+    PlaceTypes::of(body)
+        .declared(&container)
+        .is_some_and(|ty| keeps_fields_apart(&ty.kind, definitions))
+}
+
+/// Whether a value of `kind` keeps each field in a slot of its own.
+fn keeps_fields_apart(kind: &TypeKind, definitions: &HashMap<String, TypeDefinition>) -> bool {
+    let is_struct =
+        |name: &String| matches!(definitions.get(name), Some(TypeDefinition::Struct(_)));
+    match container_of(kind, definitions) {
+        Container::Instance => true,
+        Container::FieldsByValue => {
+            matches!(kind, TypeKind::Tuple(_))
+                || matches!(kind, TypeKind::Custom(name, _) if is_struct(name))
+        }
+        Container::ElementsByValue | Container::Opaque => false,
+    }
+}
+
 fn container_of(kind: &TypeKind, definitions: &HashMap<String, TypeDefinition>) -> Container {
     if let Some(collection) = kind.as_builtin_collection() {
         return match collection {

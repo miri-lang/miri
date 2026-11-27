@@ -257,30 +257,41 @@ fn main()
 
 #[test]
 fn a_payload_used_after_a_write_beside_the_matched_place_has_one_holder() {
-    // The matched enum has no hook of its own here: with one, borrow
-    // inference still takes a store to a sibling field for a change to the
-    // subject's root (see `local_borrows::statement_changes`).
     assert_one_holder_output(
         &with_pack(
             r#"
-enum Bag
-    Two(Token, Token)
-    Empty
-
-class Shelf
-    public var bag Bag
-    public var count int
-
 fn main()
-    var h = Shelf(bag: Bag.Two(Token(id: 1), Token(id: 2)), count: 0)
-    match h.bag
-        Bag.Two(a, _)
+    var h = Holder(pack: Pack.Two(Token(id: 1), Token(id: 2)), count: 0)
+    match h.pack
+        Pack.Two(a, _)
             h.count = 1
             println(f"{a.id} {h.count}")
-        Bag.Empty: println("none")
+        Pack.Empty: println("none")
 "#,
         ),
-        "1 1\nreleased 1\nreleased 2",
+        "1 1\npack dropped\nreleased 1\nreleased 2",
+    );
+}
+
+#[test]
+fn a_payload_used_after_a_counted_value_replaced_beside_the_matched_place_has_one_holder() {
+    assert_one_holder_output(
+        &with_pack(
+            r#"
+class Labelled
+    public var pack Pack
+    public var name String
+
+fn main()
+    var h = Labelled(pack: Pack.Two(Token(id: 1), Token(id: 2)), name: "old")
+    match h.pack
+        Pack.Two(a, _)
+            h.name = "new"
+            println(f"{a.id} {h.name}")
+        Pack.Empty: println("none")
+"#,
+        ),
+        "1 new\npack dropped\nreleased 1\nreleased 2",
     );
 }
 

@@ -923,3 +923,181 @@ fn a_borrow_of_a_tuple_element_picked_at_run_time_holds() {
     let violations = verify_local_borrows(&body, &body.ownership, None);
     assert!(violations.is_empty(), "got: {}", messages(&violations));
 }
+
+fn named_ty(name: &str) -> Type {
+    Type::new(
+        TypeKind::Custom(name.to_string(), None),
+        miri::error::syntax::Span::new(0, 0),
+    )
+}
+
+/// `Shelf`, a class holding `held` in its first field and an int in its
+/// second; `Pair`, a struct of a string and an int; `Tagged`, an enum whose
+/// variants hold a string at different payload fields.
+fn shelf_definitions(held: Type) -> HashMap<String, TypeDefinition> {
+    use miri::ast::MemberVisibility;
+    use miri::type_checker::context::{EnumDefinition, FieldInfo, StructDefinition};
+    let field = |ty: Type| FieldInfo {
+        ty,
+        mutable: true,
+        visibility: MemberVisibility::Public,
+        initializer: None,
+    };
+    let shelf = ClassDefinition {
+        name: "Shelf".to_string(),
+        fields: vec![
+            ("held".to_string(), field(held)),
+            ("count".to_string(), field(int_ty())),
+        ],
+        ..gauge_class()
+    };
+    let pair = StructDefinition {
+        fields: vec![
+            ("name".to_string(), string_ty(), MemberVisibility::Public),
+            ("count".to_string(), int_ty(), MemberVisibility::Public),
+        ],
+        generics: None,
+        module: "test".to_string(),
+    };
+    let tagged = EnumDefinition {
+        variants: BTreeMap::from([
+            ("Front".to_string(), vec![string_ty(), int_ty()]),
+            ("Back".to_string(), vec![int_ty(), string_ty()]),
+        ]),
+        generics: None,
+        methods: BTreeMap::new(),
+        module: "test".to_string(),
+        must_use: false,
+        non_exhaustive: false,
+    };
+    HashMap::from([
+        ("Shelf".to_string(), TypeDefinition::Class(shelf)),
+        ("Pair".to_string(), TypeDefinition::Struct(pair)),
+        ("Tagged".to_string(), TypeDefinition::Enum(tagged)),
+    ])
+}
+
+/// Locals: 0 the return slot, 1 a `Shelf` the body owns, holding `held`,
+/// 2 an int, 3 the string read out of `_1` at `read`. `_3` is recorded as
+/// borrowing from `_1`; `middle` runs while it holds the string.
+fn shelf_borrowing_body(held: Type, read: Vec<PlaceElem>, middle: Vec<Statement>) -> Recorded {
+    let zero = super::constant(int_ty(), Literal::Integer(IntegerLiteral::I64(0)));
+    let mut statements = vec![
+        super::storage_live(1),
+        super::assign_fresh(1),
+        stmt(StatementKind::Assign(place(2), Rvalue::Use(zero))),
+        super::storage_live(3),
+        stmt(StatementKind::Assign(
+            place(3),
+            Rvalue::Use(Operand::Copy(Place {
+                local: Local(1),
+                projection: read,
+            })),
+        )),
+    ];
+    statements.extend(middle);
+    statements.extend(end_of_borrow_and_list());
+    let mut body = body_of(
+        &[void_ty(), named_ty("Shelf"), int_ty(), string_ty()],
+        0,
+        vec![block(statements, ret())],
+    );
+    body.rc_classifier = RcClassifier::new(Rc::new(shelf_definitions(held)));
+    Recorded {
+        body,
+        ownership: OwnershipFacts {
+            borrowed_locals: HashMap::from([(Local(3), vec![Local(1)])]),
+            ..OwnershipFacts::default()
+        },
+    }
+}
+
+/// A store into `_1` at `projection`.
+fn store_into_shelf(projection: Vec<PlaceElem>, value: Rvalue) -> Statement {
+    stmt(StatementKind::Assign(
+        Place {
+            local: Local(1),
+            projection,
+        },
+        value,
+    ))
+}
+
+fn int_value() -> Rvalue {
+    Rvalue::Use(super::constant(
+        int_ty(),
+        Literal::Integer(IntegerLiteral::I64(1)),
+    ))
+}
+
+/// A store into a field of the owner beside the one the borrow reads leaves
+/// the borrowed value where it was.
+#[test]
+fn a_borrow_across_a_store_beside_the_field_it_reads_holds() {
+    let body = shelf_borrowing_body(
+        string_ty(),
+        vec![PlaceElem::Field(0)],
+        vec![store_into_shelf(vec![PlaceElem::Field(1)], int_value())],
+    );
+    assert_held(&body, "a store into the field beside the one read");
+}
+
+/// A store into the field the borrow reads replaces the borrowed value.
+#[test]
+fn a_borrow_across_a_store_into_the_field_it_reads_is_refused() {
+    let body = shelf_borrowing_body(
+        string_ty(),
+        vec![PlaceElem::Field(0)],
+        vec![store_into_shelf(
+            vec![PlaceElem::Field(0)],
+            super::fresh_string(),
+        )],
+    );
+    assert_refused(&body, "a store into the field read");
+}
+
+/// A release of the field beside the one the borrow reads leaves the
+/// borrowed value where it was; a release of the field it reads does not.
+#[test]
+fn a_borrow_across_a_release_beside_the_field_it_reads_holds_and_of_it_is_refused() {
+    let release = |field| {
+        stmt(StatementKind::DecRef(Place {
+            local: Local(1),
+            projection: vec![PlaceElem::Field(field)],
+        }))
+    };
+    let beside = shelf_borrowing_body(string_ty(), vec![PlaceElem::Field(0)], vec![release(1)]);
+    assert_held(&beside, "a release of the field beside the one read");
+    let read = shelf_borrowing_body(string_ty(), vec![PlaceElem::Field(0)], vec![release(0)]);
+    assert_refused(&read, "a release of the field read");
+}
+
+/// Two fields of a struct are separate slots: a store into one leaves a
+/// borrow of the other holding.
+#[test]
+fn a_borrow_across_a_store_beside_its_struct_field_holds() {
+    let body = shelf_borrowing_body(
+        named_ty("Pair"),
+        vec![PlaceElem::Field(0), PlaceElem::Field(0)],
+        vec![store_into_shelf(
+            vec![PlaceElem::Field(0), PlaceElem::Field(1)],
+            int_value(),
+        )],
+    );
+    assert_held(&body, "a store beside the struct field read");
+}
+
+/// Payload fields of different variants of an enum may share a slot, so a
+/// store into one is a change to a borrow of another.
+#[test]
+fn a_borrow_across_a_store_into_another_payload_field_of_its_enum_is_refused() {
+    let body = shelf_borrowing_body(
+        named_ty("Tagged"),
+        vec![PlaceElem::Field(0), PlaceElem::Field(1)],
+        vec![store_into_shelf(
+            vec![PlaceElem::Field(0), PlaceElem::Field(2)],
+            super::fresh_string(),
+        )],
+    );
+    assert_refused(&body, "a store into another payload field of the enum read");
+}

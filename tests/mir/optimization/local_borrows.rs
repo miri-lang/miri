@@ -177,3 +177,45 @@ fn wipe(p Pack)
         "{owners:?}\n{body}"
     );
 }
+
+/// `main`, matching the `pack` field of a holder and running `store` in the
+/// arm before reading a field of the payload binding `a`.
+fn matching_held_pack(store: &str) -> String {
+    format!(
+        "{PACK}
+class Holder
+    public var pack Pack
+    public var count int
+
+fn main()
+    var h = Holder(pack: Pack.Two(Item(n: 1), Item(n: 2)), count: 0)
+    match h.pack
+        Pack.Two(a, _)
+            {store}
+            let _k = a.n
+        Pack.Empty: println(\"none\")
+"
+    )
+}
+
+/// A store to a field beside the matched one leaves the payload a binding
+/// reads out of it where it was, so the binding borrows from the holder.
+#[test]
+fn a_payload_binding_borrows_across_a_store_beside_the_matched_field() {
+    let (owners, body) = owners_of(&matching_held_pack("h.count = 1"), "main", "a");
+    assert!(
+        owners.iter().any(|owner| owner == "h"),
+        "{owners:?}\n{body}"
+    );
+}
+
+/// A store to the matched field itself releases the payload a binding reads
+/// out of it, so the binding cannot borrow from the holder.
+#[test]
+fn a_store_to_the_matched_field_ends_the_borrow() {
+    let (owners, body) = owners_of(&matching_held_pack("h.pack = Pack.Empty"), "main", "a");
+    assert!(
+        !owners.iter().any(|owner| owner == "h"),
+        "{owners:?}\n{body}"
+    );
+}

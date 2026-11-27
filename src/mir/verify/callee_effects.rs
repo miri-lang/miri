@@ -260,20 +260,30 @@ impl<'b> BodyHarm<'b> {
             StatementKind::Assign(dest, _) | StatementKind::Reassign(dest, _) => {
                 stores_into_own_value(self.body, dest)
             }
-            StatementKind::DecRef(place)
-                if place.projection.is_empty() && self.lent_copies.contains(&place.local) =>
-            {
-                true
-            }
-            StatementKind::DecRef(place) | StatementKind::Dealloc(place) => (self.places)
-                .declared(place)
-                .is_some_and(|ty| !self.hooks.may_run_drop_hook(&ty)),
+            StatementKind::DecRef(place) => self.is_harmless_release(place),
+            StatementKind::Dealloc(place) => self.runs_no_drop_hook(place),
             StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::Nop
             | StatementKind::ReadHeader(_) => true,
         }
+    }
+
+    /// Whether releasing what `place` holds is harmless: it is a copy of a
+    /// parameter the body is lent, whose caller still holds the value, or
+    /// what it holds runs no drop hook.
+    pub(super) fn is_harmless_release(&self, place: &Place) -> bool {
+        let is_lent_copy = place.projection.is_empty() && self.lent_copies.contains(&place.local);
+        is_lent_copy || self.runs_no_drop_hook(place)
+    }
+
+    /// Whether what `place` holds is of a type whose release runs no drop
+    /// hook; a place whose type cannot be read may run one.
+    fn runs_no_drop_hook(&self, place: &Place) -> bool {
+        (self.places)
+            .declared(place)
+            .is_some_and(|ty| !self.hooks.may_run_drop_hook(&ty))
     }
 
     /// Whether `terminator`, ending `block`, is a direct call to a function

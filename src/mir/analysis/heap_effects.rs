@@ -241,6 +241,11 @@ impl<'b> BodyNoise<'b> {
         self.classifier.is_loud_statement(kind)
     }
 
+    /// Whether releasing what `place` holds may run a drop hook.
+    pub fn release_may_run_drop_hook(&self, place: &Place) -> bool {
+        self.classifier.release_may_run_drop_hook(place)
+    }
+
     /// Whether `terminator` may release a value another name holds.
     pub fn is_loud_terminator(&self, terminator: &Terminator) -> bool {
         match self.classifier.noise(terminator) {
