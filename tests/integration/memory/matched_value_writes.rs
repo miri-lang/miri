@@ -368,3 +368,90 @@ fn main()
         "1 0",
     );
 }
+
+/// `Bag`, an enum with a drop hook whose payload, `Item`, reaches none: a
+/// binding read out of it may outlive a write to the matched value.
+const BAG: &str = r#"
+class Item
+    public var n int
+
+enum Bag
+    Two(Item, Item)
+    Empty
+    fn drop(self)
+        println("bag dropped")
+    fn clear(self)
+        self = Bag.Empty
+
+class BagHolder
+    public var bag Bag
+    public var count int
+
+fn empty(p out Bag)
+    p = Bag.Empty
+"#;
+
+/// The bag `main` matches inside a holder, with `write` ending the matched
+/// value inside the arm before its payload is read.
+fn matching_held_bag(write: &str) -> String {
+    format!(
+        r#"{BAG}
+fn main()
+    var h = BagHolder(bag: Bag.Two(Item(n: 1), Item(n: 2)), count: 0)
+    match h.bag
+        Bag.Two(a, _)
+            {write}
+            println(f"{{a.n}}")
+        Bag.Empty: println("none")
+    println("end")
+"#
+    )
+}
+
+/// The bag `main` matches as a local of its own, with `write` ending it.
+fn matching_local_bag(write: &str) -> String {
+    format!(
+        r#"{BAG}
+fn main()
+    var p = Bag.Two(Item(n: 1), Item(n: 2))
+    match p
+        Bag.Two(a, _)
+            {write}
+            println(f"{{a.n}}")
+        Bag.Empty: println("none")
+    println("end")
+"#
+    )
+}
+
+#[test]
+fn a_hook_free_payload_used_after_the_held_hooked_value_is_assigned_runs_the_hook_at_the_write() {
+    assert_one_holder_output(
+        &matching_held_bag("h.bag = Bag.Empty"),
+        "bag dropped\n1\nend\nbag dropped",
+    );
+}
+
+#[test]
+fn a_hook_free_payload_used_after_a_method_replaces_the_hooked_value_runs_the_hook_at_the_write() {
+    assert_one_holder_output(
+        &matching_local_bag("p.clear()"),
+        "bag dropped\n1\nend\nbag dropped",
+    );
+}
+
+#[test]
+fn a_hook_free_payload_used_after_the_hooked_value_is_passed_out_runs_the_hook_at_the_write() {
+    assert_one_holder_output(
+        &matching_local_bag("empty(p)"),
+        "bag dropped\n1\nend\nbag dropped",
+    );
+}
+
+#[test]
+fn a_hook_free_payload_used_after_the_hooked_value_is_assigned_runs_the_hook_at_the_write() {
+    assert_one_holder_output(
+        &matching_local_bag("p = Bag.Empty"),
+        "bag dropped\n1\nend\nbag dropped",
+    );
+}

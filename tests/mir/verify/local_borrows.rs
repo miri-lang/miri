@@ -887,6 +887,100 @@ fn a_program_binding_naming_a_whole_local_is_refused() {
     assert_refused(&body, "a program binding copying a whole local");
 }
 
+/// Locals: 0 the return slot, 1 a list of strings the body owns, 2 the
+/// index, 3 a temporary naming the whole list the way a match names its
+/// subject, recorded as borrowing it, 4 a string read out of `_3`. The list
+/// is released and rebound after the last read of `_3` but before the last
+/// read of `_4`, the way a write to the matched value runs while a payload
+/// binding is still read. `_4` holds the reference its copy takes, released
+/// before its storage ends, unless `borrowed`, when it is recorded as
+/// borrowing `_3` and `_1` instead.
+fn alias_read_past_a_release_body(borrowed: bool) -> Recorded {
+    let list = || collection_ty("List", &[TypeKind::String]);
+    let zero = super::constant(int_ty(), Literal::Integer(IntegerLiteral::I64(0)));
+    let read_of_alias = Place {
+        local: Local(3),
+        projection: vec![PlaceElem::index(Local(2))],
+    };
+    let mut statements = vec![
+        super::storage_live(1),
+        super::assign_fresh(1),
+        stmt(StatementKind::Assign(place(2), Rvalue::Use(zero))),
+        super::storage_live(3),
+        stmt(StatementKind::Assign(
+            place(3),
+            Rvalue::Use(Operand::Copy(place(1))),
+        )),
+        super::storage_live(4),
+        stmt(StatementKind::Assign(
+            place(4),
+            Rvalue::Use(Operand::Copy(read_of_alias)),
+        )),
+    ];
+    statements.extend([
+        super::decref(1),
+        super::assign_fresh(1),
+        stmt(StatementKind::Assign(place(2), Rvalue::Len(place(4)))),
+    ]);
+    if !borrowed {
+        statements.push(super::decref(4));
+    }
+    statements.extend([
+        super::storage_dead(4),
+        super::storage_dead(3),
+        super::decref(1),
+        super::storage_dead(1),
+    ]);
+    let body = body_of(
+        &[void_ty(), list(), int_ty(), list(), string_ty()],
+        0,
+        vec![block(statements, ret())],
+    );
+    let mut borrowed_locals = HashMap::from([(Local(3), vec![Local(1)])]);
+    if borrowed {
+        borrowed_locals.insert(Local(4), vec![Local(3), Local(1)]);
+    }
+    Recorded {
+        body,
+        ownership: OwnershipFacts {
+            borrowed_locals,
+            ..OwnershipFacts::default()
+        },
+    }
+}
+
+/// A temporary naming a whole local borrows it to its own last read: a read
+/// out of it that holds a reference of its own may outlive a release of the
+/// named local.
+#[test]
+fn a_temporary_naming_a_whole_local_released_after_its_last_read_holds() {
+    let body = alias_read_past_a_release_body(false);
+    let violations = verify_body(&body, &body.ownership);
+    assert!(violations.is_empty(), "got: {}", messages(&violations));
+}
+
+/// A borrow read out of that temporary relies on the named local too, so
+/// one read past the release is refused.
+#[test]
+fn a_borrow_read_out_of_a_temporary_naming_a_whole_local_past_its_release_is_refused() {
+    let body = alias_read_past_a_release_body(true);
+    let violations = verify_local_borrows(&body, &body.ownership, None);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.local == Local(4)),
+        "reading `_4` past the release of `_1` must refuse it, got: {}",
+        messages(&violations)
+    );
+    assert!(
+        !violations
+            .iter()
+            .any(|violation| violation.local == Local(3)),
+        "`_3` is last read before the release, got: {}",
+        messages(&violations)
+    );
+}
+
 /// The body `single_block` builds, with `_1` a tuple of two strings rather
 /// than a list: `_3` reads the element `_2` picks at run time.
 fn tuple_element_body() -> Recorded {

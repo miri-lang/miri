@@ -220,6 +220,48 @@ fn a_store_to_the_matched_field_ends_the_borrow() {
     );
 }
 
+/// Every borrow of the body `function` of `source`, as the borrowing local's
+/// name (or `_N` for a temporary) with the names of its owners; with the
+/// body, to show when a test fails.
+fn borrows_of(source: &str, function: &str) -> (Vec<(String, Vec<String>)>, String) {
+    let (bodies, facts) = Pipeline::new()
+        .get_mir_program_with_rc(source)
+        .expect("the program compiles");
+    let (body, facts) = bodies
+        .iter()
+        .zip(facts.iter())
+        .find(|((symbol, _), _)| symbol == function || symbol.ends_with(&format!(".{function}")))
+        .map(|((_, body), facts)| (body, facts))
+        .unwrap_or_else(|| panic!("no body named {function}"));
+    let name = |local: &Local| {
+        (body.local_decls[local.0].name.as_deref())
+            .map_or_else(|| format!("_{}", local.0), str::to_string)
+    };
+    let borrows = (facts.ownership().borrowed_locals.iter())
+        .map(|(local, owners)| (name(local), owners.iter().map(name).collect()))
+        .collect();
+    (borrows, body.to_string())
+}
+
+/// A store to the matched field of a holder, while a binding read out of the
+/// payload is still read, leaves the match subject borrowing from the holder
+/// to its own last read, so the enum keeps one holder and its hook runs at
+/// the store; the binding takes a reference of its own to what it reads.
+#[test]
+fn a_payload_binding_read_past_a_store_to_the_matched_field_holds_its_own_reference() {
+    let (borrows, body) = borrows_of(&matching_held_pack("h.pack = Pack.Empty"), "main");
+    assert!(
+        !borrows.iter().any(|(local, _)| local == "a"),
+        "{borrows:?}\n{body}"
+    );
+    assert!(
+        (borrows.iter()).any(
+            |(local, owners)| local.starts_with('_') && owners.iter().any(|owner| owner == "h")
+        ),
+        "{borrows:?}\n{body}"
+    );
+}
+
 /// A hook run by overwriting a field beside the matched one receives only
 /// the overwritten value. The holder is a resource, which no other name
 /// holds, so the hook cannot reach the payload and the binding borrows.

@@ -52,7 +52,12 @@
 //!   of a lent parameter's binding leaves its caller's reference in place. A
 //!   borrow read out of another borrowed local inherits that local's root, so
 //!   its root's root must stay as well, and the end of its root's storage is a
-//!   change. A path that reaches the end of the body before `l`'s storage ends
+//!   change. The range runs to the last read of the borrow or of any borrow
+//!   read out of it, except for a temporary naming a value whose release may
+//!   run a drop hook, whose range runs to its own last read: a match subject
+//!   borrows its place up to a write to it, and a payload binding read past
+//!   the write takes a reference of its own, so the hook runs at the write.
+//!   A path that reaches the end of the body before `l`'s storage ends
 //!   is refused. A write into an owner beside every place read out of it on
 //!   the way to `l` — parting from each at a field of a struct, a tuple or a
 //!   class instance, which keep each field in a slot of its own — leaves
@@ -134,11 +139,15 @@ pub(super) fn infer_local_borrows(
     let noise = (!exposed_sites.is_empty() || !entries.is_empty())
         .then(|| BodyNoise::of(body, ownership, Phase::Lowered, &hooks));
     let types = place_types(ctx);
+    let aliases = (reads.keys().copied())
+        .filter(|&local| is_resource_alias(body, local, &hooks))
+        .collect();
     let mut settled = Settled {
         body,
         ownership,
         types: &types,
         reads: &reads,
+        aliases: &aliases,
         exposed_sites: &exposed_sites,
         entries: &entries,
         noise: noise.as_ref(),
@@ -215,6 +224,10 @@ struct Settled<'b> {
     /// from what a borrow reads at a field of its own.
     types: &'b PlaceTypes<'b>,
     reads: &'b Reads,
+    /// The candidates that hold a value whose release may run a drop hook
+    /// as a second name for it ([`is_resource_alias`]), whose range runs to
+    /// their own last read only.
+    aliases: &'b HashSet<Local>,
     /// The reads other code may reach what they read through.
     exposed_sites: &'b HashSet<Site>,
     /// Each entry a runtime getter hands back as a borrow, with the locals
@@ -247,7 +260,7 @@ impl Settled<'_> {
         let mut all_owners: Vec<Local> = Vec::new();
         let mut is_exposed = false;
         let read_out_of = reads_out_of(reads, local);
-        let readers = readers_through(reads, local);
+        let readers = self.range_readers(local);
         for (site, source) in reads.get(&local).into_iter().flatten() {
             let Some(Holders {
                 owners,
@@ -288,6 +301,22 @@ impl Settled<'_> {
         }
         self.decided.insert(local, Some(answer == Some(true)));
         answer
+    }
+
+    /// The locals whose reads `local`'s range runs to: `local` and every
+    /// candidate read out of it, at any depth, so a borrow ending early never
+    /// hands its owners' stricter watch to a borrow read out of it. A
+    /// resource alias runs only to its own last read: owning it would give
+    /// the value a second holder that keeps it, and its drop hook, past a
+    /// write to the place it names. A candidate read out of it and read past
+    /// such a write is watched over the alias's owners as well, so it takes a
+    /// reference of its own to what it reads, and the hook runs at the write.
+    fn range_readers(&self, local: Local) -> HashSet<Local> {
+        if self.aliases.contains(&local) {
+            HashSet::from([local])
+        } else {
+            readers_through(self.reads, local)
+        }
     }
 
     /// `root` and, while it is itself a borrowed read, the owners of what it
@@ -704,9 +733,8 @@ struct Watch<'w> {
     /// releases at most a reference to a value the borrow's owner still
     /// holds, so it runs no drop hook and changes nothing the borrow reads.
     read_out_of: &'w HashSet<Local>,
-    /// The borrow and every candidate read out of it, at any depth: the
-    /// range runs to the last read of any of them, so a borrow ending early
-    /// never hands its owners' stricter watch to a borrow read out of it.
+    /// The locals the range runs to the last read of
+    /// ([`Settled::range_readers`]).
     readers: &'w HashSet<Local>,
 }
 
