@@ -8,6 +8,9 @@
 
 use super::utils::*;
 
+/// A node with a drop hook. A walk binding the list it is handed
+/// (`var cur = head`) owns it, so each node is released as the walk steps
+/// past it.
 const NODE: &str = r#"
 class Node
     var val int
@@ -44,7 +47,7 @@ fn main()
     println("end")
 "#,
         ),
-        "2\nend\ndrop 1\ndrop 2",
+        "drop 1\ndrop 2\n2\nend",
     );
 }
 
@@ -71,7 +74,7 @@ fn main()
     println("end")
 "#,
         ),
-        "2\nend\ndrop 1\ndrop 2",
+        "drop 1\ndrop 2\n2\nend",
     );
 }
 
@@ -99,7 +102,7 @@ fn main()
     println("end")
 "#,
         ),
-        "1\nend\ndrop 1\ndrop 2\ndrop 3",
+        "drop 1\ndrop 2\ndrop 3\n1\nend",
     );
 }
 

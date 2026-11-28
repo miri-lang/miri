@@ -19,6 +19,7 @@ use miri::ast::statement::StatementKind as AstStatementKind;
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::BasicBlockData;
+use miri::mir::drop_elaboration::elaborate_drops;
 use miri::mir::facts::OwnershipFacts;
 use miri::mir::lowering::lower_function;
 use miri::mir::lowering::Lowered;
@@ -834,7 +835,9 @@ fn lowered_with_rc(source: &str, name: &str) -> Body {
     lowered_with_rc_and_ownership(source, name).0
 }
 
-/// [`lowered_with_rc`], with the ownership RC insertion recorded about the body.
+/// [`lowered_with_rc`], with the ownership RC insertion recorded about the
+/// body. Drop elaboration runs first, as RC insertion requires: it removes
+/// the scope-end release of a binding a body already consumed.
 fn lowered_with_rc_and_ownership(source: &str, name: &str) -> (Body, OwnershipFacts) {
     let pipeline = Pipeline::new();
     let result = pipeline.frontend(source).expect("Frontend should succeed");
@@ -851,6 +854,7 @@ fn lowered_with_rc_and_ownership(source: &str, name: &str) -> (Body, OwnershipFa
 
     let Lowered { mut body, .. } =
         lower_function(func_stmt, &result.type_checker, false, false).expect("Lowering failed");
+    elaborate_drops(&mut body).expect("Drop elaboration accepts the body");
     let mut ownership = OwnershipFacts::default();
     insert_rc(&mut body, &mut ownership).expect("RC insertion accepts the body");
     (body, ownership)

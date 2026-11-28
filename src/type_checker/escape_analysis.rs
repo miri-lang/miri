@@ -7,7 +7,10 @@
 //! A function's escape summary answers the question: *which of my managed-type
 //! parameters outlive the call?*  A parameter "escapes" if it is returned,
 //! stored into a heap field, captured into a returned closure, or passed to
-//! another function that escapes it.
+//! another function that escapes it. A parameter bound whole to a local
+//! (`let b = t`, `b = t`, or a payload matched out of it) is kept as well:
+//! the local is its holder from then on, so a resource bound that way is the
+//! function's own, as one it stores is.
 //!
 //! # Structure
 //!
@@ -204,6 +207,9 @@ pub enum EscapeNextHop {
     ElementStore,
     /// The parameter is part of a value the function builds and holds.
     Built,
+    /// The parameter, or a payload matched out of it, is bound whole to the
+    /// local `name`, which holds it from then on.
+    Bound { name: String },
     /// The parameter is captured by a closure, which takes what it captures
     /// when it is created; `returned` when the function returns the closure.
     ClosureCapture { returned: bool },
@@ -386,11 +392,14 @@ pub fn analyze_return_value(
 }
 
 /// What keeps a parameter the value-flow rule finds in a value: the function
-/// returning the value, or the place the value is stored into.
+/// returning the value, the place the value is stored into, or the local
+/// bound to it, which holds a binding it takes whole and none it reads a part
+/// of.
 #[derive(Clone)]
 enum Keeping {
     Returned,
     Stored(EscapeNextHop),
+    Bound(EscapeNextHop),
 }
 
 struct ReturnFlowAnalyzer<'a> {
@@ -428,8 +437,16 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         match &self.keeping {
             Keeping::Returned if self.wrapped.get() => EscapeNextHop::ReturnAggregate,
             Keeping::Returned => EscapeNextHop::Return,
-            Keeping::Stored(hop) => hop.clone(),
+            Keeping::Stored(hop) | Keeping::Bound(hop) => hop.clone(),
         }
+    }
+
+    /// Whether a part read out of a binding — a managed field or element —
+    /// is the binding's for what keeps the value: a value returned or stored
+    /// keeps the binding it reads a part of, a local bound to the value
+    /// holds only the part.
+    fn keeps_through_parts(&self) -> bool {
+        !matches!(self.keeping, Keeping::Bound(_))
     }
 
     /// `hop`, taken at the place this classification is for.
@@ -595,7 +612,8 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         expr: &Expression,
         flow: &mut ReturnFlow,
     ) {
-        let alias_through = aliases_return && self.is_managed_expr(expr);
+        let alias_through =
+            aliases_return && self.keeps_through_parts() && self.is_managed_expr(expr);
         self.classify(idx_expr, false, flow);
         if alias_through && self.record_projected_param(obj, flow) {
             return;
@@ -610,7 +628,8 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         expr: &Expression,
         flow: &mut ReturnFlow,
     ) {
-        let alias_through = aliases_return && self.is_managed_expr(expr);
+        let alias_through =
+            aliases_return && self.keeps_through_parts() && self.is_managed_expr(expr);
         if alias_through && self.record_projected_param(obj, flow) {
             return;
         }
@@ -640,14 +659,20 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         flow: &mut ReturnFlow,
     ) {
         self.classify(scrutinee, false, flow);
+        let named: BTreeSet<ParamIndex> = match named_binding(scrutinee) {
+            Some(name) => self.param_indices(name).collect(),
+            None => BTreeSet::new(),
+        };
         for branch in branches {
             let mut bound = HashSet::new();
             for pattern in &branch.patterns {
                 collect_pattern_bindings(pattern, &mut bound);
             }
+            let mut locals = self.locals.clone();
+            locals.extend(bound.iter().map(|name| (name.clone(), named.clone())));
             let mut values = self.function_values.clone();
             values.extend(bound.into_iter().map(|name| (name, FunctionValue::Opaque)));
-            let arm = self.holding(&values);
+            let arm = self.holding(&locals, &values);
             if let Some(guard) = &branch.guard {
                 arm.classify(guard, false, flow);
             }
@@ -655,10 +680,17 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         }
     }
 
-    /// This analyzer, with `function_values` the locals holding a function
-    /// value: a match arm's, whose patterns bind names of their own.
-    fn holding<'b>(&'b self, function_values: &'b FunctionValues) -> ReturnFlowAnalyzer<'b> {
+    /// This analyzer in a match arm, whose patterns bind names of their own:
+    /// with `locals` the locals in scope, a payload bound out of a binding
+    /// naming what the binding names, and `function_values` the locals
+    /// holding a function value.
+    fn holding<'b>(
+        &'b self,
+        locals: &'b Locals,
+        function_values: &'b FunctionValues,
+    ) -> ReturnFlowAnalyzer<'b> {
         ReturnFlowAnalyzer {
+            locals,
             function_values,
             keeping: self.keeping.clone(),
             wrapped: Cell::new(self.wrapped.get()),
@@ -2013,6 +2045,12 @@ impl<'a> EscapeWalk<'a> {
     /// conditional, a match, a block, a cast or a call handing an argument
     /// back.
     fn named_by(&self, value: &Expression) -> BTreeSet<ParamIndex> {
+        // TODO: a local bound to a managed part of a binding (`let s =
+        // t.name`) names the binding, so returning the local keeps a
+        // resource parameter `t` that `return t.name` leaves the caller's,
+        // and the caller's later read is refused. A part read out of a
+        // binding is a value of its own; only a binding taken whole should
+        // be named.
         let mut flow = ReturnFlow::default();
         self.analyzer().classify(value, true, &mut flow);
         flow.return_aliases
@@ -2096,6 +2134,21 @@ impl<'a> EscapeWalk<'a> {
         flow.keep_all(held);
     }
 
+    /// Records every parameter the local `name`, given `value` at `span`,
+    /// holds: each binding `value` may be — a parameter, a local naming one,
+    /// a payload matched out of one — through a conditional, a match, a
+    /// block, a cast or a call handing an argument back, which the local
+    /// takes whole. A part read out of a binding (`t.name`) is a value of
+    /// its own, and keeps nothing.
+    fn bound(&self, value: &Expression, name: &str, span: Span, flow: &mut ReturnFlow) {
+        let hop = EscapeNextHop::Bound {
+            name: name.to_string(),
+        };
+        let mut held = ReturnFlow::default();
+        (self.analyzer_at(Keeping::Bound(hop), Some(span))).classify(value, true, &mut held);
+        flow.keep_all(held);
+    }
+
     fn statement(&mut self, stmt: &Statement, flow: &mut ReturnFlow) {
         match &stmt.node {
             StatementKind::Return(Some(e)) => self.returned(e, stmt.span, flow),
@@ -2111,6 +2164,7 @@ impl<'a> EscapeWalk<'a> {
                     let init = decl.initializer.as_ref();
                     let named = init.map(|init| {
                         self.expression(init, flow);
+                        self.bound(init, &decl.name, stmt.span, flow);
                         self.named_by(init)
                     });
                     let value = init.and_then(|init| self.function_value(init));
@@ -2393,7 +2447,8 @@ impl<'a> EscapeWalk<'a> {
 
     /// A value assigned into a field or an element is held by the place it
     /// is stored in. A local assigned a new value names what that value
-    /// names from then on.
+    /// names from then on, and holds it when the value is a binding, as a
+    /// local declared with it does.
     ///
     /// The store is recorded before the value's own parts are walked, so it
     /// is the first place a parameter stored whole is kept.
@@ -2416,6 +2471,7 @@ impl<'a> EscapeWalk<'a> {
         self.expression(rhs, flow);
         if let LeftHandSideExpression::Identifier(target) = lhs {
             if let ExpressionKind::Identifier(name, _) = &target.node {
+                self.bound(rhs, name, span, flow);
                 let named = self.named_by(rhs);
                 self.scopes.rebind(name, named);
             }

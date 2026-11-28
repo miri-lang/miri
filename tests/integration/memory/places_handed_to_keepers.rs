@@ -353,7 +353,7 @@ fn main()
     var c = Res(1)
     swap(c)
 "#,
-        "keep(old)",
+        "let old = c",
         "'c'",
         "`replace(c, <new value>)` (use system.memory)",
     );
@@ -420,7 +420,7 @@ fn main()
         Slot.Empty: println("empty")
 "#
         ),
-        "return old",
+        "let old = self",
         "'self'",
         "`return replace(self, <new value>)` (use system.memory)",
     );
@@ -447,7 +447,7 @@ fn main()
         Slot.Empty: println("empty")
 "#
         ),
-        "            return old",
+        "        let old = self",
         "'self'",
         "`return replace(self, <new value>)` (use system.memory)",
     );
@@ -741,8 +741,9 @@ fn main()
     );
 }
 
-/// A generic enum's method returning its restored receiver is refused at
-/// the instantiation whose payload is a resource.
+/// A generic enum's method binding its restored receiver to a local it
+/// returns is refused at the instantiation whose payload is a resource,
+/// where the local takes it.
 #[test]
 fn a_generic_restored_receiver_returned_is_refused_at_a_resource_instantiation() {
     assert_refused(
@@ -757,7 +758,7 @@ fn main()
         Pocket.Empty: println("empty")
 "#
         ),
-        "        return old",
+        "        let old = self",
         "'self'",
         "`return replace(self, <new value>)` (use system.memory)",
     );

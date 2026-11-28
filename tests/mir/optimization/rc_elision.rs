@@ -229,14 +229,11 @@ fn benchmark(items [int]) int:
 
 // ─── Resource types must keep their DecRef ───────────────────────────────────
 
-/// A type with a user-defined `fn drop(self)` destructor must NOT have its
-/// IncRef/DecRef pair elided — the DecRef is what triggers the destructor.
-///
-/// Without the `has_drop` guard, the elision pass would remove the pair for
-/// `copy = conn` and the destructor would not fire at `copy`'s StorageDead.
+/// A resource parameter bound to a local is moved into it, never copied:
+/// the body holds no retain for elision to pair, and the one release that
+/// runs the destructor survives elision.
 #[test]
-fn test_resource_type_keeps_rc_ops() {
-    // Conn has a destructor (fn drop), so its IncRef/DecRef pairs must be kept.
+fn test_resource_parameter_bound_to_a_local_keeps_its_one_release() {
     let source = r#"
 class Conn
     handle int
@@ -255,17 +252,9 @@ fn use_conn(conn Conn) int:
         })
         .expect("use_conn function not found");
 
-    // Conn has a destructor — the pair must NOT be elided.
-    // Both IncRef(conn_param) and DecRef(copy) should remain.
     let (incref, decref) = count_all_rc_ops(body);
-    assert!(
-        incref > 0,
-        "Expected IncRef to be preserved for resource type, but found none"
-    );
-    assert!(
-        decref > 0,
-        "Expected DecRef to be preserved for resource type, but found none"
-    );
+    assert_eq!(incref, 0, "binding the resource retains nothing:\n{body}");
+    assert_eq!(decref, 1, "the destructor's one release survives:\n{body}");
 }
 
 // ─── Idempotency ─────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ pub mod aggregate_resources;
 pub mod aliasing;
 pub mod assignment_values;
 pub mod borrowed_locals;
+pub mod bound_parameters;
 pub mod classes;
 pub mod cloneable;
 pub mod closures;

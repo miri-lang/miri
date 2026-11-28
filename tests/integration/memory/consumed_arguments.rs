@@ -1121,13 +1121,13 @@ fn a_module_function_sharing_a_program_functions_name_keeps_by_its_own_body() {
     );
 }
 
-/// A local rebound to another parameter no longer names the first.
+/// A local bound to a parameter takes it, so the parameter stays kept when
+/// the local is rebound to another one later.
 #[test]
-fn a_local_rebound_away_from_a_parameter_no_longer_keeps_it() {
-    assert_lends(
+fn a_parameter_bound_to_a_local_rebound_away_stays_kept() {
+    assert_keeps(
         &format!("{SHELF}fn f(r Res, o Res)\n    var t = r\n    t = o\n    var s = Shelf()\n    s.slot = t"),
         "f(h, k)",
-        "drop 2\n1\ndrop 1"
     );
 }
 

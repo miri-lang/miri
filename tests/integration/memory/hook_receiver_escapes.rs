@@ -270,8 +270,8 @@ fn main()
 }
 
 #[test]
-fn a_hook_handing_an_alias_of_self_to_a_keeper_is_refused() {
-    assert_escape_refused(&["let t = self", "keep(t)"], "        keep(t)");
+fn a_hook_binding_self_to_a_local_it_hands_to_a_keeper_is_refused_at_the_binding() {
+    assert_escape_refused(&["let t = self", "keep(t)"], "        let t = self");
 }
 
 /// A hook declares no return type, so returning `self` is already a type

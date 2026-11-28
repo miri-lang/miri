@@ -929,6 +929,7 @@ fn keeper_of(hop: &EscapeNextHop) -> String {
         EscapeNextHop::FieldStore { field } => format!("the field '{field}'"),
         EscapeNextHop::ElementStore => "the element it is stored in".to_string(),
         EscapeNextHop::Built => "the value built of it".to_string(),
+        EscapeNextHop::Bound { name } => format!("the local '{name}'"),
         EscapeNextHop::ClosureCapture { .. } => "the closure capturing it".to_string(),
         EscapeNextHop::DynamicFn { fn_name } => format!("dynamic fn '{fn_name}'"),
     }

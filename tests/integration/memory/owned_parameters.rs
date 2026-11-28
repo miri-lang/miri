@@ -301,8 +301,10 @@ fn main()
     );
 }
 
+/// A resource is not a value the callee may copy: binding it takes the
+/// caller's reference, so it is dropped where the callee's binding ends.
 #[test]
-fn test_a_parameter_with_a_drop_hook_is_dropped_where_it_was() {
+fn test_a_parameter_with_a_drop_hook_bound_in_the_callee_is_dropped_there() {
     assert_runs_with_output(
         r#"
 use system.io
@@ -325,7 +327,7 @@ fn main()
     println(hold(r))
     println("after")
 "#,
-        "a\nafter\ndrop a",
+        "drop a\na\nafter",
     );
 }
 

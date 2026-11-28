@@ -109,7 +109,6 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("integration::memory::lent_function_parameters::a_named_function_that_only_reads_is_passed_to_a_lending_parameter", GENERIC_BODY),
     ("integration::memory::lent_function_parameters::a_reducer_returning_its_accumulator_runs_at_a_resource", GENERIC_BODY),
     ("integration::memory::owned_parameters::test_a_list_of_values_with_a_drop_hook_is_dropped_where_it_was", GENERIC_BODY),
-    ("integration::memory::owned_parameters::test_a_parameter_with_a_drop_hook_is_dropped_where_it_was", GENERIC_BODY),
     ("integration::memory::parameter_writes::test_a_struct_parameter_holding_a_resource_runs_its_drop_hook_once", GENERIC_BODY),
     ("integration::memory::runtime_closure_slots::a_closure_read_from_a_field_is_adapted_and_released_once", GENERIC_BODY),
     ("integration::memory::runtime_closure_slots::a_runtime_sort_named_as_a_value_runs_each_hook_once", GENERIC_BODY),

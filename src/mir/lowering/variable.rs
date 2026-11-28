@@ -311,6 +311,12 @@ pub(crate) fn release_consumed_binding(
     expr: &Expression,
     span: Span,
 ) -> Result<(), LoweringError> {
+    // TODO: only an initializer that is the binding itself ends it. A
+    // binding read as a branch value of a conditional or a match
+    // (`let b = t if c else u`, `Some(r): r`) is consumed by the type checker
+    // but lowered as a retained copy while the binding keeps its own
+    // reference, so the resource has two holders until the binding's scope
+    // ends. Each branch should end the binding it hands over.
     if let Some(source) = consumed_read(ctx, expr)? {
         end_consumed_binding(ctx, source, span);
     }

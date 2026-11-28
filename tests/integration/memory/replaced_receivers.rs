@@ -191,7 +191,7 @@ fn main()
     println("taken")
 "#,
         "MER_OWN_008",
-        "        return old",
+        "        let old = self",
     );
 }
 

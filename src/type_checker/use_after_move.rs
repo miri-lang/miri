@@ -2715,6 +2715,9 @@ fn step(hop: &EscapeNextHop) -> String {
             "stores its argument into an element (escape sink)".to_string()
         }
         EscapeNextHop::Built => "builds a value that holds its argument (escape sink)".to_string(),
+        EscapeNextHop::Bound { name } => {
+            format!("binds its argument to the local '{name}' (escape sink)")
+        }
         EscapeNextHop::ClosureCapture { returned: true } => {
             "captures its argument in a returned closure (escape sink)".to_string()
         }
