@@ -240,6 +240,7 @@ impl<'a> LoweringContext<'a> {
         // Reference counting reads the program's type table, shared by every body.
         body.rc_classifier =
             crate::mir::rc::RcClassifier::new(type_checker.shared_type_definitions());
+        body.resource_types = type_checker.shared_resource_types();
 
         let source = type_checker.entry_source.as_deref();
         let source_path = type_checker.entry_source_path.as_deref();

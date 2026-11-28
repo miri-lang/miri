@@ -13,6 +13,7 @@ use crate::mir::symbol::Symbol;
 use crate::mir::terminator::{Discriminant, Terminator, TerminatorKind};
 use crate::mir::types::MirType;
 use crate::mir::Operand;
+use crate::type_checker::utils::ResourceTypes;
 use crate::type_checker::value_class::{LayoutScope, ValueLayout};
 use std::collections::HashSet;
 use std::fmt;
@@ -49,6 +50,9 @@ pub struct Body {
     /// Decides which of this body's values are reference counted, read
     /// against the program's type table at [`Generics::type_params`].
     pub rc_classifier: RcClassifier,
+    /// Which types are resources, as the type checker decided them for the
+    /// program. A body built without them knows of none.
+    pub resource_types: Rc<ResourceTypes>,
     /// How the body is called beyond its parameter count.
     pub signature: Signature,
     /// Which instantiation of a generic declaration the body was lowered for,
@@ -166,6 +170,7 @@ impl Body {
             execution_model,
             backend_metadata: None,
             rc_classifier: RcClassifier::default(),
+            resource_types: Rc::default(),
             signature: Signature::default(),
             generics: Generics::default(),
             captures: Captures::default(),

@@ -219,3 +219,65 @@ fn a_store_to_the_matched_field_ends_the_borrow() {
         "{owners:?}\n{body}"
     );
 }
+
+/// A hook run by overwriting a field beside the matched one receives only
+/// the overwritten value. The holder is a resource, which no other name
+/// holds, so the hook cannot reach the payload and the binding borrows.
+#[test]
+fn a_payload_binding_borrows_across_overwriting_a_hooked_value_beside_the_matched_field() {
+    let source = format!(
+        "{PACK}
+class Token
+    public var id int
+    fn drop(self)
+        println(f\"released {{self.id}}\")
+
+class Holder
+    public var pack Pack
+    public var other Token
+
+fn main()
+    var h = Holder(pack: Pack.Two(Item(n: 1), Item(n: 2)), other: Token(id: 9))
+    match h.pack
+        Pack.Two(a, _)
+            h.other = Token(id: 3)
+            let _k = a.n
+        Pack.Empty: println(\"none\")
+"
+    );
+    let (owners, body) = owners_of(&source, "main", "a");
+    assert!(
+        owners.iter().any(|owner| owner == "h"),
+        "{owners:?}\n{body}"
+    );
+}
+
+/// An instance that is no resource may be held by another name, here the
+/// token a replaced closure captured, whose hook writes the read field
+/// through it; so a read out of it cannot borrow across that release.
+#[test]
+fn a_read_out_of_a_shared_instance_takes_its_own_reference_across_a_release_beside_it() {
+    let source = "
+use system.collections.list
+
+class Shelf
+    public var items [int]
+    public var cb fn() int
+
+class Token
+    public var id int
+    public var shelf Shelf
+    fn drop(self)
+        self.shelf.items = List([7])
+
+fn main()
+    var h = Shelf(items: List([1, 2, 3]), cb: fn() int: 0)
+    let t = Token(id: 1, shelf: h)
+    h.cb = fn() int: t.id
+    let x = h.items
+    h.cb = fn() int: 5
+    println(f\"{x[0]}\")
+";
+    let (owners, body) = owners_of(source, "main", "x");
+    assert!(owners.is_empty(), "{owners:?}\n{body}");
+}

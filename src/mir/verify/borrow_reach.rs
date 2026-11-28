@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! How a borrowed local's source is reached, and whether a type is a
-//! reference by design, worked out for the borrow check on its own.
+//! How a borrowed local's source is reached, whether a type is a reference
+//! by design, and whether every instance on the way has one owner, worked
+//! out for the borrow check on its own.
 //!
-//! The borrow inference answers both questions too. The check does not ask
+//! The borrow inference answers these questions too. The check does not ask
 //! it: a defect shared by the two would pass both, and these answers decide
 //! whether a borrow outlives the value it reads. They are derived here from
-//! the type definitions and the runtime's copy-on-write table alone.
+//! the type definitions, the runtime's copy-on-write table and the type
+//! checker's table of resources alone.
 
 use std::collections::{HashMap, HashSet};
 
@@ -95,6 +97,38 @@ pub(super) fn parts_at_own_field(body: &Body, written: &Place, read: &Place) -> 
     PlaceTypes::of(body)
         .declared(&container)
         .is_some_and(|ty| keeps_fields_apart(&ty.kind, definitions))
+}
+
+/// Whether every step `place` takes through a field of a class instance, on
+/// its way from its root, leaves an instance of a type every instance of
+/// which is a resource, so no name but the root's chain holds it; a step
+/// this check cannot type is not.
+pub(super) fn steps_only_through_resources(body: &Body, place: &Place) -> bool {
+    let types = PlaceTypes::of(body);
+    let definitions = body.rc_classifier.definitions();
+    (0..place.projection.len()).all(|depth| {
+        let container = Place {
+            local: place.local,
+            projection: place.projection[..depth].to_vec(),
+        };
+        let Some(ty) = types.declared(&container) else {
+            return false;
+        };
+        match (
+            &place.projection[depth],
+            container_of(&ty.kind, definitions),
+        ) {
+            (PlaceElem::Field(_), Container::Instance) => {
+                body.resource_types.holds_at_every_instance(&ty.kind)
+            }
+            (PlaceElem::Field(_) | PlaceElem::Index(_, _), Container::FieldsByValue)
+            | (PlaceElem::Index(_, _), Container::ElementsByValue) => true,
+            (PlaceElem::Field(_), Container::ElementsByValue)
+            | (PlaceElem::Index(_, _), Container::Instance)
+            | (PlaceElem::Field(_) | PlaceElem::Index(_, _), Container::Opaque)
+            | (PlaceElem::Deref, _) => false,
+        }
+    })
 }
 
 /// Whether a value of `kind` keeps each field in a slot of its own.

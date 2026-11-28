@@ -58,9 +58,16 @@
 //!   class instance, which keep each field in a slot of its own — leaves
 //!   what `l` reads where it was: `h.count = 1` while `l` reads out of
 //!   `h.pack`. The value it stores still counts, and for a borrow other code
-//!   may reach so does a drop hook the overwritten value may run. An enum's
-//!   or an optional's payload fields may share a slot, so a write parting
-//!   from the read there is a change.
+//!   may reach so does a drop hook the overwritten value may run, unless no
+//!   such hook can reach what `l` reads: every owner is reached only through
+//!   the places read out of it, and every class instance on the way is a
+//!   resource. The hook receives only the released value and what it holds,
+//!   and a resource has one owner, the chain `l` reads down, so
+//!   `h.other = Token(..)` inside `match h.pack` leaves the subject
+//!   borrowing. A class instance that is no resource may be held by the
+//!   released value as well, and the hook can write through it. An enum's or
+//!   an optional's payload fields may share a slot, so a write parting from
+//!   the read there is a change.
 //! - **Nothing that may release a value another name holds runs while it
 //!   borrows, when other code may reach what it reads.** A value held behind a
 //!   class field is reached by every holder of the instance, and a parameter's
@@ -100,6 +107,7 @@ use crate::mir::{
 };
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::reference_sharing::{sharing, Sharing};
+use crate::type_checker::utils::ResourceTypes;
 use std::collections::{HashMap, HashSet};
 
 /// A statement's position: its block and its index in the block.
@@ -734,7 +742,8 @@ impl Watch<'_> {
             if ends_range(statement, local) || !reads.is_read_from(block, index) {
                 return Segment::Ended;
             }
-            if self.is_changed_by(statement) {
+            let previous = index.checked_sub(1).map(|at| &data.statements[at].kind);
+            if self.is_changed_by(statement, previous) {
                 return Segment::Changed;
             }
         }
@@ -759,7 +768,9 @@ impl Watch<'_> {
         }
     }
 
-    fn is_changed_by(&self, statement: &Statement) -> bool {
+    /// Whether `statement`, run directly after `previous`, changes what the
+    /// borrow reads.
+    fn is_changed_by(&self, statement: &Statement, previous: Option<&StatementKind>) -> bool {
         if ends_lent_parameter(self.body, self.ownership, statement) {
             return false;
         }
@@ -774,7 +785,7 @@ impl Watch<'_> {
         statement_changes(statement, self.owners)
             || self
                 .noise
-                .is_some_and(|noise| noise.is_loud_statement(&statement.kind))
+                .is_some_and(|noise| noise.is_loud_statement_after(previous, &statement.kind))
     }
 
     /// `statement` as a write into an owner beside every place the borrow
@@ -803,13 +814,8 @@ impl Watch<'_> {
 
     /// Whether a write beside what the borrow reads changes it: the value it
     /// stores moves or copies an owner whole, or — for a borrow other code
-    /// may reach — the value it overwrites or releases may run a drop hook.
-    // TODO: a hook run by releasing a slot beside the read path receives only
-    // that slot's value, which cannot reach the owner, yet it still ends the
-    // borrow here and in the verifier's `WriteBeside::is_harmless`, so
-    // `h.other = Token(..)` inside `match h.pack` gives the subject a second
-    // reference and the hook check traps; relaxing it needs the argument
-    // stated against the memory model first.
+    /// may reach — the value it overwrites or releases may run a drop hook
+    /// that can reach what the borrow reads.
     fn is_changed_by_write_beside(&self, write: &WriteBeside) -> bool {
         let (released, stored) = match *write {
             WriteBeside::Store(rvalue) => (None, Some(rvalue)),
@@ -819,7 +825,23 @@ impl Watch<'_> {
         stored.is_some_and(|rvalue| rvalue_changes(rvalue, self.owners))
             || released.is_some_and(|place| {
                 (self.noise).is_some_and(|noise| noise.release_may_run_drop_hook(place))
+                    && !self.is_out_of_hook_reach()
             })
+    }
+
+    /// Whether no drop hook a release beside the borrow's read path runs can
+    /// reach what the borrow reads: every owner is reached only through the
+    /// places read out of it, and every class instance on the way is a
+    /// resource ([`ResourceTypes::holds_at_every_instance`]). The hook
+    /// receives only the released value and what it holds. A resource has
+    /// one owner, the chain the borrow reads down, so that value cannot hold
+    /// it; any other value it shares a block with is copied before a write
+    /// and keeps its own count. A class instance that is no resource may be
+    /// held by the released value too, which the hook can write through.
+    fn is_out_of_hook_reach(&self) -> bool {
+        let resources = &self.body.resource_types;
+        (self.owners.iter()).all(|owner| self.read.iter().any(|read| read.local == *owner))
+            && (self.read.iter()).all(|read| reads_through_resources(read, self.types, resources))
     }
 
     fn is_changed_by_terminator(&self, terminator: &Terminator) -> bool {
@@ -989,6 +1011,24 @@ fn parts_at_own_field(written: &Place, read: &Place, types: &PlaceTypes) -> bool
     parts_at_field
         && (types.declared(&container))
             .is_some_and(|ty| holds_fields_apart(&ty.kind, types.definitions))
+}
+
+/// Whether every class instance `place` steps through a field of, on its
+/// way from its root, is a resource, which no other name holds. A step this
+/// rule cannot type is taken through an instance others may hold.
+fn reads_through_resources(place: &Place, types: &PlaceTypes, resources: &ResourceTypes) -> bool {
+    (0..place.projection.len()).all(|depth| {
+        let container = Place {
+            local: place.local,
+            projection: place.projection[..depth].to_vec(),
+        };
+        let Some(ty) = types.declared(&container) else {
+            return false;
+        };
+        let is_class_field = matches!(place.projection[depth], PlaceElem::Field(_))
+            && is_class_instance(&ty.kind, types.definitions);
+        !is_class_field || resources.holds_at_every_instance(&ty.kind)
+    })
 }
 
 /// Whether a value of `kind` holds each of its fields in a slot of its own:

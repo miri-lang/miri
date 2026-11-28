@@ -409,7 +409,7 @@ pub struct TypeChecker {
     /// Which named types are resources, decided once over the settled
     /// definitions and dropped with [`Self::shared_type_definitions`], with
     /// the generic class instantiations they were decided over.
-    pub(crate) resource_types: OnceCell<(utils::Instantiations, utils::ResourceTypes)>,
+    pub(crate) resource_types: OnceCell<(utils::Instantiations, Rc<utils::ResourceTypes>)>,
 }
 
 impl Default for TypeChecker {
@@ -823,6 +823,12 @@ impl TypeChecker {
         &self.decided_resource_types().1
     }
 
+    /// [`Self::resource_types`] as one shared table, which every body lowered
+    /// from this check reads without copying it.
+    pub fn shared_resource_types(&self) -> Rc<utils::ResourceTypes> {
+        Rc::clone(&self.decided_resource_types().1)
+    }
+
     /// The generic class instantiations every ownership decision read
     /// whether a type is a resource over: the instances of the reached
     /// program ([`Self::reached_program`]). Lowering adds instantiations it
@@ -846,7 +852,7 @@ impl TypeChecker {
         )
     }
 
-    fn decided_resource_types(&self) -> &(utils::Instantiations, utils::ResourceTypes) {
+    fn decided_resource_types(&self) -> &(utils::Instantiations, Rc<utils::ResourceTypes>) {
         self.resource_types.get_or_init(|| {
             let mut instantiations = self.generic_class_instantiations.clone();
             for (class, tuples) in &self.reached_class_instantiations {
@@ -856,7 +862,7 @@ impl TypeChecker {
             }
             let resources =
                 utils::ResourceTypes::of(&self.type_table.global_type_definitions, &instantiations);
-            (instantiations, resources)
+            (instantiations, Rc::new(resources))
         })
     }
 

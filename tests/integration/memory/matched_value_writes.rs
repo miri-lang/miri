@@ -295,6 +295,31 @@ fn main()
     );
 }
 
+/// Overwriting a hooked value beside the matched place runs its hook there,
+/// and the hook receives only the overwritten token: the holder is a
+/// resource nothing else holds, so the payload keeps one holder.
+#[test]
+fn a_payload_used_after_a_hooked_value_overwritten_beside_the_matched_place_has_one_holder() {
+    assert_one_holder_output(
+        &with_pack(
+            r#"
+class Kept
+    public var pack Pack
+    public var other Token
+
+fn main()
+    var h = Kept(pack: Pack.Two(Token(id: 1), Token(id: 2)), other: Token(id: 9))
+    match h.pack
+        Pack.Two(a, _)
+            h.other = Token(id: 3)
+            println(f"{a.id}")
+        Pack.Empty: println("none")
+"#,
+        ),
+        "released 9\n1\npack dropped\nreleased 1\nreleased 2\nreleased 3",
+    );
+}
+
 #[test]
 fn a_payload_used_after_a_write_to_a_new_binding_shadowing_the_matched_name_has_one_holder() {
     assert_one_holder_output(

@@ -168,6 +168,22 @@ impl ResourceTypes {
         false
     }
 
+    /// Whether every value held at the named type `kind` is a resource,
+    /// whichever class extending it the value is: an instance of exactly
+    /// that type is one, and every class below it holds what it holds. A
+    /// value held at a class only some subclass of which is a resource is
+    /// not, though [`Self::holds`] counts it one. A type `kind` does not
+    /// name is not.
+    pub fn holds_at_every_instance(&self, kind: &TypeKind) -> bool {
+        let TypeKind::Custom(name, args) = kind else {
+            return false;
+        };
+        let args = args.as_deref().unwrap_or_default();
+        (self.instances.get(name)).is_some_and(|condition| {
+            self.is_met(condition, |at| args.get(at).and_then(argument_kind))
+        })
+    }
+
     /// The positions of the type parameters of `name` at which an argument
     /// that is a resource makes an instance one, when not every instance is.
     pub fn positions_making_a_resource(&self, name: &str) -> impl Iterator<Item = usize> + '_ {
@@ -183,11 +199,19 @@ impl ResourceTypes {
         name: &str,
         argument_at: impl Fn(usize) -> Option<&'k TypeKind>,
     ) -> bool {
-        self.conditions.get(name).is_some_and(|condition| {
-            condition.always
-                || (condition.through.iter())
-                    .any(|&at| argument_at(at).is_some_and(|kind| self.holds(kind)))
-        })
+        (self.conditions.get(name)).is_some_and(|condition| self.is_met(condition, argument_at))
+    }
+
+    /// Whether `condition` makes an instance a resource, its argument at each
+    /// position read through `argument_at`.
+    fn is_met<'k>(
+        &self,
+        condition: &Condition,
+        argument_at: impl Fn(usize) -> Option<&'k TypeKind>,
+    ) -> bool {
+        condition.always
+            || (condition.through.iter())
+                .any(|&at| argument_at(at).is_some_and(|kind| self.holds(kind)))
     }
 
     /// Whether the generic class `name` is a resource at some instantiation

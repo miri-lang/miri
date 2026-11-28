@@ -57,7 +57,9 @@ use crate::mir::place_type::PlaceTypes;
 use crate::mir::symbol::Symbol;
 use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::type_facts::{DropHookReach, TypeDefinition};
-use crate::mir::{ArgMode, BasicBlock, Body, Local, Operand, Place, PlaceElem, StatementKind};
+use crate::mir::{
+    ArgMode, BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, StatementKind,
+};
 use crate::mir::{CallFlags, Terminator, TerminatorKind};
 use crate::runtime_effects::RuntimeEffect;
 use std::collections::{HashMap, HashSet};
@@ -239,6 +241,26 @@ impl<'b> BodyNoise<'b> {
     /// Whether the statement `kind` may release a value another name holds.
     pub fn is_loud_statement(&self, kind: &StatementKind) -> bool {
         self.classifier.is_loud_statement(kind)
+    }
+
+    /// Whether the statement `kind`, run directly after `previous`, may
+    /// release a value another name holds. The end of a local directly after
+    /// a store of its whole value into a field or an element runs no hook:
+    /// the store takes the value over or retains a reference of its own, so
+    /// what the end drops is not the last reference.
+    pub fn is_loud_statement_after(
+        &self,
+        previous: Option<&StatementKind>,
+        kind: &StatementKind,
+    ) -> bool {
+        let ends_a_stored_local = matches!(
+            (previous, kind),
+            (
+                Some(StatementKind::Assign(slot, stored) | StatementKind::Reassign(slot, stored)),
+                StatementKind::StorageDead(ended, _),
+            ) if stores_whole(slot, stored, ended)
+        );
+        !ends_a_stored_local && self.is_loud_statement(kind)
     }
 
     /// Whether releasing what `place` holds may run a drop hook.
@@ -711,6 +733,18 @@ impl<'b> Classifier<'b> {
             .declared(place)
             .is_none_or(|ty| self.hooks.may_run_drop_hook(&ty))
     }
+}
+
+/// Whether storing `stored` into `slot` stores the whole of the local `ended`
+/// names into a field or an element of another value.
+fn stores_whole(slot: &Place, stored: &Rvalue, ended: &Place) -> bool {
+    let Rvalue::Use(Operand::Copy(value) | Operand::Move(value)) = stored else {
+        return false;
+    };
+    ended.projection.is_empty()
+        && value == ended
+        && !slot.projection.is_empty()
+        && slot.local != ended.local
 }
 
 /// Whether reaching `place` steps through a class field or a dereference:

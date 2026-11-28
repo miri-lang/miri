@@ -40,7 +40,10 @@
 //!   of an owner that parts from every place copied out of it on the way at a
 //!   field of a tuple, a struct or a class instance ([`parts_at_own_field`])
 //!   leaves the value where it was, and is harmful only through a drop hook
-//!   the value it releases may run;
+//!   the value it releases may run, unless every owner is reached only
+//!   through the places read out of it and every class instance on the way
+//!   is a resource ([`steps_only_through_resources`]): the hook receives only
+//!   the released value, which cannot hold an instance with one owner;
 //! - an entry a runtime getter lends out of a collection
 //!   ([`RuntimeEffect::hands_back_a_borrow`]) holds no reference of its own: a
 //!   borrow read out of one counts the locals holding the collection among
@@ -64,7 +67,9 @@
 //! An entry that passes is a borrow, and the ownership check leaves the local
 //! untracked, as it does a borrowed parameter. One that fails is a violation.
 
-use super::borrow_reach::{is_reference_by_design, parts_at_own_field, reach_of, Reach};
+use super::borrow_reach::{
+    is_reference_by_design, parts_at_own_field, reach_of, steps_only_through_resources, Reach,
+};
 use super::callee_effects::BodyHarm;
 use super::{local_display_name, VerificationViolation};
 use crate::ast::types::Type;
@@ -479,6 +484,18 @@ struct Range<'r> {
     read: &'r [Place],
 }
 
+impl Range<'_> {
+    /// Whether no drop hook run beside the places the range reads can reach
+    /// them: each owner is reached only through a place read out of it, and
+    /// every class instance on the way has no holder but that chain
+    /// ([`steps_only_through_resources`]). A hook receives only the value
+    /// released and what that value holds.
+    fn is_out_of_hook_reach(&self, body: &Body) -> bool {
+        (self.owners.iter()).all(|owner| self.read.iter().any(|place| place.local == *owner))
+            && (self.read.iter()).all(|place| steps_only_through_resources(body, place))
+    }
+}
+
 /// Whether, on every path from the definition of the range's local at its
 /// site to its last read, or to the end of its storage when that comes
 /// first, each of its owners is reached only in
@@ -542,7 +559,8 @@ fn stays_over_range(
 /// other code may reach the borrowed value (`loud` given) — may release a
 /// value another name holds by `loud`'s rule. A write beside every place read
 /// out of an owner ([`write_beside`]) changes it only through the value it
-/// stores, and is harmless unless what it releases runs a drop hook.
+/// stores, and is harmless unless what it releases runs a drop hook that can
+/// reach the range's places ([`Range::is_out_of_hook_reach`]).
 fn statement_breaks_range(
     body: &Body,
     ownership: &OwnershipFacts,
@@ -552,7 +570,7 @@ fn statement_breaks_range(
 ) -> bool {
     let beside = write_beside(body, statement, (range.owners, range.read));
     let is_loud = loud.is_some_and(|harm| match &beside {
-        Some(write) => !write.is_harmless(harm),
+        Some(write) => !write.is_harmless(harm) && !range.is_out_of_hook_reach(body),
         None => !harm.is_harmless_statement(&statement.kind),
     });
     let accesses = match &beside {

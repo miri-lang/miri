@@ -1101,3 +1101,115 @@ fn a_borrow_across_a_store_into_another_payload_field_of_its_enum_is_refused() {
     );
     assert_refused(&body, "a store into another payload field of the enum read");
 }
+
+/// `Token`, a class with a drop hook; `Shelf`, a class holding a string in
+/// its first field and `beside` in its second.
+fn hooked_shelf_definitions(beside: Type) -> HashMap<String, TypeDefinition> {
+    use miri::ast::MemberVisibility;
+    use miri::type_checker::context::{FieldInfo, MethodInfo};
+    let field = |ty: Type| FieldInfo {
+        ty,
+        mutable: true,
+        visibility: MemberVisibility::Public,
+        initializer: None,
+    };
+    let drop_hook = MethodInfo {
+        generics: Vec::new(),
+        params: Vec::new(),
+        is_out_flags: Vec::new(),
+        return_type: void_ty(),
+        visibility: MemberVisibility::Public,
+        is_constructor: false,
+        is_abstract: false,
+        is_static: false,
+        attributes: Vec::new(),
+    };
+    let token = ClassDefinition {
+        name: "Token".to_string(),
+        fields: vec![("id".to_string(), field(int_ty()))],
+        methods: BTreeMap::from([("drop".to_string(), drop_hook)]),
+        ..gauge_class()
+    };
+    let shelf = ClassDefinition {
+        name: "Shelf".to_string(),
+        fields: vec![
+            ("held".to_string(), field(string_ty())),
+            ("beside".to_string(), field(beside)),
+        ],
+        ..gauge_class()
+    };
+    HashMap::from([
+        ("Token".to_string(), TypeDefinition::Class(token)),
+        ("Shelf".to_string(), TypeDefinition::Class(shelf)),
+    ])
+}
+
+/// [`shelf_borrowing_body`] over [`hooked_shelf_definitions`]: `_3` borrows
+/// the string in `_1.0` while `_1.released` is released, the body knowing
+/// which types are resources when `knows_resources`.
+fn hooked_shelf_body(beside: Type, released: usize, knows_resources: bool) -> Recorded {
+    use miri::type_checker::utils::{Instantiations, ResourceTypes};
+    let release = stmt(StatementKind::DecRef(Place {
+        local: Local(1),
+        projection: vec![PlaceElem::Field(released)],
+    }));
+    let mut recorded = shelf_borrowing_body(string_ty(), vec![PlaceElem::Field(0)], vec![release]);
+    let definitions = hooked_shelf_definitions(beside);
+    if knows_resources {
+        recorded.body.resource_types =
+            Rc::new(ResourceTypes::of(&definitions, &Instantiations::new()));
+    }
+    recorded.body.rc_classifier = RcClassifier::new(Rc::new(definitions));
+    recorded
+}
+
+fn function_ty() -> Type {
+    use miri::ast::types::FunctionTypeData;
+    Type::new(
+        TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params: Vec::new(),
+            return_type: None,
+        })),
+        miri::error::syntax::Span::new(0, 0),
+    )
+}
+
+/// A hook run by releasing the field beside the one read receives only that
+/// field's value. The instance read through is a resource, which nothing but
+/// its owner holds, so the hook cannot reach the borrowed string.
+#[test]
+fn a_borrow_across_a_hooked_release_beside_it_in_a_resource_holds() {
+    let body = hooked_shelf_body(named_ty("Token"), 1, true);
+    assert_held(
+        &body,
+        "a hooked release beside the field read, in a resource",
+    );
+}
+
+/// Without the program's resources, the instance read through may have other
+/// holders, which the released value's hook could write through.
+#[test]
+fn a_borrow_across_a_hooked_release_beside_it_with_no_resources_known_is_refused() {
+    let body = hooked_shelf_body(named_ty("Token"), 1, false);
+    assert_refused(&body, "a hooked release beside, no resources known");
+}
+
+/// A closure field may run a hook when released, yet holding one does not
+/// make the instance a resource: another name may hold the same instance,
+/// and a hook the closure's captures run may write the read field through it.
+#[test]
+fn a_borrow_across_a_closure_release_beside_it_in_a_shared_instance_is_refused() {
+    let body = hooked_shelf_body(function_ty(), 1, true);
+    assert_refused(
+        &body,
+        "a closure release beside, in an instance others may hold",
+    );
+}
+
+/// A release of the field read is a change whatever the instance is.
+#[test]
+fn a_borrow_across_a_release_of_the_field_it_reads_in_a_resource_is_refused() {
+    let body = hooked_shelf_body(named_ty("Token"), 0, true);
+    assert_refused(&body, "a release of the field read, in a resource");
+}

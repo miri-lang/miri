@@ -569,3 +569,36 @@ pub fn stamp_quiet(body: &mut Body, block: usize) {
     };
     flags.quiet = true;
 }
+
+/// Whether ending local 2, a value whose release may run a drop hook, is
+/// loud directly after `previous`, before reference counting.
+fn ending_after_is_loud(previous: Option<Statement>) -> bool {
+    use miri::mir::analysis::heap_effects::BodyNoise;
+    use miri::mir::facts::OwnershipFacts;
+    let body = body_of(
+        &[TypeKind::Void, holder(), hooked(), hooked()],
+        0,
+        vec![returning(Vec::new())],
+    );
+    let definitions = definitions();
+    let hooks = DropHookReach::new(&definitions);
+    let ownership = OwnershipFacts::default();
+    let noise = BodyNoise::of(&body, &ownership, Phase::Lowered, &hooks);
+    let end = StatementKind::StorageDead(local(2), miri::mir::EndCause::Scope);
+    noise.is_loud_statement_after(previous.as_ref().map(|s| &s.kind), &end)
+}
+
+/// A field a value was just stored into holds a reference of its own, so
+/// ending the local it came from drops no last reference and runs no hook.
+#[test]
+fn ending_a_local_just_stored_into_a_field_is_quiet() {
+    assert!(!ending_after_is_loud(Some(store(field(1, 0), local(2)))));
+}
+
+/// A store into a whole local may be a borrow that takes no reference, and
+/// with no store before it the end may drop the last reference: both loud.
+#[test]
+fn ending_a_local_stored_whole_into_a_local_or_not_stored_is_loud() {
+    assert!(ending_after_is_loud(Some(store(local(3), local(2)))));
+    assert!(ending_after_is_loud(None));
+}

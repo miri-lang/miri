@@ -1143,3 +1143,36 @@ fn main()
         assert_output_at(code, level, "16\n16");
     }
 }
+
+/// A class instance that is no resource may be held by another name: here
+/// the token a stored closure captured holds the same shelf, and its hook,
+/// run when the closure is replaced, writes the shelf's list. A read of that
+/// list keeps a reference of its own across the release, so it still reads
+/// the list it was given.
+#[test]
+fn a_read_through_a_shared_instance_survives_a_hook_writing_it_through_another_holder() {
+    let code = r#"
+use system.collections.list
+
+class Shelf
+    public var items [int]
+    public var cb fn() int
+
+class Token
+    public var id int
+    public var shelf Shelf
+    fn drop(self)
+        self.shelf.items = List([7])
+        println("token dropped")
+
+fn main()
+    var h = Shelf(items: List([1, 2, 3]), cb: fn() int: 0)
+    let t = Token(id: 1, shelf: h)
+    h.cb = fn() int: t.id
+    let x = h.items
+    h.cb = fn() int: 5
+    println(f"{x[0]} {h.items[0]}")
+"#;
+    assert_runs_with_output(code, "token dropped\n1 7");
+    assert_heap_guard_output(code, "token dropped\n1 7");
+}
