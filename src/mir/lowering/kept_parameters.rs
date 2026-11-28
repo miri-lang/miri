@@ -42,9 +42,8 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::variable::{self, ConsumedRead};
-use crate::mir::option_layout::{is_nullable_pointer_payload, taken_payload_hole};
+use crate::mir::option_layout::{is_nullable_pointer_payload, is_payload_enum, taken_payload_hole};
 use crate::mir::place::PlaceElem;
-use crate::mir::place_type::PlaceTypes;
 use crate::mir::{
     ArgMode, Body, CallFlags, Constant, EndCause, Local, Operand, Place, Rvalue,
     Statement as MirStatement, StatementKind as MirStatementKind, Terminator, TerminatorKind,
@@ -512,18 +511,19 @@ pub(crate) fn hand_over_kept_arguments(
 }
 
 /// Hands the call, in place of each payload binding it takes by `move` that
-/// a `Some(..)` pattern bound out of a matched optional, the payload's one
-/// reference, when the optional is the only local the match holds its
-/// scrutinee in and the type checker records the hand-over as ending that
-/// scrutinee ([`TypeChecker::ended_scrutinee`]). The payload binding, and
-/// every binding of an inner match it was reached through, then only reads
-/// what the optional holds, so none takes a reference of its own, and each
-/// ends before the call.
+/// a `Some(..)` or enum variant pattern bound out of a matched subject, the
+/// payload's one reference, when the subject is the only local the match
+/// holds its scrutinee in and the type checker records the hand-over as
+/// ending that scrutinee ([`TypeChecker::ended_scrutinee`]). The payload
+/// binding, and every binding of an inner match it was reached through,
+/// then only reads what the subject holds, so none takes a reference of its
+/// own, and each ends before the call.
 ///
 /// An optional held as its payload's own pointer hands over its own
 /// reference, `move o.0`, and ends, moved, after the call. A payload held in
-/// a box the optional owns is taken out of it and its hole emptied
-/// ([`take_payload`]); the optional ends there, releasing the box. On a path
+/// a box the optional owns, or an optional an enum's payload field holds, is
+/// taken out of it and its hole emptied ([`take_into`]); the subject ends
+/// there, releasing the block. On a path
 /// of the arm that hands nothing over, the bindings end with their scopes
 /// and the optional's drop flag releases the payload where the optional
 /// ends, so the payload has one holder on every path.
@@ -611,112 +611,168 @@ pub(crate) fn end_stored_payloads(
 /// `payload`, matched out of `scrutinee`, reads, with the local the call
 /// takes over; the binding, and every binding it was reached through, ends
 /// before the call. An optional held as its payload's own pointer hands over
-/// its own reference, `move o.0`; a payload held in a box the optional owns
-/// is taken out of it ([`take_payload`]). `None`, emitting nothing, when no
-/// optional the match holds alone holds the payload.
+/// its own reference, `move o.0`; a payload held in a box the optional owns,
+/// or an optional an enum's payload field holds, is taken out of it
+/// ([`take_into`]). A payload reached past an enum's field takes the field
+/// out first, into a temporary of its own ([`enum_field_take`]), and is
+/// then handed over out of that as out of any optional. `None`, emitting
+/// nothing, when no subject the match holds alone holds the payload.
 fn matched_payload_operand(
     ctx: &mut LoweringContext,
     scrutinee: usize,
     payload: Local,
     span: Span,
 ) -> Option<(Operand, Local)> {
-    match matched_payload(ctx, scrutinee, payload)? {
+    let mut path = payload_path(ctx, scrutinee, payload)?;
+    let mut bindings = vec![payload];
+    bindings.extend_from_slice(&path.through);
+    let field = enum_field_take(ctx, &mut path, span);
+    let matched = matched_payload(ctx, &path, payload)?;
+    end_consumed(ctx, &bindings, span);
+    if let Some((take, field)) = field {
+        take_into(ctx, &take, field, span);
+    }
+    Some(match matched {
         MatchedPayload::OwnReference(optional) => {
-            end_consumed(ctx, &[payload], span);
-            Some((Operand::Move(optional_payload(optional)), optional))
+            (Operand::Move(optional_payload(optional)), optional)
         }
         MatchedPayload::Boxed(take) => {
-            let taken = take_payload(ctx, &take, payload, span)?;
-            Some((Operand::Move(Place::new(taken)), taken))
+            let taken = ctx.push_temp(ctx.body.local_decls[payload.0].ty.clone(), span);
+            take_into(ctx, &take, taken, span);
+            (Operand::Move(Place::new(taken)), taken)
         }
-    }
+    })
 }
 
-/// Where the payload a keeper is handed sits in the optional it was matched
+/// Where the payload a keeper is handed sits in the subject it was matched
 /// out of.
 enum MatchedPayload {
     /// In an optional held as its payload's own pointer, whose reference is
     /// the payload's.
     OwnReference(Local),
-    /// In a box the matched optional owns.
+    /// In a block the matched subject holds: a box an optional owns, or an
+    /// enum's.
     Boxed(BoxedPayload),
 }
 
-/// A payload held in a box the matched optional `optional` owns.
+/// A payload held in a block the matched subject `subject` holds: a box of
+/// an optional's, or an enum's, in one of its payload fields.
 struct BoxedPayload {
-    optional: Local,
-    /// The payload, as a place under `optional`.
+    subject: Local,
+    /// The payload, as a place under `subject`.
     place: Place,
-    /// The optional layer a take of `place` empties
-    /// ([`taken_payload_hole`]).
+    /// The optional a take of `place` empties ([`taken_payload_hole`]).
     hole: Place,
-    /// The payload bindings of the matches between `optional` and the
+}
+
+/// The way from a payload binding to the subject a match holds alone.
+struct PayloadPath {
+    subject: Local,
+    /// The payload, as a place under `subject`.
+    place: Place,
+    /// The payload bindings of the matches between `subject` and the
     /// payload, each the subject of the next, outermost last.
     through: Vec<Local>,
 }
 
-/// Where the payload `payload` was bound out of: walking from its binding
-/// through each optional a `Some(..)` pattern bound it out of to the one
-/// the match on `scrutinee` holds as its only local. `None` when no such
-/// optional holds it, or the payload cannot leave it without a release
-/// freeing the box but not its contents.
-fn matched_payload(
-    ctx: &LoweringContext,
-    scrutinee: usize,
-    payload: Local,
-) -> Option<MatchedPayload> {
-    // TODO: an optional bound out of an enum's payload (`E.A(q)` then
-    // `Some(r)` out of `q`) is no `Some(..)` binding, so the walk stops there
-    // and the keeper is handed a funded copy; a take out of the enum block's
-    // optional payload, filling it with `None`, would hand over its one
-    // reference.
+/// The way the payload `payload` was bound out of the subject the match on
+/// `scrutinee` holds as its only local: walking from its binding through
+/// each payload a `Some(..)` or enum variant pattern bound it out of.
+/// `None` when no such subject holds it.
+fn payload_path(ctx: &LoweringContext, scrutinee: usize, payload: Local) -> Option<PayloadPath> {
     let holders = ctx.matched_scrutinees.get(&scrutinee)?;
-    let mut optional = *ctx.optional_payloads.get(&payload)?;
+    let mut place = ctx.bound_payloads.get(&payload)?.clone();
     let mut through = Vec::new();
-    while holders.as_slice() != [optional] {
-        if through.len() == ctx.optional_payloads.len() {
+    while holders.as_slice() != [place.local] {
+        if through.len() == ctx.bound_payloads.len() {
             return None;
         }
-        through.push(optional);
-        optional = *ctx.optional_payloads.get(&optional)?;
+        through.push(place.local);
+        let outer = ctx.bound_payloads.get(&place.local)?;
+        place
+            .projection
+            .splice(0..0, outer.projection.iter().cloned());
+        place.local = outer.local;
     }
+    Some(PayloadPath {
+        subject: place.local,
+        place,
+        through,
+    })
+}
+
+/// The take of the optional an enum's payload field holds, when `path`
+/// reaches its payload past that field: a place past an enum's field names
+/// no variant, so nothing could read it. The field is taken whole into a
+/// temporary of the type of the binding bound out of it, and `path` is
+/// rewritten to start there. Answers the take and the temporary; `None`,
+/// rewriting nothing, when `path` starts at no enum, or ends at its field.
+fn enum_field_take(
+    ctx: &mut LoweringContext,
+    path: &mut PayloadPath,
+    span: Span,
+) -> Option<(BoxedPayload, Local)> {
+    let subject = &ctx.body.local_decls[path.subject.0].ty.kind;
+    if !is_payload_enum(subject, ctx.body.layout_scope()) {
+        return None;
+    }
+    let (field, rest) = path.place.projection.split_first()?;
+    if rest.is_empty() {
+        return None;
+    }
+    let bound = *path.through.last()?;
+    let ty = ctx.body.local_decls[bound.0].ty.clone();
     let place = Place {
-        local: optional,
-        projection: vec![PlaceElem::Field(0); through.len() + 1],
+        local: path.subject,
+        projection: vec![field.clone()],
     };
-    if through.is_empty() && is_nullable_pointer_payload(&place, &ctx.body) {
-        return Some(MatchedPayload::OwnReference(optional));
-    }
-    let hole = taken_payload_hole(&place, &ctx.body)?;
-    Some(MatchedPayload::Boxed(BoxedPayload {
-        optional,
+    let hole = taken_payload_hole(&place, &ty.kind, &ctx.body)?;
+    let taken = ctx.push_temp(ty, span);
+    let take = BoxedPayload {
+        subject: path.subject,
         place,
         hole,
-        through,
+    };
+    *path = PayloadPath {
+        subject: taken,
+        place: Place {
+            local: taken,
+            projection: rest.to_vec(),
+        },
+        through: path.through[..path.through.len() - 1].to_vec(),
+    };
+    Some((take, taken))
+}
+
+/// Where the payload `payload` reached along `path` sits; `None` when it
+/// cannot leave its subject without a release freeing the block but not its
+/// contents.
+fn matched_payload(
+    ctx: &LoweringContext,
+    path: &PayloadPath,
+    payload: Local,
+) -> Option<MatchedPayload> {
+    if path.through.is_empty() && is_nullable_pointer_payload(&path.place, &ctx.body) {
+        return Some(MatchedPayload::OwnReference(path.subject));
+    }
+    let moved = &ctx.body.local_decls[payload.0].ty.kind;
+    let hole = taken_payload_hole(&path.place, moved, &ctx.body)?;
+    Some(MatchedPayload::Boxed(BoxedPayload {
+        subject: path.subject,
+        place: path.place.clone(),
+        hole,
     }))
 }
 
-/// Takes the payload `take` names out of its box before the call: the
-/// payload binding `payload` and the bindings it was reached through end,
-/// the payload moves into a temporary of its own the call is handed, and
-/// `None` fills the hole it leaves in the statement right after, so the box
-/// holds nothing the call was handed. The matched optional is consumed
-/// there, releasing the box. Answers the temporary; `None`, emitting
-/// nothing, when the hole's type cannot be read.
-fn take_payload(
-    ctx: &mut LoweringContext,
-    take: &BoxedPayload,
-    payload: Local,
-    span: Span,
-) -> Option<Local> {
-    let hole_ty = PlaceTypes::of(&ctx.body).declared(&take.hole)?;
-    let mut bindings = vec![payload];
-    bindings.extend_from_slice(&take.through);
-    end_consumed(ctx, &bindings, span);
-    let taken = ctx.push_temp(ctx.body.local_decls[payload.0].ty.clone(), span);
+/// Takes the payload `take` names out of its block before the call, every
+/// binding reading it ended already: the payload moves into `taken`, and
+/// `None` fills the hole it leaves in the statement right after, so the
+/// block holds nothing the call was handed. The matched subject is consumed
+/// there, releasing the block.
+fn take_into(ctx: &mut LoweringContext, take: &BoxedPayload, taken: Local, span: Span) {
     let absent = Operand::Constant(Box::new(Constant {
         span,
-        ty: hole_ty,
+        ty: taken_hole_type(ctx, take, taken),
         literal: Literal::None,
     }));
     for (place, rvalue) in [
@@ -731,8 +787,21 @@ fn take_payload(
             span,
         });
     }
-    end_consumed(ctx, &[take.optional], span);
-    Some(taken)
+    end_consumed(ctx, &[take.subject], span);
+}
+
+/// The type of the optional a take of `take` into `taken` empties:
+/// `taken`'s own type, wrapped once for each optional layer between the
+/// hole and the payload. A field of an enum place names no variant, so the
+/// type is read off the local taken into rather than off the place.
+fn taken_hole_type(ctx: &LoweringContext, take: &BoxedPayload, taken: Local) -> Type {
+    let crossed = (take.place.projection.len()).saturating_sub(take.hole.projection.len());
+    let mut ty = ctx.body.local_decls[taken.0].ty.clone();
+    for _ in 0..crossed {
+        let span = ty.span;
+        ty = Type::new(TypeKind::Option(Box::new(ty)), span);
+    }
+    ty
 }
 
 /// Ends each of `locals` as consumed, where a keeper takes a payload they

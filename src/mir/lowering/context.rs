@@ -151,11 +151,12 @@ pub struct LoweringContext<'a> {
     /// ends them where the payload is handed over
     /// ([`super::kept_parameters::hand_over_kept_arguments`]).
     pub(crate) matched_scrutinees: HashMap<usize, Vec<Local>>,
-    /// The optional each `Some(..)` pattern's binding was bound out of, by
-    /// the binding's local: a keeper taking the binding is handed the
-    /// optional's own reference when the optional is held as its payload's
-    /// own pointer ([`super::kept_parameters::hand_over_kept_arguments`]).
-    pub(crate) optional_payloads: HashMap<Local, Local>,
+    /// The place each payload binding of a `Some(..)` or enum variant
+    /// pattern was bound out of, by the binding's local: its subject's
+    /// payload, `o.0` or `e.1`. A keeper taking the binding is handed the
+    /// subject's own reference, or the payload taken out of the block the
+    /// subject holds ([`super::kept_parameters::hand_over_kept_arguments`]).
+    pub(crate) bound_payloads: HashMap<Local, Place>,
 }
 
 /// A source file as lowering reads spans against it: the number the body
@@ -271,7 +272,7 @@ impl<'a> LoweringContext<'a> {
             held_reads: super::sequencing::HeldReads::default(),
             consumed_reads: HashMap::new(),
             matched_scrutinees: HashMap::new(),
-            optional_payloads: HashMap::new(),
+            bound_payloads: HashMap::new(),
         };
         // Create the first basic block
         ctx.body.basic_blocks.push(BasicBlockData::new(None));

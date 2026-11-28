@@ -24,14 +24,16 @@
 //!   whose type cannot be read.
 //!
 //! Where the slot's type cannot be read the absent value is refused: a check
-//! that could not see the slot cannot say the bytes are there. Slot types are
+//! that could not see the slot cannot say the bytes are there. The one
+//! exception is the `None` a take writes into the hole it leaves
+//! ([`filled_take`]), which is a pointer's, never bytes. Slot types are
 //! read from [`PlaceTypes`], the one slot-type authority; which spellings
 //! need the bytes is decided here, apart from the pass that writes them.
 
 use super::{local_display_name, VerificationViolation};
 use crate::ast::literal::Literal;
 use crate::ast::types::{Type, TypeKind};
-use crate::mir::option_layout::{is_absent_placeholder, OptionalLayers};
+use crate::mir::option_layout::{filled_take, is_absent_placeholder, OptionalLayers};
 use crate::mir::place_type::{ArgumentSlot, CalleeParameters, PlaceTypes};
 use crate::mir::rvalue::{BinOp, Rvalue};
 use crate::mir::statement::StatementKind;
@@ -65,8 +67,14 @@ fn body_violations(body: &Body, callees: &CalleeParameters) -> Vec<VerificationV
     };
     let mut found = Vec::new();
     for data in &body.basic_blocks {
+        let mut previous = None;
         for statement in &data.statements {
-            found.extend(check.statement(&statement.kind));
+            let fills_a_take =
+                previous.is_some_and(|take| filled_take(body, take, &statement.kind).is_some());
+            if !fills_a_take {
+                found.extend(check.statement(&statement.kind));
+            }
+            previous = Some(&statement.kind);
         }
         if let Some(terminator) = &data.terminator {
             found.extend(check.call(&terminator.kind, callees));

@@ -187,30 +187,47 @@ pub fn is_nullable_pointer_optional(kind: &TypeKind, scope: LayoutScope<'_>) -> 
     layers.boxed == 0 && layers.inline == 0 && layers.innermost_nullable_pointer
 }
 
-/// The optional place a take of `place` empties: `place` is a payload of an
-/// optional `body` holds in a local of its own, reached through boxed layers
-/// only, so moving it out leaves a hole in a box the local still holds. The
-/// hole is the innermost optional the move crosses into: the box's content
-/// when the box holds another optional layer, or the nullable pointer the
-/// payload is the payload of. The take writes `None` there in the statement
-/// after the move, so the box keeps its one release and releases nothing
-/// the move handed on.
+/// The optional place a take of `place` empties, `moved` being the type of
+/// what the take moves out: `place` is a payload of an optional `body`
+/// holds in a local of its own, reached through boxed layers only, so
+/// moving it out leaves a hole in a box the local still holds; or it is a
+/// payload field of an enum the local holds, the field an optional held as
+/// a pointer, which the take moves out whole. The hole is the innermost
+/// optional the move crosses into: the box's content when the box holds
+/// another optional layer, the nullable pointer the payload is the payload
+/// of, or the enum's field itself. The take writes `None` there in the
+/// statement after the move, so the block keeps its one release and
+/// releases nothing the move handed on.
+///
+/// A field of an enum place names no variant, so the optional it holds is
+/// read off `moved`, the type of the local the take moves it into.
 ///
 /// `None` for every other place: one crossing no box (the payload of an
 /// optional held as its payload's own pointer moves the optional's own
 /// reference, [`is_nullable_pointer_payload`]), one crossing a layer held as
-/// bytes, and the value a box holds when no optional layer is left to empty.
+/// bytes, the value a box holds when no optional layer is left to empty, a
+/// place past an enum's field, and an enum payload that is no optional,
+/// which has no empty state to write back.
 pub fn taken_payload_hole(
     place: &crate::mir::Place,
+    moved: &TypeKind,
     body: &crate::mir::Body,
 ) -> Option<crate::mir::Place> {
     use crate::mir::place::PlaceElem;
+    let scope = body.layout_scope();
+    let kind = &body.local_decls.get(place.local.0)?.ty.kind;
+    if let [PlaceElem::Field(field)] = place.projection.as_slice() {
+        if *field > 0 && is_payload_enum(kind, scope) {
+            let outermost = OptionalLayers::of(moved, scope).reprs().into_iter().next();
+            let is_pointer = outermost.is_some_and(|layer| layer != LayerRepr::Inline);
+            return is_pointer.then(|| place.clone());
+        }
+    }
     let depth = place.projection.len();
     if !(place.projection.iter()).all(|elem| matches!(elem, PlaceElem::Field(0))) {
         return None;
     }
-    let kind = &body.local_decls.get(place.local.0)?.ty.kind;
-    let layers = OptionalLayers::of(kind, body.layout_scope()).reprs();
+    let layers = OptionalLayers::of(kind, scope).reprs();
     let crossed = layers.get(..depth)?;
     let hole_depth = match crossed.last()? {
         LayerRepr::NullablePointer => depth - 1,
@@ -224,6 +241,40 @@ pub fn taken_payload_hole(
         local: place.local,
         projection: vec![PlaceElem::Field(0); hole_depth],
     })
+}
+
+/// Whether `kind` names an enum of the program's, whose payload fields a
+/// place reaches as `Field(1)` onwards, the discriminant at `Field(0)`.
+pub fn is_payload_enum(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
+    let TypeKind::Custom(name, _) = kind else {
+        return false;
+    };
+    matches!(scope.definitions.get(name), Some(TypeDefinition::Enum(_)))
+}
+
+/// The payload place `take` moves out when it and `fill`, the statement
+/// right after it, are a take: `take` moves a payload into a local of its
+/// own, out of a box or an enum a local holds, and `fill` writes `None`
+/// into the hole the move leaves ([`taken_payload_hole`]). The hole is a
+/// null pointer or a box's, never an optional held as bytes, so the
+/// absent value brings everything it needs, whether or not the hole's own
+/// type can be read off its place.
+pub fn filled_take<'s>(
+    body: &crate::mir::Body,
+    take: &'s crate::mir::StatementKind,
+    fill: &crate::mir::StatementKind,
+) -> Option<&'s crate::mir::Place> {
+    use crate::mir::{Operand, Rvalue, StatementKind};
+    let StatementKind::Assign(into, Rvalue::Use(Operand::Move(taken))) = take else {
+        return None;
+    };
+    let into = (body.local_decls.get(into.local.0)).filter(|_| into.projection.is_empty())?;
+    let hole = taken_payload_hole(taken, &into.ty.kind, body)?;
+    let StatementKind::Assign(filled, Rvalue::Use(Operand::Constant(constant))) = fill else {
+        return None;
+    };
+    (*filled == hole && matches!(constant.literal, crate::ast::literal::Literal::None))
+        .then_some(taken)
 }
 
 /// Whether `place` is the payload of an optional `body` holds in a local of

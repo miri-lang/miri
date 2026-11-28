@@ -721,6 +721,67 @@ fn main()
     );
 }
 
+const TOKEN_BOX: &str = r#"
+enum TokenBox
+    Full(Token?)
+    Empty
+
+fn shelve(t Token) Slot
+    return Slot(held: Some(t))
+"#;
+
+#[test]
+fn an_optional_payload_of_an_enum_handed_to_a_keeper_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(&format!(
+            "{TOKEN_BOX}{}",
+            r#"
+fn main()
+    let e = TokenBox.Full(Some(Token(id: 6)))
+    match e
+        TokenBox.Full(q)
+            match q
+                Some(r)
+                    let _s = shelve(r)
+                    println("shelved")
+                None: println("inner none")
+        TokenBox.Empty: println("empty")
+    println("after")
+"#
+        )),
+        "shelved\nreleased 6\nafter",
+    );
+}
+
+#[test]
+fn an_optional_payload_of_an_enum_handed_to_a_keeper_on_some_paths_has_one_holder() {
+    assert_one_holder_output(
+        &with_token(&format!(
+            "{TOKEN_BOX}{}",
+            r#"
+fn main()
+    var i = 0
+    while i < 2
+        let e = TokenBox.Full(Some(Token(id: i)))
+        match e
+            TokenBox.Full(q)
+                match q
+                    Some(r)
+                        if r.id == 0
+                            let _s = shelve(r)
+                            println("shelved")
+                        else
+                            println(f"kept {r.id}")
+                    None: println("inner none")
+            TokenBox.Empty: println("empty")
+        i += 1
+    println("after")
+"#
+        )),
+        "shelved\nreleased 0\nkept 1\nreleased 1\nafter",
+    );
+}
+
 #[test]
 fn a_payload_pushed_onto_a_list_has_one_holder() {
     assert_one_holder_output(

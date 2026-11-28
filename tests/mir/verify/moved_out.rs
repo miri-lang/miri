@@ -627,3 +627,81 @@ fn a_read_between_a_take_and_the_emptying_of_its_hole_is_flagged() {
     ]);
     assert_one_finding(&body, &["through a projection", "bb0[0]"]);
 }
+
+/// A body whose local 1 is an enum `Holder` with one variant `A(String?)`,
+/// local 2 a `String?` and local 3 a `String`.
+fn enum_payload_body(statements: Vec<Statement>) -> Body {
+    use miri::mir::rc::RcClassifier;
+    use miri::type_checker::context::{EnumDefinition, TypeDefinition};
+    use std::collections::{BTreeMap, HashMap};
+    let optional = Type::new(TypeKind::Option(Box::new(string_ty())), span());
+    let holder = TypeDefinition::Enum(EnumDefinition {
+        variants: BTreeMap::from([("A".to_string(), vec![optional.clone()])]),
+        generics: None,
+        methods: BTreeMap::new(),
+        module: String::new(),
+        must_use: false,
+        non_exhaustive: false,
+    });
+    let definitions = HashMap::from([("Holder".to_string(), holder)]);
+    let mut body = Body::new(0, span(), ExecutionModel::Cpu);
+    body.rc_classifier = RcClassifier::new(std::rc::Rc::new(definitions));
+    body.new_local(LocalDecl::new(Type::new(TypeKind::Void, span()), span()));
+    let enum_ty = Type::new(TypeKind::Custom("Holder".to_string(), None), span());
+    body.new_local(LocalDecl::new(enum_ty, span()));
+    body.new_local(LocalDecl::new(optional, span()));
+    body.new_local(LocalDecl::new(string_ty(), span()));
+    body.basic_blocks
+        .push(block(statements, TerminatorKind::Return));
+    body
+}
+
+/// The payload field of the enum local 1 holds.
+fn enum_field_of_one() -> Place {
+    Place {
+        local: Local(1),
+        projection: vec![PlaceElem::Field(1)],
+    }
+}
+
+/// Writes `None` into the payload field of the enum local 1 holds.
+fn empty_enum_field_of_one() -> Statement {
+    let optional = Type::new(TypeKind::Option(Box::new(string_ty())), span());
+    let absent = constant(optional, Literal::None);
+    stmt(StatementKind::Assign(
+        enum_field_of_one(),
+        Rvalue::Use(absent),
+    ))
+}
+
+#[test]
+fn taking_an_optional_out_of_an_enum_payload_and_emptying_its_field_is_accepted() {
+    let body = enum_payload_body(vec![
+        assign(2, Operand::Move(enum_field_of_one())),
+        empty_enum_field_of_one(),
+        decref(1),
+        decref(2),
+    ]);
+    assert_clean(&body);
+}
+
+#[test]
+fn taking_an_optional_out_of_an_enum_payload_without_emptying_its_field_is_flagged() {
+    let body = enum_payload_body(vec![
+        assign(2, Operand::Move(enum_field_of_one())),
+        decref(1),
+        decref(2),
+    ]);
+    assert_one_finding(&body, &["through a projection", "bb0[0]"]);
+}
+
+#[test]
+fn moving_an_enum_payload_into_a_value_with_no_empty_state_is_flagged() {
+    let body = enum_payload_body(vec![
+        assign(3, Operand::Move(enum_field_of_one())),
+        empty_enum_field_of_one(),
+        decref(1),
+        decref(3),
+    ]);
+    assert_one_finding(&body, &["through a projection", "bb0[0]"]);
+}

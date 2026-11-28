@@ -548,24 +548,93 @@ fn test_option_layout_a_type_that_is_not_optional_has_no_layer() {
     }
 }
 
+/// A body whose local 1 has type `kind`, reading the program `definitions`.
+fn body_holding(kind: TypeKind, definitions: HashMap<String, TypeDefinition>) -> miri::mir::Body {
+    use miri::mir::rc::RcClassifier;
+    use miri::mir::{Body, ExecutionModel, LocalDecl};
+    let mut body = Body::new(0, Span::new(0, 0), ExecutionModel::Cpu);
+    body.rc_classifier = RcClassifier::new(std::rc::Rc::new(definitions));
+    body.new_local(LocalDecl::new(ty(TypeKind::Void), Span::new(0, 0)));
+    body.new_local(LocalDecl::new(ty(kind), Span::new(0, 0)));
+    body
+}
+
+/// What a take `depth` layers into an optional of type `kind` moves out:
+/// the value inside that many layers.
+fn inside_layers(kind: &TypeKind, depth: usize) -> TypeKind {
+    (0..depth).fold(kind.clone(), |kind, _| match kind {
+        TypeKind::Option(inner) => inner.kind,
+        other => other,
+    })
+}
+
 /// The hole a take of the payload `depth` layers into a local of type
 /// `kind` empties, as the depth of the optional it writes `None` into.
 fn taken_hole_depth(kind: TypeKind, depth: usize) -> Option<usize> {
-    use miri::mir::{Body, ExecutionModel, Local, LocalDecl, Place, PlaceElem};
-    let mut body = Body::new(0, Span::new(0, 0), ExecutionModel::Cpu);
-    body.new_local(LocalDecl::new(ty(TypeKind::Void), Span::new(0, 0)));
-    body.new_local(LocalDecl::new(ty(kind), Span::new(0, 0)));
+    use miri::mir::{Local, Place, PlaceElem};
+    let moved = inside_layers(&kind, depth);
+    let body = body_holding(kind, HashMap::new());
     let payload = Place {
         local: Local(1),
         projection: vec![PlaceElem::Field(0); depth],
     };
-    let hole = taken_payload_hole(&payload, &body)?;
+    let hole = taken_payload_hole(&payload, &moved, &body)?;
     assert_eq!(hole.local, Local(1));
     assert!(hole
         .projection
         .iter()
         .all(|elem| *elem == PlaceElem::Field(0)));
     Some(hole.projection.len())
+}
+
+/// The hole a take of `moved`, `depth` optional layers into payload field
+/// `field` of an enum local, empties, as the projection below the local.
+fn taken_enum_hole(field: usize, depth: usize, moved: TypeKind) -> Option<Vec<usize>> {
+    use miri::mir::{Local, Place, PlaceElem};
+    let definitions = HashMap::from([("Holder".to_string(), enumeration(Vec::new()))]);
+    let body = body_holding(custom("Holder"), definitions);
+    let mut projection = vec![PlaceElem::Field(field)];
+    projection.extend(vec![PlaceElem::Field(0); depth]);
+    let payload = Place {
+        local: Local(1),
+        projection,
+    };
+    let hole = taken_payload_hole(&payload, &moved, &body)?;
+    assert_eq!(hole.local, Local(1));
+    let fields = hole.projection.iter().map(|elem| match elem {
+        PlaceElem::Field(index) => Some(*index),
+        PlaceElem::Deref | PlaceElem::Index(..) => None,
+    });
+    fields.collect()
+}
+
+#[test]
+fn a_take_out_of_an_enum_payload_empties_the_optional_its_field_holds() {
+    let string = TypeKind::String;
+    assert_eq!(
+        taken_enum_hole(1, 0, optional(string.clone())),
+        Some(vec![1])
+    );
+    assert_eq!(
+        taken_enum_hole(2, 0, optional(string.clone())),
+        Some(vec![2])
+    );
+    let nested = optional(optional(string));
+    assert_eq!(taken_enum_hole(1, 0, nested), Some(vec![1]));
+}
+
+#[test]
+fn an_enum_payload_with_no_empty_state_is_no_take() {
+    assert_eq!(taken_enum_hole(1, 0, TypeKind::String), None);
+    assert_eq!(taken_enum_hole(0, 0, optional(TypeKind::String)), None);
+    assert_eq!(taken_enum_hole(1, 0, optional(TypeKind::Int)), None);
+}
+
+#[test]
+fn a_place_past_an_enum_field_is_no_take() {
+    let string = TypeKind::String;
+    assert_eq!(taken_enum_hole(1, 1, string.clone()), None);
+    assert_eq!(taken_enum_hole(1, 2, string), None);
 }
 
 #[test]

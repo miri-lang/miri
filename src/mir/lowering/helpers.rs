@@ -239,13 +239,13 @@ pub fn bind_pattern(
                     ctx.push_statement(crate::mir::Statement {
                         kind: MirStatementKind::Assign(
                             Place::new(var_local),
-                            Rvalue::Use(Operand::Copy(place)),
+                            Rvalue::Use(Operand::Copy(place.clone())),
                         ),
                         span: *span,
                     });
                     // RC insertion now handles Field(0) projections on Option types via
                     // place_is_counted, so no explicit IncRef needed here.
-                    ctx.optional_payloads.insert(var_local, subject_local);
+                    ctx.bound_payloads.insert(var_local, place);
                 }
                 return Ok(());
             }
@@ -277,12 +277,13 @@ pub fn bind_pattern(
                     ctx.push_statement(crate::mir::Statement {
                         kind: MirStatementKind::Assign(
                             Place::new(elem_local),
-                            Rvalue::Use(Operand::Copy(place)),
+                            Rvalue::Use(Operand::Copy(place.clone())),
                         ),
                         span: *span,
                     });
                     // RC insertion handles enum field projections via the managed_locals fallback
                     // in its main loop, so no explicit IncRef needed here.
+                    ctx.bound_payloads.insert(elem_local, place);
                 }
             }
         }
