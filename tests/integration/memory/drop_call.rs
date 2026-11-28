@@ -378,3 +378,150 @@ fn main()
         assert_compiler_error(&code, BORROWED_DROP);
     }
 }
+
+/// A `Holder` of one `Handle` field beside `main`.
+fn held_handle(main: &str) -> String {
+    class_handle(&format!(
+        r#"
+use system.collections.list
+
+class Holder
+    public var h Handle
+
+{main}"#
+    ))
+}
+
+#[test]
+fn test_drop_call_on_a_binding_of_a_read_out_of_a_place_is_refused() {
+    for read in ["l[0]", "holder.h", "arr[0]", "pair.0"] {
+        let code = held_handle(&format!(
+            r#"
+fn main()
+    var l = List([Handle(id: 1)])
+    let holder = Holder(h: Handle(id: 2))
+    let arr = [Handle(id: 3)]
+    let pair = (Handle(id: 4), 5)
+    let y = {read}
+    y.drop()
+"#
+        ));
+        assert_compiler_error(&code, BORROWED_DROP);
+    }
+}
+
+#[test]
+fn test_drop_call_on_a_binding_of_a_borrowed_binding_is_refused() {
+    for read in ["l[0]", "holder.h"] {
+        let code = held_handle(&format!(
+            r#"
+fn main()
+    var l = List([Handle(id: 1)])
+    let holder = Holder(h: Handle(id: 2))
+    let y = {read}
+    let z = y
+    z.drop()
+"#
+        ));
+        assert_compiler_error(&code, BORROWED_DROP);
+    }
+}
+
+#[test]
+fn test_drop_call_on_a_bound_element_names_taking_it_out() {
+    let code = held_handle(
+        r#"
+fn main()
+    var l = List([Handle(id: 1)])
+    let y = l[0]
+    y.drop()
+"#,
+    );
+    assert_compiler_error(&code, "match l.remove_at(0)");
+}
+
+#[test]
+fn test_a_binding_of_a_read_out_of_a_place_raises_no_scope_exit_warning() {
+    for read in ["l[0]", "holder.h", "arr[0]", "pair.0"] {
+        let code = held_handle(&format!(
+            r#"
+fn main()
+    var l = List([Handle(id: 1)])
+    let holder = Holder(h: Handle(id: 2))
+    let arr = [Handle(id: 3)]
+    let pair = (Handle(id: 4), 5)
+    let y = {read}
+    println(f"{{y.id}}")
+"#
+        ));
+        let report = check_project(&[("main.mi", &code)]);
+        assert!(!report.contains("resource 'y'"), "{read}: {report}");
+    }
+}
+
+#[test]
+fn test_a_bound_element_is_released_once_by_its_list() {
+    assert_heap_guard_output(
+        &held_handle(
+            r#"
+fn main()
+    var l = List([Handle(id: 1)])
+    let y = l[0]
+    println(f"read {y.id}")
+    println("end")
+"#,
+        ),
+        "read 1\nend\ndropped 1",
+    );
+}
+
+#[test]
+fn test_a_binding_of_a_call_result_is_owned_by_the_binding() {
+    let make = r#"
+fn make(id int) Handle
+    return Handle(id: id)
+"#;
+    assert_handle_prints(
+        &format!("{make}\nfn main()\n    let y = make(5)\n    y.drop()\n    println(\"end\")\n"),
+        "dropped 5\nend",
+    );
+    assert_compiler_warning(
+        &class_handle(&format!("{make}\nfn main()\n    let y = make(5)\n")),
+        "resource 'y' of type 'Handle' was not consumed before scope exit",
+    );
+}
+
+// TODO: run this program under the heap guard, expecting "dropped 9\nend\ndropped 1".
+// A `var` bound to a read out of a place and later reassigned is no borrow
+// to MIR lowering, which then gives the element a second holder; the type
+// checker's verdict that `y` owns what the assignment gives it is what this
+// test pins until lowering keeps the read a borrow up to the reassignment.
+#[test]
+fn test_a_variable_given_a_value_of_its_own_after_a_read_can_be_dropped() {
+    let code = held_handle(
+        r#"
+fn main()
+    var l = List([Handle(id: 1)])
+    var y = l[0]
+    y = Handle(id: 9)
+    y.drop()
+    println("end")
+"#,
+    );
+    let report = check_project(&[("main.mi", &code)]);
+    assert!(!report.contains(BORROWED_DROP), "{report}");
+}
+
+#[test]
+fn test_drop_call_on_a_variable_given_a_read_out_of_a_place_is_refused() {
+    let code = held_handle(
+        r#"
+fn main()
+    var l = List([Handle(id: 1)])
+    var y = Handle(id: 9)
+    y = l[0]
+    y.drop()
+"#,
+    );
+    assert_compiler_error(&code, BORROWED_DROP);
+}

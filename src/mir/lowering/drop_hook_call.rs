@@ -12,8 +12,8 @@
 //! way the hook runs exactly once.
 //!
 //! The type checker admits the call only on a value the scope owns — a local it
-//! declared, or a call result — and consumes that local, so nothing reads it
-//! afterwards.
+//! declared to a value of its own, never one read out of a place, or a call
+//! result — and consumes that local, so nothing reads it afterwards.
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
@@ -70,10 +70,12 @@ fn release_call_result(
 /// resource was moved into holds its only reference, since the move released
 /// its source's, so the hook runs here.
 ///
-/// A parameter's reference belongs to the caller, and a projection's to its
-/// container; releasing either here would release it twice. The type checker
-/// refuses those receivers, so reaching one is a broken invariant, reported
-/// rather than lowered into a double release.
+/// A parameter's reference belongs to the caller, and a projection's or a
+/// binding read out of a place to that place; releasing any of them here
+/// would release it twice. Which receivers own their value is the type
+/// checker's verdict ([`crate::type_checker::TypeChecker::drops_owned_binding`]),
+/// so reaching one it did not admit is a broken invariant, reported rather
+/// than lowered into a double release.
 fn release_owned_local(
     ctx: &mut LoweringContext,
     receiver: &Expression,
@@ -82,11 +84,8 @@ fn release_owned_local(
     let ExpressionKind::Identifier(name, _) = &receiver.node else {
         return Err(borrowed_receiver_error(receiver.span));
     };
-    let slot = ctx
-        .variable_map
-        .get(name.as_str())
-        .copied()
-        .filter(|local| local.0 > ctx.body.arg_count)
+    let slot = (ctx.variable_map.get(name.as_str()).copied())
+        .filter(|_| ctx.type_checker.drops_owned_binding(receiver))
         .map(Place::new)
         .ok_or_else(|| borrowed_receiver_error(receiver.span))?;
     ctx.push_statement(Statement {

@@ -20,7 +20,7 @@
 //! ([`super::kept_parameters`]) refuses a body keeping its own `out`
 //! parameter or restored receiver.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ast::common::MemberVisibility;
 use crate::ast::expression::{Expression, ExpressionKind};
@@ -30,7 +30,7 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
-use super::context::TypeDefinition;
+use super::context::{collect_class_fields_all, TypeDefinition};
 use super::emptying_methods::{emptied_by, Emptied, EmptyingMethods};
 use super::escape_analysis::{EscapeNextHop, EscapeSummary, FunctionId};
 use super::function_analysis::ModuleId;
@@ -137,7 +137,7 @@ impl BorrowedPlace {
     /// The repair that compiles for a value borrowed from this place, in
     /// the spellings `repairs` found declared; `None` when the program
     /// declares none.
-    fn repair(&self, repairs: &PlaceRepairs) -> Option<String> {
+    pub(crate) fn repair(&self, repairs: &PlaceRepairs) -> Option<String> {
         match self {
             BorrowedPlace::Optional { path, .. } => repairs.taking_out(path),
             BorrowedPlace::Element {
@@ -577,7 +577,8 @@ pub(crate) enum ScrutineeOrigin {
 }
 
 /// The bindings of the scope analysed that are read out of a place: those
-/// borrowed from one, and the payloads of a scrutinee the scope owns.
+/// borrowed from one, those read out of a place offering no way to take its
+/// value out, and the payloads of a scrutinee the scope owns.
 ///
 /// A scope entered takes a [`PlacesMark`] and restores it on leaving: each
 /// change records the binding's state before it, so leaving a scope undoes
@@ -585,9 +586,21 @@ pub(crate) enum ScrutineeOrigin {
 #[derive(Debug, Default)]
 pub(crate) struct PlaceBindings {
     borrowed: HashMap<String, BorrowedPlace>,
+    /// The bindings read out of a plain field, or an element of a
+    /// collection offering no way to take one out: borrowed like the others,
+    /// though no repair takes the value out of its place.
+    held: HashSet<String>,
     payloads: HashMap<String, OwnedScrutinee>,
     /// Each changed binding's state before the change, the latest last.
-    undo: Vec<(String, Option<BorrowedPlace>, Option<OwnedScrutinee>)>,
+    undo: Vec<(String, BindingState)>,
+}
+
+/// What [`PlaceBindings`] records of one binding.
+#[derive(Debug)]
+struct BindingState {
+    borrowed: Option<BorrowedPlace>,
+    held: bool,
+    payload: Option<OwnedScrutinee>,
 }
 
 /// How many changes [`PlaceBindings`] had recorded where a scope began.
@@ -603,14 +616,19 @@ impl PlaceBindings {
     /// Undoes every change made since `mark`, the latest first.
     pub(crate) fn restore(&mut self, mark: PlacesMark) {
         while self.undo.len() > mark.0 {
-            let Some((name, borrowed, payload)) = self.undo.pop() else {
+            let Some((name, state)) = self.undo.pop() else {
                 return;
             };
-            match borrowed {
+            match state.borrowed {
                 Some(place) => self.borrowed.insert(name.clone(), place),
                 None => self.borrowed.remove(&name),
             };
-            match payload {
+            if state.held {
+                self.held.insert(name.clone());
+            } else {
+                self.held.remove(&name);
+            }
+            match state.payload {
                 Some(owner) => self.payloads.insert(name, owner),
                 None => self.payloads.remove(&name),
             };
@@ -619,9 +637,12 @@ impl PlaceBindings {
 
     /// `name` bound afresh, to no place.
     pub(crate) fn forget(&mut self, name: &str) {
-        let borrowed = self.borrowed.remove(name);
-        let payload = self.payloads.remove(name);
-        self.undo.push((name.to_string(), borrowed, payload));
+        let state = BindingState {
+            borrowed: self.borrowed.remove(name),
+            held: self.held.remove(name),
+            payload: self.payloads.remove(name),
+        };
+        self.undo.push((name.to_string(), state));
     }
 
     /// Every binding borrowed from `root`, or a field or an element of it,
@@ -640,6 +661,19 @@ impl PlaceBindings {
     pub(crate) fn bind_borrowed(&mut self, name: &str, place: BorrowedPlace) {
         self.forget(name);
         self.borrowed.insert(name.to_string(), place);
+    }
+
+    /// `name` bound to a value read out of a place offering no way to take
+    /// it out.
+    pub(crate) fn bind_held(&mut self, name: &str) {
+        self.forget(name);
+        self.held.insert(name.to_string());
+    }
+
+    /// Whether `name` is bound to a value read out of a place, which still
+    /// holds it: the binding borrows it and never owns it.
+    pub(crate) fn borrows(&self, name: &str) -> bool {
+        self.borrowed.contains_key(name) || self.held.contains(name)
     }
 
     /// Each of `names`, bound by an arm's patterns out of `origin`.
@@ -725,6 +759,67 @@ impl PlaceFacts<'_> {
             index: index_spelling(index),
             method,
         })
+    }
+
+    /// Whether a binding initialized with `value` borrows it: `value` reads
+    /// a field or an element, names a binding that borrows, or is what a
+    /// call hands back out of a place that keeps holding it. Such a binding
+    /// never owns its value — the place it was read out of releases it — so
+    /// neither the binding's scope nor `drop()` on it releases the value.
+    ///
+    /// The one answer to "does this `let` own its value": the consumption
+    /// check reads it for `drop()` and the scope-exit warning, and MIR
+    /// lowering for the release `drop()` makes.
+    pub(crate) fn binds_a_borrow(&self, value: &Expression, bindings: &PlaceBindings) -> bool {
+        if let ExpressionKind::Identifier(name, _) = &value.node {
+            return bindings.borrows(name);
+        }
+        self.reads_a_field_or_element(value) || self.borrowed_place(value, bindings).is_some()
+    }
+
+    /// Whether `value` reads a field of a struct, a class or a tuple, or an
+    /// element of a collection or a tuple. An enum's unit variant and a
+    /// method read as a property are values of their own, not places.
+    fn reads_a_field_or_element(&self, value: &Expression) -> bool {
+        let base_kind = |base: &Expression| self.types.get(&base.id).map(|ty| &ty.kind);
+        if let ExpressionKind::Index(base, _) = &value.node {
+            return base_kind(base).is_some_and(|kind| {
+                matches!(kind, TypeKind::Tuple(_)) || kind.as_builtin_collection().is_some()
+            });
+        }
+        let ExpressionKind::Member(base, field) = &value.node else {
+            return false;
+        };
+        base_kind(base).is_some_and(|kind| self.names_a_field(kind, field))
+    }
+
+    /// Whether `field`, read off a value of type `kind`, names one of its
+    /// fields: a tuple's slot, or a field a struct or a class (its ancestors
+    /// included) declares.
+    fn names_a_field(&self, kind: &TypeKind, field: &Expression) -> bool {
+        if let TypeKind::Tuple(_) = kind {
+            return matches!(field.node, ExpressionKind::Literal(_));
+        }
+        let (TypeKind::Custom(name, _), ExpressionKind::Identifier(field, _)) = (kind, &field.node)
+        else {
+            return false;
+        };
+        match self.type_definitions.get(name) {
+            Some(TypeDefinition::Struct(def)) => {
+                def.fields.iter().any(|(declared, _, _)| declared == field)
+            }
+            Some(TypeDefinition::Class(def)) => {
+                (collect_class_fields_all(def, self.type_definitions).iter())
+                    .any(|(declared, _)| declared == field)
+            }
+            Some(
+                TypeDefinition::Enum(_)
+                | TypeDefinition::Generic(_)
+                | TypeDefinition::Alias(_)
+                | TypeDefinition::Trait(_),
+            )
+            | None => false,
+        }
     }
 
     /// The place the call `value`, calling `callee`, hands back: what a

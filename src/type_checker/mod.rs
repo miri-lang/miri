@@ -662,6 +662,12 @@ impl TypeChecker {
         self.consumed_arguments.is_ended_scrutinee(subject)
     }
 
+    /// Whether `receiver.drop()` releases a variable that owns its value
+    /// ([`use_after_move::ConsumedArguments::drops_owned_binding`]).
+    pub fn drops_owned_binding(&self, receiver: &Expression) -> bool {
+        self.consumed_arguments.drops_owned_binding(receiver)
+    }
+
     /// Whether `argument` is handed to a call through a lending parameter,
     /// which reads it only
     /// ([`use_after_move::ConsumedArguments::is_lent_argument`]).

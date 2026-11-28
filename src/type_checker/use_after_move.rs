@@ -187,6 +187,11 @@ pub struct ConsumedArguments {
     /// ([`super::lent_functions`]): the function value owns it, and reads
     /// it only, so the call hands over a copy it funds.
     lent_arguments: HashSet<usize>,
+    /// The receiver of each `value.drop()` naming a variable that owns its
+    /// value, rather than borrowing one read out of a place
+    /// ([`super::place_reads::PlaceFacts::binds_a_borrow`]): the call
+    /// consumes the variable, and MIR lowering releases it there.
+    dropped_bindings: HashSet<usize>,
 }
 
 /// A binding a kept closure takes over from the scope creating it.
@@ -265,12 +270,18 @@ impl ConsumedArguments {
         self.lent_arguments.contains(&argument.id)
     }
 
+    /// Whether `receiver.drop()` releases a variable that owns its value.
+    pub fn drops_owned_binding(&self, receiver: &Expression) -> bool {
+        self.dropped_bindings.contains(&receiver.id)
+    }
+
     /// Add every argument `other` records.
     pub fn extend(&mut self, other: ConsumedArguments) {
         self.payload_handovers.extend(other.payload_handovers);
         self.rematched_subjects.extend(other.rematched_subjects);
         self.funded_copies.extend(other.funded_copies);
         self.lent_arguments.extend(other.lent_arguments);
+        self.dropped_bindings.extend(other.dropped_bindings);
         self.expressions.extend(other.expressions);
         self.open_expressions.extend(other.open_expressions);
         self.open_expressions_used_after
@@ -297,6 +308,15 @@ type Consumed = HashMap<String, ConsumedInfo>;
 /// For each name a scope binds afresh, what the binding it shadows had
 /// consumed when the scope bound it: the scope restores it when it ends.
 type Shadowed = HashMap<String, Option<ConsumedInfo>>;
+
+/// What a variable of the scope's own holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Holding {
+    /// A value of its own, which the variable releases.
+    Owns,
+    /// A value read out of a place, which the place releases.
+    Borrows,
+}
 
 /// The control-flow question the analysis asks of the type checker: whether
 /// any path reaches the point after a statement or an expression.
@@ -501,10 +521,12 @@ pub struct UseAfterMoveChecker<'a> {
     gpu_bindings: HashSet<String>,
     /// Names bound by a `let`/`var` of the function being analysed and not
     /// shadowed by a parameter, loop variable, match binding or lambda
-    /// parameter. Only these values belong to the scope that names them, so
-    /// only these may be released early with `value.drop()`. A lambda body
-    /// starts empty: what it captures belongs to the scope that declared it.
-    owned_locals: HashSet<String>,
+    /// parameter, each with whether it owns the value it holds or borrows
+    /// one read out of a place ([`PlaceFacts::binds_a_borrow`]). Only an
+    /// owned value belongs to the scope that names it, so only it may be
+    /// released early with `value.drop()`. A lambda body starts empty: what
+    /// it captures belongs to the scope that declared it.
+    declared_locals: HashMap<String, Holding>,
     /// Every argument a call consumed, by the expression naming it.
     consumed_arguments: ConsumedArguments,
     /// The jumps of each loop enclosing the point analysed, innermost last;
@@ -621,7 +643,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             warnings: vec![],
             fn_bindings: HashSet::new(),
             gpu_bindings: HashSet::new(),
-            owned_locals: HashSet::new(),
+            declared_locals: HashMap::new(),
             consumed_arguments: ConsumedArguments::default(),
             loop_exits: Vec::new(),
             rechecking: false,
@@ -853,7 +875,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         let Some(body) = &decl.body else { return };
         let prev_bindings = std::mem::take(&mut self.fn_bindings);
         let prev_gpu = std::mem::take(&mut self.gpu_bindings);
-        let prev_owned = std::mem::take(&mut self.owned_locals);
+        let prev_declared = std::mem::take(&mut self.declared_locals);
         let prev_places = std::mem::take(&mut self.places);
         let prev_closures = std::mem::take(&mut self.closures);
         let prev_lent = std::mem::replace(&mut self.lent_functions, lent);
@@ -874,7 +896,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.loop_exits = prev_loops;
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
-        self.owned_locals = prev_owned;
+        self.declared_locals = prev_declared;
         self.places = prev_places;
     }
 
@@ -978,15 +1000,29 @@ impl<'a> UseAfterMoveChecker<'a> {
             self.gpu_bindings.insert(decl.name.clone());
         }
         self.fn_bindings.insert(decl.name.clone());
-        self.owned_locals.insert(decl.name.clone());
         self.lent_functions.remove(&decl.name);
         self.forget_matched_binding(&decl.name);
+        self.bind_held_value(&decl.name, decl.initializer.as_deref());
+    }
+
+    /// Records what the variable `name` of the scope's own holds once
+    /// `value` is bound to it: a value of its own, or one borrowed from the
+    /// place `value` reads ([`PlaceFacts::binds_a_borrow`]). A declaration
+    /// with no value holds nothing until an assignment records it again.
+    fn bind_held_value(&mut self, name: &str, value: Option<&Expression>) {
         let facts = self.place_facts();
-        let borrowed =
-            (decl.initializer.as_ref()).and_then(|init| facts.borrowed_place(init, &self.places));
-        match borrowed {
-            Some(place) => self.places.bind_borrowed(&decl.name, place),
-            None => self.places.forget(&decl.name),
+        let borrowed = value.and_then(|value| facts.borrowed_place(value, &self.places));
+        let borrows = value.is_some_and(|value| facts.binds_a_borrow(value, &self.places));
+        let holding = if borrows {
+            Holding::Borrows
+        } else {
+            Holding::Owns
+        };
+        self.declared_locals.insert(name.to_string(), holding);
+        match (borrowed, borrows) {
+            (Some(place), _) => self.places.bind_borrowed(name, place),
+            (None, true) => self.places.bind_held(name),
+            (None, false) => self.places.forget(name),
         }
     }
 
@@ -1182,13 +1218,13 @@ impl<'a> UseAfterMoveChecker<'a> {
     ) {
         let prev_bindings = self.fn_bindings.clone();
         let prev_gpu = self.gpu_bindings.clone();
-        let prev_owned = self.owned_locals.clone();
+        let prev_declared = self.declared_locals.clone();
         let places_mark = self.places.mark();
         let prev_lent = self.lent_functions.clone();
         for d in decls {
             self.lent_functions.remove(&d.name);
             self.fn_bindings.insert(d.name.clone());
-            self.owned_locals.remove(d.name.as_str());
+            self.declared_locals.remove(d.name.as_str());
             match &walked {
                 Some(place) => self.places.bind_borrowed(&d.name, place.clone()),
                 None => self.places.forget(&d.name),
@@ -1209,7 +1245,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.lent_functions = prev_lent;
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
-        self.owned_locals = prev_owned;
+        self.declared_locals = prev_declared;
         self.places.restore(places_mark);
     }
 
@@ -1222,7 +1258,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     fn check_block(&mut self, stmts: &[Statement], consumed: &mut Consumed) {
         // A local declared in this block stops naming an owned value when the
         // block ends, and a name it shadowed names the outer binding again.
-        let prev_owned = self.owned_locals.clone();
+        let prev_declared = self.declared_locals.clone();
         let places_mark = self.places.mark();
         let mut scope_resources: Vec<(String, String, Span)> = Vec::new();
         let mut shadowed = Shadowed::new();
@@ -1231,21 +1267,23 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.check_stmt(s, consumed);
                 continue;
             };
-            scope_resources.extend(self.declared_resources(decls, s.span));
             for decl in decls {
                 self.check_initializer(decl, consumed);
                 shadow(&mut shadowed, &decl.name, consumed);
                 self.bind_declared_name(decl);
             }
+            scope_resources.extend(self.declared_resources(decls, s.span));
         }
-        self.owned_locals = prev_owned;
+        self.declared_locals = prev_declared;
         self.places.restore(places_mark);
         self.warn_unconsumed_resources(&scope_resources, consumed);
         restore_shadowed(consumed, shadowed);
     }
 
-    /// The resources `decls` declare, each with its type as Miri spells it
-    /// (`Conn`, `T`, `(Conn, int)`) and `span`.
+    /// The resources `decls` declare a binding of their own for, each with
+    /// its type as Miri spells it (`Conn`, `T`, `(Conn, int)`) and `span`: a
+    /// binding borrowing its value leaves releasing it to the place it was
+    /// read out of.
     fn declared_resources(
         &self,
         decls: &[crate::ast::statement::VariableDeclaration],
@@ -1254,8 +1292,10 @@ impl<'a> UseAfterMoveChecker<'a> {
         decls
             .iter()
             .filter_map(|decl| {
-                let ty = self.types.get(&decl.initializer.as_ref()?.id)?;
-                if !self.resources.holds(&ty.kind) {
+                let init = decl.initializer.as_ref()?;
+                let ty = self.types.get(&init.id)?;
+                let borrows = self.declared_locals.get(&decl.name) == Some(&Holding::Borrows);
+                if !self.resources.holds(&ty.kind) || borrows {
                     return None;
                 }
                 let type_name = spelled_type(ty, WHOLE_TYPE);
@@ -1453,7 +1493,11 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
         if let Some(name) = rebound {
             consumed.remove(name);
-            self.places.forget(name);
+            if self.declared_locals.contains_key(name) {
+                self.bind_held_value(name, Some(rhs));
+            } else {
+                self.places.forget(name);
+            }
         }
         self.end_bindings_assigned(target, consumed);
     }
@@ -1522,7 +1566,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             resources: Vec::new(),
         });
         let prev_bindings = self.fn_bindings.clone();
-        let prev_owned = std::mem::take(&mut self.owned_locals);
+        let prev_declared = std::mem::take(&mut self.declared_locals);
         let places_mark = self.places.mark();
         let prev_lent = self.lent_functions.clone();
         for p in &lambda.params {
@@ -1536,7 +1580,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.lent_functions = prev_lent;
         self.loop_exits = prev_loops;
         self.fn_bindings = prev_bindings;
-        self.owned_locals = prev_owned;
+        self.declared_locals = prev_declared;
         self.places.restore(places_mark);
         self.closures
             .pop()
@@ -1725,7 +1769,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     ) -> (Consumed, bool) {
         let mut arm_consumed = before.clone();
         let prev_bindings = self.fn_bindings.clone();
-        let prev_owned = self.owned_locals.clone();
+        let prev_declared = self.declared_locals.clone();
         let places_mark = self.places.mark();
         let mut arm_bindings = HashSet::new();
         for pat in &branch.patterns {
@@ -1735,8 +1779,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         for name in &arm_bindings {
             shadow(&mut shadowed, name, &mut arm_consumed);
         }
-        self.owned_locals
-            .retain(|name| !arm_bindings.contains(name));
+        (self.declared_locals).retain(|name, _| !arm_bindings.contains(name));
         self.places.bind_arm(&arm_bindings, origin);
         let prev_lent = self.lent_functions.clone();
         self.lent_functions
@@ -1752,7 +1795,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
         self.lent_functions = prev_lent;
         self.fn_bindings = prev_bindings;
-        self.owned_locals = prev_owned;
+        self.declared_locals = prev_declared;
         self.places.restore(places_mark);
         restore_shadowed(&mut arm_consumed, shadowed);
         (arm_consumed, self.finishes(&branch.body))
@@ -2001,13 +2044,11 @@ impl<'a> UseAfterMoveChecker<'a> {
     }
 
     /// `value.drop()` runs the hook and releases the value on the spot, which is
-    /// sound only for a value this scope owns: a local it declared, which the
-    /// call then consumes, or a call result nothing else holds. Any other
-    /// receiver is still held by someone who will release it again.
-    // TODO: a `let` bound to an element, field or payload read (`let y =
-    // l[0]`) is in `owned_locals` here, but lowering makes it a borrow, so
-    // `y.drop()` is accepted and runs nothing; the borrow should be refused
-    // like any other, and the scope-exit warning should not fire on it.
+    /// sound only for a value this scope owns: a local it declared to a value
+    /// of its own, which the call then consumes, or a call result nothing
+    /// else holds. Any other receiver — a binding read out of a place among
+    /// them — is still held by someone who will release it again, and is
+    /// refused with the repair taking it out of its place where one exists.
     fn check_drop_hook_call(
         &mut self,
         receiver: &Expression,
@@ -2018,7 +2059,8 @@ impl<'a> UseAfterMoveChecker<'a> {
             return;
         }
         if let ExpressionKind::Identifier(name, _) = &receiver.node {
-            if self.owned_locals.contains(name.as_str()) {
+            if self.declared_locals.get(name.as_str()) == Some(&Holding::Owns) {
+                self.consumed_arguments.dropped_bindings.insert(receiver.id);
                 consumed
                     .entry(name.clone())
                     .or_insert_with(|| ConsumedInfo {
@@ -2031,11 +2073,14 @@ impl<'a> UseAfterMoveChecker<'a> {
                 return;
             }
         }
+        let taking_out = (self.place_facts().borrowed_place(receiver, &self.places))
+            .zip(self.repairs)
+            .and_then(|(place, repairs)| place.repair(repairs));
         self.errors.push(TypeError {
             kind: TypeErrorKind::Coded {
                 code: DiagnosticCode::OwnDropOfBorrowedValue,
                 message: BORROWED_DROP_MESSAGE.to_string(),
-                help: Some(BORROWED_DROP_HELP.to_string()),
+                help: Some(taking_out.unwrap_or_else(|| BORROWED_DROP_HELP.to_string())),
                 expected: None,
                 actual: None,
             },
