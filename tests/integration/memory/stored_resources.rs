@@ -1911,3 +1911,136 @@ fn main()
         "released 10\nreleased 11\nearly true\nreleased 99",
     );
 }
+
+const NAMED_TOKEN: &str = r#"
+use system.collections.map
+
+class Named
+    public var id int
+    public var name String
+    fn drop(self)
+        println(f"released {self.id}")
+
+class Pair
+    public var t Named
+    public var n int
+"#;
+
+fn with_named_token(program: &str) -> String {
+    format!("{NAMED_TOKEN}{program}")
+}
+
+#[test]
+fn a_resource_set_into_a_map_under_its_own_field_has_one_holder() {
+    assert_one_holder_output(
+        &with_named_token(
+            r#"
+fn main()
+    var m = Map<int, Named>()
+    let t = Named(id: 6, name: "six")
+    m.set(t.id, t)
+    println(f"stored {m.length()}")
+"#,
+        ),
+        "stored 1\nreleased 6",
+    );
+}
+
+#[test]
+fn a_resource_set_into_a_map_under_its_counted_field_has_one_holder() {
+    assert_one_holder_output(
+        &with_named_token(
+            r#"
+fn main()
+    var m = Map<String, Named>()
+    let t = Named(id: 6, name: "six")
+    m.set(t.name, t)
+    println(f"stored {m.contains_key('six')}")
+"#,
+        ),
+        "stored true\nreleased 6",
+    );
+}
+
+#[test]
+fn a_resource_constructed_into_a_class_beside_its_own_field_has_one_holder() {
+    assert_one_holder_output(
+        &with_named_token(
+            r#"
+fn main()
+    let u = Named(id: 5, name: "five")
+    let p = Pair(t: u, n: u.id)
+    println(f"pair {p.n} {p.t.name}")
+"#,
+        ),
+        "pair 5 five\nreleased 5",
+    );
+}
+
+#[test]
+fn a_resource_in_a_tuple_beside_its_own_fields_has_one_holder() {
+    assert_one_holder_output(
+        &with_named_token(
+            r#"
+fn main()
+    let v = Named(id: 7, name: "seven")
+    let tu = (v, v.id, v.name)
+    println(f"tuple {tu.1} {tu.2} {tu.0.name}")
+"#,
+        ),
+        "tuple 7 seven seven\nreleased 7",
+    );
+}
+
+#[test]
+fn a_resource_in_a_map_literal_under_its_own_field_has_one_holder() {
+    assert_one_holder_output(
+        &with_named_token(
+            r#"
+fn main()
+    let w = Named(id: 8, name: "eight")
+    let mm = {w.id: w}
+    println(f"map {mm.length()}")
+"#,
+        ),
+        "map 1\nreleased 8",
+    );
+}
+
+#[test]
+fn resources_stored_beside_their_own_fields_release_in_order() {
+    assert_one_holder_output(
+        &with_named_token(
+            r#"
+fn main()
+    var m = Map<int, Named>()
+    let t = Named(id: 6, name: "six")
+    m.set(t.id, t)
+    let u = Named(id: 5, name: "five")
+    let p = Pair(t: u, n: u.id)
+    let v = Named(id: 7, name: "seven")
+    let tu = (v, v.id, v.name)
+    let w = Named(id: 8, name: "eight")
+    let mm = {w.id: w}
+    println(f"{m.length()} {p.n} {tu.2} {mm.length()}")
+"#,
+        ),
+        "1 5 seven 1\nreleased 8\nreleased 7\nreleased 5\nreleased 6",
+    );
+}
+
+#[test]
+fn a_resource_read_after_a_store_beside_its_own_field_is_refused() {
+    assert_compiler_error(
+        &with_named_token(
+            r#"
+fn main()
+    var m = Map<int, Named>()
+    let t = Named(id: 6, name: "six")
+    m.set(t.id, t)
+    println(f"{t.id}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}

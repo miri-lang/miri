@@ -12,6 +12,7 @@ use miri::ast::literal::Literal;
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
+use miri::mir::place::PlaceElem;
 use miri::mir::symbol::Symbol;
 use miri::mir::verify::{verify_moved_out, VerificationViolation};
 use miri::mir::{
@@ -203,6 +204,43 @@ fn a_read_after_a_call_took_the_local_by_move_is_flagged() {
 }
 
 /// One reference handed on twice by one call: each parameter would own it.
+fn field_of(local: usize) -> Operand {
+    Operand::Copy(Place {
+        local: Local(local),
+        projection: vec![PlaceElem::Field(0)],
+    })
+}
+
+#[test]
+fn a_field_read_beside_the_move_in_one_call_is_accepted() {
+    let body = host_body(vec![
+        block(
+            vec![assign_fresh(1)],
+            call(vec![field_of(1), moved(1)], 3, 1),
+        ),
+        block(vec![decref(3)], TerminatorKind::Return),
+    ]);
+    assert_clean(&body);
+}
+
+#[test]
+fn a_field_read_after_a_call_moved_the_local_beside_it_is_flagged() {
+    let body = host_body(vec![
+        block(
+            vec![assign_fresh(1)],
+            call(vec![field_of(1), moved(1)], 3, 1),
+        ),
+        block(
+            vec![stmt(StatementKind::Assign(
+                place(2),
+                Rvalue::Use(field_of(1)),
+            ))],
+            TerminatorKind::Return,
+        ),
+    ]);
+    assert_one_finding(&body, &["bb0 terminator", "bb1[0]", "read"]);
+}
+
 #[test]
 fn a_local_moved_twice_in_one_call_is_flagged() {
     let body = host_body(vec![

@@ -1286,3 +1286,145 @@ fn kept_leaf(leaf Node) Node
         assert!(retains_before_a_call, "{kept}");
     }
 }
+
+/// A call handing a local over beside an argument reading a place under
+/// it: the call reads every argument before the callee runs, so the sibling
+/// read sees the value the callee takes over, unless it is a counted value
+/// the callee only borrows and may free by releasing the local.
+mod sibling_fields {
+    use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
+    use miri::ast::types::{Type, TypeKind};
+    use miri::error::syntax::Span;
+    use miri::mir::block::{BasicBlock, BasicBlockData};
+    use miri::mir::facts::OwnershipFacts;
+    use miri::mir::optimization::rc_elision::cancel_owned_transfers;
+    use miri::mir::place::PlaceElem;
+    use miri::mir::symbol::Symbol;
+    use miri::mir::{
+        ArgMode, Body, CallFlags, ExecutionModel, Local, LocalDecl, Operand, Place, Statement,
+        StatementKind, Terminator, TerminatorKind,
+    };
+
+    const LIST: Local = Local(1);
+    const INDEX: Local = Local(2);
+    const RESULT: Local = Local(3);
+
+    fn span() -> Span {
+        Span::new(0, 0)
+    }
+
+    fn ty(kind: TypeKind) -> Type {
+        Type::new(kind, span())
+    }
+
+    fn list_of(element: TypeKind) -> TypeKind {
+        let argument =
+            TypeArgument::new(0, TypeArgKind::Type(Box::new(ty(element)), false), span());
+        TypeKind::List(Box::new(argument))
+    }
+
+    fn stmt(kind: StatementKind) -> Statement {
+        Statement { kind, span: span() }
+    }
+
+    fn element() -> Place {
+        Place {
+            local: LIST,
+            projection: vec![PlaceElem::index(INDEX)],
+        }
+    }
+
+    /// `IncRef(list)` and, when `field_retained`, `IncRef(list[i])`, then a
+    /// call passing the list `Owned` beside `list[i]` passed `field_mode`,
+    /// then the list's release and the end of its storage.
+    fn body_passing(element_kind: TypeKind, field_mode: ArgMode, field_retained: bool) -> Body {
+        let mut body = Body::new(0, span(), ExecutionModel::Cpu);
+        for kind in [
+            TypeKind::Void,
+            list_of(element_kind),
+            TypeKind::Int,
+            TypeKind::Void,
+        ] {
+            body.new_local(LocalDecl::new(ty(kind), span()));
+        }
+        let mut retains = vec![stmt(StatementKind::IncRef(Place::new(LIST)))];
+        if field_retained {
+            retains.push(stmt(StatementKind::IncRef(element())));
+        }
+        let call = TerminatorKind::Call {
+            func: Operand::function(Symbol::entry(), span()),
+            args: vec![Operand::Copy(element()), Operand::Copy(Place::new(LIST))],
+            arg_modes: vec![field_mode, ArgMode::Owned],
+            arg_handles: Vec::new(),
+            flags: CallFlags::default(),
+            destination: Place::new(RESULT),
+            target: Some(BasicBlock(1)),
+        };
+        let release = vec![
+            stmt(StatementKind::DecRef(Place::new(LIST))),
+            stmt(StatementKind::storage_dead(Place::new(LIST))),
+        ];
+        body.basic_blocks.extend([
+            BasicBlockData {
+                statements: retains,
+                terminator: Some(Terminator {
+                    kind: call,
+                    span: span(),
+                }),
+                is_cleanup: false,
+            },
+            BasicBlockData {
+                statements: release,
+                terminator: Some(Terminator {
+                    kind: TerminatorKind::Return,
+                    span: span(),
+                }),
+                is_cleanup: false,
+            },
+        ]);
+        body
+    }
+
+    fn passes_the_list_by_move(body: &Body) -> bool {
+        matches!(
+            body.basic_blocks[0].terminator.as_ref().map(|t| &t.kind),
+            Some(TerminatorKind::Call { args, .. }) if args[1] == Operand::Move(Place::new(LIST))
+        )
+    }
+
+    #[test]
+    fn a_scalar_field_read_beside_the_handed_over_local_cancels_its_retain() {
+        let mut body = body_passing(TypeKind::Int, ArgMode::Borrowed, false);
+        assert!(cancel_owned_transfers(
+            &mut body,
+            &OwnershipFacts::default()
+        ));
+        assert!(passes_the_list_by_move(&body), "{body}");
+        assert!(body.basic_blocks[0].statements.is_empty(), "{body}");
+    }
+
+    #[test]
+    fn a_counted_field_handed_over_beside_the_local_keeps_only_its_own_retain() {
+        let mut body = body_passing(TypeKind::String, ArgMode::Donated, true);
+        assert!(cancel_owned_transfers(
+            &mut body,
+            &OwnershipFacts::default()
+        ));
+        assert!(passes_the_list_by_move(&body), "{body}");
+        let kept = &body.basic_blocks[0].statements;
+        assert!(
+            matches!(kept.as_slice(), [s] if s.kind == StatementKind::IncRef(element())),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn a_counted_field_borrowed_beside_the_handed_over_local_keeps_the_retain() {
+        let mut body = body_passing(TypeKind::String, ArgMode::Borrowed, false);
+        assert!(!cancel_owned_transfers(
+            &mut body,
+            &OwnershipFacts::default()
+        ));
+        assert!(!passes_the_list_by_move(&body), "{body}");
+    }
+}

@@ -66,9 +66,10 @@ use crate::mir::block::BasicBlock;
 use crate::mir::facts::OwnershipFacts;
 use crate::mir::option_layout::is_nullable_pointer_payload;
 use crate::mir::place::{Local, PlaceContext};
+use crate::mir::place_type::PlaceTypes;
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::{Statement, StatementKind};
-use crate::mir::terminator::{arg_mode, TerminatorKind};
+use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
 use crate::mir::type_facts::DropHookReach;
 use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
@@ -236,9 +237,13 @@ fn retained_copy(stmts: &[Statement], i: usize) -> Option<(Local, Local)> {
 /// 1. `x` is a whole local the body owns and releases — managed, not a
 ///    parameter or a capture, holding no device buffer — that no borrow reads
 ///    and that borrows from nothing;
-/// 2. the first mention of `x` after the retain is an assignment or rebinding
-///    whose value is `x` itself or an aggregate naming `x` once, and whose
-///    destination does not name `x`;
+/// 2. the first mention of `x` after the retain, past retains of places under
+///    `x` funding the aggregate's other operands, is an assignment or
+///    rebinding whose value is `x` itself or an aggregate holding `x` once,
+///    every other operand naming `x` reading a place under it, and whose
+///    destination does not name `x`: an aggregate reads every operand before
+///    anything is released, so a sibling read of a field sees the value the
+///    destination takes over;
 /// 3. the next mention of `x` is `DecRef(x)`, with no release of the
 ///    destination between — so the release the pair cancels was never the
 ///    last one, and the destination still holds `x`'s reference when `x` dies:
@@ -356,7 +361,7 @@ fn dying_source_transfer(
                 crosses.then_some(predecessors),
             );
             let run_statements: Vec<&Statement> = run.iter().map(|&(_, s)| s).collect();
-            let copy = next_mention(&run_statements, local, 0)?;
+            let copy = next_copy_mention(&run_statements, retained)?;
             if !transfers_local(run_statements[copy], retained) {
                 return None;
             }
@@ -397,18 +402,38 @@ fn is_transferable_source(body: &Body, local: Local, kept: KeptPairs) -> bool {
         && body.is_counted_local(local)
 }
 
-/// The position of the first statement at or after `start` mentioning `local`.
-fn next_mention<S: std::borrow::Borrow<Statement>>(
-    statements: &[S],
-    local: Local,
-    start: usize,
-) -> Option<usize> {
-    (start..statements.len()).find(|&at| statement_mentions(statements[at].borrow(), local))
+/// The position of the first statement in `statements` mentioning the local
+/// of `source` other than a retain of a place under `source`.
+fn next_copy_mention(statements: &[&Statement], source: &Place) -> Option<usize> {
+    (0..statements.len()).find(|&at| {
+        statement_mentions(statements[at], source.local) && !retains_under(statements[at], source)
+    })
+}
+
+/// Whether `statement` retains a place under `owner`.
+fn retains_under(statement: &Statement, owner: &Place) -> bool {
+    matches!(&statement.kind, StatementKind::IncRef(place) if is_under(place, owner))
+}
+
+/// Whether `place` is a place strictly under `owner`: a field, an element or
+/// a dereference reached through it.
+fn is_under(place: &Place, owner: &Place) -> bool {
+    place.local == owner.local
+        && place.projection.len() > owner.projection.len()
+        && place.projection.starts_with(&owner.projection)
+}
+
+/// Whether `operand` reads a place strictly under `owner`.
+fn reads_under(operand: &Operand, owner: &Place) -> bool {
+    match operand {
+        Operand::Copy(read) => is_under(read, owner),
+        Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => false,
+    }
 }
 
 /// Whether `statement` stores `source` whole into a destination not naming
-/// its local: as the value itself, or as one operand of an aggregate naming
-/// the local once.
+/// its local: as the value itself, or as one operand of an aggregate holding
+/// it once, every other operand naming the local reading a place under it.
 fn transfers_local(statement: &Statement, source: &Place) -> bool {
     let local = source.local;
     let (StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue)) =
@@ -419,16 +444,20 @@ fn transfers_local(statement: &Statement, source: &Place) -> bool {
     let names_dest = mentions(local, |mention| {
         mention.visit_place(dest, PlaceContext::MutatingUse, BasicBlock(0))
     });
-    let mut naming = stored_operands(rvalue).iter().filter(|operand| {
+    let naming = stored_operands(rvalue).iter().filter(|operand| {
         mentions(local, |mention| {
             mention.visit_operand(operand, BasicBlock(0))
         })
     });
-    let is_stored_whole_once = naming
-        .next()
-        .is_some_and(|operand| reads_place(operand, source))
-        && naming.next().is_none();
-    is_stored_whole_once && !names_dest
+    let (mut whole, mut siblings_under) = (0, true);
+    for operand in naming {
+        if reads_place(operand, source) {
+            whole += 1;
+        } else {
+            siblings_under &= reads_under(operand, source);
+        }
+    }
+    whole == 1 && siblings_under && !names_dest
 }
 
 /// Whether `operand` reads `place` as it is.
@@ -518,8 +547,12 @@ fn stored_operands_mut(rvalue: &mut Rvalue) -> &mut [Operand] {
 ///    exception: the callee is its one owner after the call, so its hook runs
 ///    where the callee lets it go;
 /// 2. the call passes `L` once, at a position it hands over, and names it
-///    nowhere else: in another argument the callee would read a value the
-///    owned side may already have freed or written;
+///    nowhere else but in arguments reading a place under it: the call reads
+///    every argument before the callee runs, so a field it passes beside `L`
+///    is the value `L` held. Such a field must not be counted unless the call
+///    hands its own reference over too, funded by a retain of its own: a
+///    counted field the callee only borrows is a value the callee may free
+///    by releasing `L` while it still reads it;
 /// 3. the retain is the last mention of `L` before the call;
 /// 4. the call's continuation is reached from the call alone — never the
 ///    entry block, which the edge into the body also reaches — and its first
@@ -620,19 +653,7 @@ fn owned_transfers_from(
         let Some(local) = arg.bare_local() else {
             continue;
         };
-        // TODO: a sibling argument reading a field of `local` (`m.set(t.id,
-        // t)` passes `_t.0` beside `_t`) counts as a second mention, so the
-        // retain funding the store survives and a resource has two holders
-        // while the call runs; the aggregate rule in `transfers_local` refuses
-        // `(u, u.id)` and `Pair(t: u, n: u.id)` the same way. A call or an
-        // aggregate reads every operand before anything is released, so a
-        // projection read beside the moved local could be accepted, or
-        // lowering could read it into a temp before the store.
-        let is_passed_once = args
-            .iter()
-            .filter(|other| mentions(local, |mention| mention.visit_operand(other, BasicBlock(0))))
-            .count()
-            == 1;
+        let is_passed_once = is_passed_once_beside_fields(body, args, arg_modes, local);
         let receives_the_result = mentions(local, |mention| {
             mention.visit_place(destination, PlaceContext::MutatingUse, BasicBlock(0))
         });
@@ -653,6 +674,41 @@ fn owned_transfers_from(
         }
     }
     transfers
+}
+
+/// Whether a call passing `args` with `arg_modes` passes `local` whole once,
+/// and every other argument naming it reads a place under it that is not
+/// counted or that the call hands over as well.
+fn is_passed_once_beside_fields(
+    body: &Body,
+    args: &[Operand],
+    arg_modes: &[ArgMode],
+    local: Local,
+) -> bool {
+    let owner = Place::new(local);
+    let place_types = PlaceTypes::of(body);
+    let mut whole = 0;
+    for (position, arg) in args.iter().enumerate() {
+        if !mentions(local, |mention| mention.visit_operand(arg, BasicBlock(0))) {
+            continue;
+        }
+        if reads_place(arg, &owner) {
+            whole += 1;
+            continue;
+        }
+        let Operand::Copy(field) = arg else {
+            return false;
+        };
+        let is_counted = place_types
+            .declared(field)
+            .is_none_or(|ty| body.is_counted(&ty.kind));
+        let is_safe_field = is_under(field, &owner)
+            && (!is_counted || arg_mode(arg_modes, position).hands_over_reference());
+        if !is_safe_field {
+            return false;
+        }
+    }
+    whole == 1
 }
 
 /// Whether any call in `body` hands an argument over, passing it
@@ -677,13 +733,14 @@ fn is_released_by_body(body: &Body, ownership: &OwnershipFacts, local: Local) ->
 }
 
 /// The position of `IncRef(local)` when it is the block's last mention of
-/// `local`.
+/// `local` other than a retain of a place under it, which funds a field the
+/// call passes beside it.
 fn funding_retain(statements: &[Statement], local: Local) -> Option<usize> {
-    let last = statements
-        .iter()
-        .rposition(|statement| statement_mentions(statement, local))?;
-    matches!(&statements[last].kind, StatementKind::IncRef(p) if *p == Place::new(local))
-        .then_some(last)
+    let whole = Place::new(local);
+    let last = statements.iter().rposition(|statement| {
+        statement_mentions(statement, local) && !retains_under(statement, &whole)
+    })?;
+    matches!(&statements[last].kind, StatementKind::IncRef(p) if *p == whole).then_some(last)
 }
 
 /// The position of `DecRef(local)` when it is the block's first mention of
